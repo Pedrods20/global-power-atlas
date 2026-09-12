@@ -21,11 +21,14 @@ from typing import Annotated
 
 import polars as pl
 import typer
+from dotenv import load_dotenv
 
 from gpa import __version__, pipeline, store
 from gpa.schema import SchemaError, SchemaErrors
 from gpa.schema import validate as validate_frame
 from gpa.zones import ZONES
+
+load_dotenv()
 
 app = typer.Typer(
     name="gpa",
@@ -33,6 +36,12 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+# Polars tables use Unicode box drawing; redirected Windows consoles may
+# otherwise fail before printing a result. This changes only our CLI streams.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 ZoneOption = Annotated[
     list[str] | None,
@@ -51,6 +60,9 @@ def _configure_logging(verbose: bool) -> None:
         format="%(levelname)-8s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    # HTTPX INFO includes query strings, including EIA's api_key parameter.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _report(results: list[pipeline.IngestResult]) -> None:
@@ -91,7 +103,7 @@ def zones(
             "name": z.name,
             "region": z.region.value,
             "timezone": z.timezone,
-            "market_dst": "yes" if z.observes_market_dst else "no (AEST fixed)",
+            "market_dst": "yes" if z.observes_market_dst else "no",
             "currency": z.currency,
             "peak_block": z.peak.label,
             "datasets": ", ".join(f"{k}:{v}" for k, v in sorted(z.sources.items())),
@@ -227,6 +239,9 @@ def export(
     output: Annotated[
         str | None, typer.Option("--output", "-o", help="Destination directory.")
     ] = None,
+    check: Annotated[
+        bool, typer.Option("--check", help="Check committed tables without changing them.")
+    ] = False,
     verbose: VerboseOption = False,
 ) -> None:
     """Build the aggregated tables the static site reads.
@@ -237,9 +252,16 @@ def export(
     _configure_logging(verbose)
     from pathlib import Path
 
-    from gpa.export import export_all, site_root
+    from gpa.export import check_exports, export_all, site_root
 
     destination = Path(output) if output else site_root()
+    if check:
+        differences = check_exports(destination)
+        if differences:
+            typer.echo("Outdated exports: " + ", ".join(differences))
+            raise typer.Exit(1)
+        typer.echo("Exported tables match the committed observations.")
+        return
     written = export_all(destination)
 
     for name, rows in sorted(written.items()):
@@ -249,6 +271,18 @@ def export(
     typer.echo("")
     typer.secho(
         f"Wrote {len(written)} files to {destination} ({total_bytes / 1024:.0f} KB).",
+        fg=typer.colors.GREEN,
+    )
+
+
+@app.command("benchmarks")
+def update_benchmarks() -> None:
+    """Refresh official World Bank, EEX and ECB monthly references."""
+    from gpa.benchmarks import reference_path, refresh
+
+    frame = refresh()
+    typer.secho(
+        f"Wrote {frame.height} aligned months to {reference_path()}.",
         fg=typer.colors.GREEN,
     )
 

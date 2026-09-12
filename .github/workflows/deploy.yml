@@ -1,13 +1,16 @@
 name: Deploy
 
-# Publishes the static site to GitHub Pages. Triggered by a push to main,
-# which includes the daily data commit from the ingest workflow, so the
-# published site follows the data automatically.
+# Bot pushes do not trigger another push workflow. A successful Ingest run
+# explicitly triggers deployment of the latest committed main branch.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_run:
+    workflows: [Ingest]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -20,9 +23,12 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:

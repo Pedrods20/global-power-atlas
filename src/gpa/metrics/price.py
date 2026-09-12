@@ -106,12 +106,19 @@ def block_prices(frame: pl.DataFrame, zone: Zone, *, period: str = "month") -> p
     return (
         prepared.group_by("period")
         .agg(
-            on.mean().alias("on_peak"),
-            off.mean().alias("off_peak"),
-            pl.col("price").mean().alias("all_hours"),
+            (
+                (pl.col("price") * _INTERVAL_HOURS).filter(pl.col("block") == BLOCK_ON_PEAK).sum()
+                / _INTERVAL_HOURS.filter(pl.col("block") == BLOCK_ON_PEAK).sum()
+            ).alias("on_peak"),
+            (
+                (pl.col("price") * _INTERVAL_HOURS).filter(pl.col("block") == BLOCK_OFF_PEAK).sum()
+                / _INTERVAL_HOURS.filter(pl.col("block") == BLOCK_OFF_PEAK).sum()
+            ).alias("off_peak"),
+            ((pl.col("price") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias("all_hours"),
             on.len().alias("n_on_peak"),
             off.len().alias("n_off_peak"),
         )
+        .with_columns(pl.col("on_peak", "off_peak").fill_nan(None))
         .with_columns((pl.col("on_peak") - pl.col("off_peak")).alias("spread"))
         .select("period", "on_peak", "off_peak", "spread", "all_hours", "n_on_peak", "n_off_peak")
         .sort("period")
@@ -142,6 +149,7 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
             "n_negative": pl.UInt32,
             "negative_pct": pl.Float64,
             "negative_hours": pl.Float64,
+            "observed_hours": pl.Float64,
             "min_price": pl.Float64,
             "mean_negative": pl.Float64,
             "max_run_hours": pl.Float64,
@@ -159,7 +167,15 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
         )
         # A run is a maximal block of consecutive negative intervals. Numbering
         # the transitions gives each run a distinct id to group on.
-        .with_columns((pl.col("_neg") != pl.col("_neg").shift(1)).cum_sum().alias("_run"))
+        .with_columns(
+            (
+                (pl.col("_neg") != pl.col("_neg").shift(1))
+                | (pl.col("ts_utc").diff().dt.total_minutes() != pl.col("resolution_min").shift(1))
+            )
+            .fill_null(True)
+            .cum_sum()
+            .alias("_run")
+        )
     )
 
     runs = (
@@ -176,6 +192,7 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
         pl.len().alias("n_intervals"),
         pl.col("_neg").sum().cast(pl.UInt32).alias("n_negative"),
         (_INTERVAL_HOURS.filter(pl.col("_neg"))).sum().alias("negative_hours"),
+        _INTERVAL_HOURS.sum().alias("observed_hours"),
         pl.col("price").min().alias("min_price"),
         negative_price.mean().alias("mean_negative"),
     )
@@ -183,7 +200,7 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
     return (
         summary.join(runs, on="local_month", how="left")
         .with_columns(
-            (pl.col("n_negative") / pl.col("n_intervals") * 100.0).alias("negative_pct"),
+            (pl.col("negative_hours") / pl.col("observed_hours") * 100.0).alias("negative_pct"),
             pl.col("max_run_hours").fill_null(0.0),
         )
         .select(
@@ -192,6 +209,7 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
             "n_negative",
             "negative_pct",
             "negative_hours",
+            "observed_hours",
             "min_price",
             "mean_negative",
             "max_run_hours",

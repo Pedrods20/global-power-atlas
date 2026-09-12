@@ -22,6 +22,23 @@ from gpa.zones import get_zone
 GERMANY = get_zone("DE-LU")
 ERCOT = get_zone("ERCOT")
 
+
+def test_negative_duration_and_block_mean_weight_mixed_resolutions():
+    frame = price_frame([-100.0, 100.0], start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC))
+    frame = frame.with_columns(pl.Series("resolution_min", [60, 15], dtype=pl.Int16))
+    negative = price_metrics.negative_price_summary(frame, GERMANY)
+    assert negative["negative_pct"][0] == pytest.approx(80)
+    blocks = price_metrics.block_prices(frame, GERMANY)
+    assert blocks["all_hours"][0] == pytest.approx(-60)
+
+
+def test_negative_run_breaks_at_missing_interval():
+    frame = price_frame([-1.0, -2.0, -3.0], start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC))
+    frame = frame.filter(pl.col("price") != -2)
+    result = price_metrics.negative_price_summary(frame, GERMANY)
+    assert result["max_run_hours"][0] == 1
+
+
 APPROX = pytest.approx
 
 # Berlin runs UTC+2 in June, so a local calendar day starts at 22:00 UTC the

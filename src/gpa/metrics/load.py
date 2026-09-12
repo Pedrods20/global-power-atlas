@@ -77,7 +77,9 @@ def daily_energy(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
         .group_by("local_date")
         .agg(
             (pl.col("load_mw") * _INTERVAL_HOURS).sum().alias("energy_mwh"),
-            pl.col("load_mw").mean().alias("avg_load_mw"),
+            ((pl.col("load_mw") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias(
+                "avg_load_mw"
+            ),
             pl.col("load_mw").max().alias("peak_load_mw"),
             _INTERVAL_HOURS.sum().alias("hours_observed"),
         )

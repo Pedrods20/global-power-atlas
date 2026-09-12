@@ -43,6 +43,7 @@ class Region(StrEnum):
     """Continental grouping used for navigation and aggregation."""
 
     NORTH_AMERICA = "North America"
+    ASIA = "Asia"
     EUROPE = "Europe"
     SOUTH_AMERICA = "South America"
     OCEANIA = "Oceania"
@@ -188,8 +189,13 @@ class Zone:
 
     @property
     def observes_market_dst(self) -> bool:
-        """Whether market time and civil time agree on daylight saving."""
-        return self.civil_timezone is None
+        """Whether the market clock observes daylight saving in the current year."""
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(self.timezone)
+        year = dt.datetime.now(dt.UTC).year
+        return any(dt.datetime(year, month, 1, tzinfo=tz).dst() for month in range(1, 13))
 
     def has(self, dataset: str) -> bool:
         """Whether ``dataset`` is collected for this zone."""
@@ -285,6 +291,88 @@ ZONES: tuple[Zone, ...] = (
     ),
 )
 
+
+# Additional zones reuse adapters; dataset declarations remain explicit.
+ZONES += tuple(
+    Zone(
+        code=code,
+        name=name,
+        country="US",
+        region=Region.NORTH_AMERICA,
+        operator=name,
+        timezone=timezone,
+        currency="USD",
+        peak=NERC_ON_PEAK,
+        sources={"load": "eia", "generation": "eia"},
+        source_keys={"eia_respondent": respondent},
+        notes="Balancing-authority load and generation from EIA-930. No price series is included.",
+    )
+    for code, name, timezone, respondent in (
+        ("PJM", "PJM Interconnection", "America/New_York", "PJM"),
+        ("CAISO", "California ISO", "America/Los_Angeles", "CISO"),
+    )
+)
+ZONES += tuple(
+    Zone(
+        code=code,
+        name=name,
+        country=code,
+        region=Region.EUROPE,
+        operator=operator,
+        timezone=timezone,
+        currency="EUR",
+        peak=EUROPEAN_PEAKLOAD,
+        sources={"price": "energy_charts", "load": "energy_charts", "generation": "energy_charts"},
+        source_keys={"energy_charts_country": code.lower(), "energy_charts_bzn": code},
+        notes="National generation and load, plus day-ahead bidding-zone prices, redistributed by Energy-Charts.",
+    )
+    for code, name, operator, timezone in (
+        ("FR", "France", "RTE", "Europe/Paris"),
+        ("ES", "Spain", "Red Electrica", "Europe/Madrid"),
+    )
+)
+ZONES += (
+    Zone(
+        code="JP-TOKYO",
+        name="Japan - Tokyo area",
+        country="JP",
+        region=Region.ASIA,
+        operator="Japan Electric Power Exchange",
+        timezone="Asia/Tokyo",
+        currency="JPY",
+        peak=PeakBlock(
+            label="Analytical daytime (08:00-20:00 JST, Mon-Fri)",
+            start_hour=8,
+            end_hour=20,
+            weekdays=(1, 2, 3, 4, 5),
+            note="Analytical daytime comparison window, not a JEPX traded peakload product; holidays included.",
+        ),
+        sources={"price": "jepx"},
+        source_keys={"jepx_area": "東京"},
+        notes="Tokyo area day-ahead half-hourly spot price. JPY/kWh is converted to JPY/MWh. Traded volume is not system demand.",
+    ),
+)
+ZONES += tuple(
+    Zone(
+        code=code,
+        name=name,
+        country="BR",
+        region=Region.SOUTH_AMERICA,
+        operator="CCEE",
+        timezone="America/Sao_Paulo",
+        currency="BRL",
+        peak=BR_PONTA,
+        sources={"price": "ccee"},
+        source_keys={"ccee_submarket": submarket},
+        notes="Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
+    )
+    for code, name, submarket in (
+        ("BR-SECO", "Brazil - Southeast/Central-West", "SUDESTE"),
+        ("BR-S", "Brazil - South", "SUL"),
+        ("BR-NE", "Brazil - Northeast", "NORDESTE"),
+        ("BR-N", "Brazil - North", "NORTE"),
+    )
+)
 
 _BY_CODE: dict[str, Zone] = {z.code: z for z in ZONES}
 

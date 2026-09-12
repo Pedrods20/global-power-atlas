@@ -20,6 +20,15 @@ const zoneColor = new Map([
   ["DE-LU", "#0072B2"],
   ["BR-SIN", "#009E73"],
   ["AU-NSW1", "#CC79A7"],
+  ["PJM", "#E69F00"],
+  ["CAISO", "#56B4E9"],
+  ["FR", "#332288"],
+  ["ES", "#88CCEE"],
+  ["JP-TOKYO", "#AA4499"],
+  ["BR-SECO", "#117733"],
+  ["BR-S", "#44AA99"],
+  ["BR-NE", "#999933"],
+  ["BR-N", "#882255"],
 ]);
 const zoneOrder = [...zoneColor.keys()].filter((z) => load.some((d) => d.zone === z));
 const colorScale = {

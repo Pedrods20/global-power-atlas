@@ -47,10 +47,20 @@ jobs:
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
-        run: gpa ingest --days ${{ github.event.inputs.days || '7' }}
+        # CCEE is refreshed manually from its official CSV while the provider
+        # returns HTTP 403 to automated clients. Keeping it out of this list
+        # prevents one blocked source from stopping every other daily update.
+        run: >-
+          gpa ingest
+          -z ERCOT -z DE-LU -z BR-SIN -z AU-NSW1
+          -z PJM -z CAISO -z FR -z ES -z JP-TOKYO
+          --days ${{ github.event.inputs.days || '7' }}
 
       - name: Validate
         run: gpa validate
+
+      - name: Refresh fuel, carbon and FX references
+        run: gpa benchmarks
 
       - name: Rebuild site tables
         run: gpa export
@@ -62,7 +72,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/curated site/data
+          git add data/curated data/reference site/data
           if git diff --cached --quiet; then
             echo "No new observations; nothing to commit."
             exit 0

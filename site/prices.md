@@ -22,6 +22,15 @@ const zoneColor = new Map([
   ["DE-LU", "#0072B2"],
   ["BR-SIN", "#009E73"],
   ["AU-NSW1", "#CC79A7"],
+  ["PJM", "#E69F00"],
+  ["CAISO", "#56B4E9"],
+  ["FR", "#332288"],
+  ["ES", "#88CCEE"],
+  ["JP-TOKYO", "#AA4499"],
+  ["BR-SECO", "#117733"],
+  ["BR-S", "#44AA99"],
+  ["BR-NE", "#999933"],
+  ["BR-N", "#882255"],
 ]);
 const zoneOrder = [...zoneColor.keys()].filter((z) => prices.some((p) => p.zone === z));
 const colorScale = {
@@ -53,6 +62,7 @@ Plot.plot({
       x: (d) => new Date(d.date),
       y: "spread",
       fill: "zone",
+      z: (d) => `${d.zone}-${d.segment}`,
       fillOpacity: 0.12,
       curve: "step",
     }),
@@ -60,6 +70,7 @@ Plot.plot({
       x: (d) => new Date(d.date),
       y: "spread",
       stroke: "zone",
+      z: (d) => `${d.zone}-${d.segment}`,
       strokeWidth: 1,
       tip: true,
     }),
@@ -89,7 +100,7 @@ Plot.plot({
   width,
   height: 380,
   marginLeft: 60,
-  x: { label: "% of intervals at or above this price", grid: true, domain: [0, 100] },
+  x: { label: "% of observed time at or above this price", grid: true, domain: [0, 100] },
   y: {
     label: "per MWh",
     grid: true,
@@ -126,7 +137,7 @@ Plot.plot({
   height: 300,
   marginLeft: 55,
   x: { label: null, tickRotate: -40 },
-  y: { label: "% of intervals", grid: true },
+  y: { label: "% of observed time", grid: true },
   color: colorScale,
   marks: [
     // One line per zone rather than stacked bars. Stacking would add two

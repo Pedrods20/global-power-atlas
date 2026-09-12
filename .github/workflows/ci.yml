@@ -60,17 +60,7 @@ jobs:
       - run: pip install -e .
       - run: npm ci
 
-      - name: Rebuild site tables from the committed store
-        run: gpa export
-
       - name: Fail if the exported tables are stale
-        # The export is deterministic given the store, so a diff here means
-        # site/data was committed without being regenerated.
-        run: |
-          if ! git diff --quiet -- site/data; then
-            echo "site/data is out of date. Run 'gpa export' and commit the result."
-            git diff --stat -- site/data
-            exit 1
-          fi
+        run: gpa export --check
 
       - run: npm run build

@@ -1,114 +1,120 @@
-# PROJECT REFACTORING STATE
+# PROJECT STATE
 
-Last updated: 2026-09-13 · Repository: `global-power-atlas` · Replaces: `power-pulse-global`
+Last updated: 2026-09-12 · Repository: `global-power-atlas` · Replaces:
+`power-pulse-global`
 
-## 1. Summary of Actions Completed
+## Current result
 
-- [x] Audited the previous project (`power-pulse-global`) and concluded the architecture, not the bugs, was the problem: 13 live API calls inside a Supabase Edge Function with a 1-hour cache, no accumulated history, no analysis possible.
-- [x] Started a clean repository. Supabase, the 1803-line Deno edge function and the React frontend are discarded entirely.
-- [x] Built the Python package `gpa` with a `src/` layout, installed editable, running on Python 3.13.
-- [x] `zones.py`: canonical zone registry with market timezone, civil timezone, currency and a real peak-block definition per market.
-- [x] `calendar.py`: NERC holidays, daylight-saving-aware local days, block assignment. 23 tests.
-- [x] `schema.py`: pandera contracts for the three fact tables, enforced at the boundary.
-- [x] `store.py`: Parquet partitioned by zone and month, upsert on natural key, DuckDB views.
-- [x] Four source adapters, all verified against live providers: Energy-Charts (DE-LU), ONS (BR-SIN), AEMO (AU-NSW1 price and load), OpenElectricity (AU-NSW1 generation). EIA (ERCOT) is written and tested but inert until a key is set.
-- [x] `metrics/`: load profiles and duration curves, load factor, block prices, price duration curves, negative-price statistics, tail statistics, realised volatility, capture rates, generation mix, renewable share, dual-basis carbon intensity, spark/dark/clean spreads.
-- [x] `pipeline.py` and `cli.py`: `gpa zones | ingest | backfill | validate | stats | export | query`.
-- [x] Backfilled two years: **1,603,591 rows, 8.0 MB** across DE-LU, BR-SIN and AU-NSW1.
-- [x] `export.py`: reduces the store to **172 KB** of site-ready aggregates.
-- [x] Observable Framework site: five pages, builds clean, all links validated.
-- [x] **104 tests passing**, ruff lint and format clean.
-- [x] Three GitHub Actions workflows: CI, daily ingest with commit, Pages deploy.
-- [x] Raised the carbon-intensity coverage threshold from 80% to 95% after the two-year backfill exposed the flaw: Brazil passed at 87.4% and published **0 g/kWh**, because the covered 87% is entirely hydro, wind and solar and the uncovered 13% is the whole emitting fleet. Now correctly withheld for all 25 months, while DE-LU (99.6%) and AU-NSW1 (100%) publish.
+Global Power Atlas is a Python ETL and Observable Framework static site. It
+stores validated interval data as Parquet, computes market-aware aggregates,
+and publishes them without a backend or browser-visible credentials.
 
-## 2. Current Architecture Snapshot
+- 13 registered zones across five continents.
+- 2,380,416 interval/fuel observations in 435 validated monthly partitions
+  before the final export.
+- Price: DE-LU, AU-NSW1, FR, ES, JP-TOKYO and four separate CCEE submarkets.
+- Load and generation: DE-LU, AU-NSW1, BR-SIN, ERCOT, PJM, CAISO, FR and ES,
+  subject to each provider's reported categories.
+- 24 aligned months of World Bank fuel, EEX EUA and ECB FX references.
+- Historical German clean spark and clean dark screening spreads with explicit
+  efficiency, emissions and coal-energy assumptions.
+
+The active delivery and AI handoff checklist is [`TODO.md`](TODO.md). Treat it
+as the authoritative list of work remaining.
+
+## Completed in the current delivery
+
+- Export freshness checks compare table values instead of Parquet binary
+  metadata; build-clock fields were removed from committed metadata.
+- Scheduled ingestion now triggers deployment even when the commit is created
+  by `GITHUB_TOKEN`.
+- Duration-weighted load/price metrics and gap-aware negative-price runs are
+  covered by regression tests.
+- German missing price months were backfilled.
+- Browser smoke covers every page at 1440 px and 390 px, checking JavaScript
+  errors, chart presence and horizontal overflow. Screenshots are under
+  `docs/screenshots/`.
+- EIA parsing was fixed and two years of ERCOT, PJM and CAISO load/generation
+  were backfilled.
+- France and Spain were added through Energy-Charts.
+- Tokyo day-ahead price was added through official JEPX fiscal-year CSVs.
+- Official CCEE `pld_horario_2026.csv` was imported for BR-SECO, BR-S, BR-NE
+  and BR-N: 6,117 consecutive hourly rows per submarket, without gaps,
+  duplicates or null prices.
+- Official monthly fuel/carbon/FX references and a dedicated spread page were
+  added.
+- Public repository created at
+  <https://github.com/Pedrods20/global-power-atlas>; `EIA_API_KEY` is stored as
+  an encrypted Actions secret. The local `.env` is ignored.
+
+## Architecture
 
 ```
-GitHub Actions (daily cron)
-   → Python ETL (gpa ingest)
-   → schema validation (pandera)
-   → Parquet, partitioned by zone and month, committed to the repo
-   → gpa export → 172 KB of aggregates
-   → Observable Framework build
-   → GitHub Pages
+GitHub Actions daily cron
+  → gpa ingest / gpa benchmarks
+  → schema validation
+  → partitioned Parquet committed to git
+  → gpa export
+  → Observable Framework static build
+  → GitHub Pages
 ```
 
+Important paths:
+
+- `src/gpa/zones.py`: market registry, timezone, currency and block rules.
+- `src/gpa/sources/`: adapters; fetch and normalize, but do not analyse or
+  write.
+- `src/gpa/schema.py`: canonical interval contracts and fuel taxonomy.
+- `src/gpa/store.py`: monthly Parquet upserts and DuckDB views.
+- `src/gpa/metrics/`: price, load, mix and spread calculations.
+- `src/gpa/benchmarks.py`: World Bank, EEX and ECB reference ingestion.
+- `src/gpa/export.py`: compact site tables and deterministic freshness check.
+- `site/`: Observable pages; `site/data/` contains committed exports.
+
+## Domain rules
+
+- Store UTC-aware interval-start timestamps; group through market-local time.
+- Integrate MW over each observation's duration; never assume an hourly row.
+- Keep market time separate from civil time where required by AEMO.
+- Apply each market's declared peak block. Do not substitute daily max/min.
+- Preserve negative and zero prices. Use arithmetic price changes.
+- Keep currencies separate except where historical ECB FX is explicitly part
+  of a European spread calculation.
+- Keep CCEE PLD by submarket and BR-SIN physical load/generation separate.
+- Missing observations stay missing. Do not synthesize provider data.
+- Withhold carbon intensity below 95% known-factor generation coverage.
+- Label carbon intensity and thermal spreads as estimates with assumptions.
+
+## Provider constraints
+
+- EIA requires `EIA_API_KEY`; the key is in ignored local configuration and
+  GitHub Actions secrets.
+- CCEE returned HTTP 403 to automated requests on this workstation. The
+  official file is under `data/raw/ccee/`, and `GPA_CCEE_IMPORT_DIR` in the
+  local `.env` enables its parser. Raw downloads are ignored; curated output
+  is committed.
+- Energy-Charts can return HTTP 429 during long backfills; the HTTP layer
+  retries and honours `Retry-After`.
+- OpenElectricity rejects hourly windows longer than 32 days.
+- US EIA-930 data contains balancing-authority load/generation, not hub or
+  nodal wholesale prices.
+- Fuel and carbon inputs are monthly reference benchmarks and carry basis risk.
+
+## Resume instructions
+
+Work from `C:\Users\Pedro\Desktop\Python\global-power-atlas`. Read
+`TODO.md` first and continue from its first unchecked action. Do not use the
+old `power-pulse-global` directory.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\gpa.exe validate
+.\.venv\Scripts\gpa.exe export
+.\.venv\Scripts\gpa.exe export --check
+npm run build
 ```
-global-power-atlas/
-├── src/gpa/
-│   ├── zones.py          canonical registry; everything derives from here
-│   ├── calendar.py       NERC holidays, DST, peak/off-peak blocks
-│   ├── schema.py         pandera contracts + canonical fuel taxonomy
-│   ├── store.py          partitioned Parquet + DuckDB
-│   ├── pipeline.py       ingestion orchestration, per-target outcomes
-│   ├── export.py         store → site aggregates
-│   ├── cli.py            gpa command
-│   ├── sources/          base, energy_charts, ons, aemo, openelectricity, eia
-│   └── metrics/          load, price, mix, spreads
-├── data/curated/         committed Parquet, 8.0 MB, 2 years
-├── site/                 Observable Framework (root configured to "site")
-│   ├── index.md  prices.md  demand.md  supply.md  methodology.md
-│   └── data/             exported aggregates, 172 KB
-├── tests/                103 tests
-└── .github/workflows/    ci.yml, ingest.yml, deploy.yml
-```
 
-**Coverage today.** DE-LU: price, load, generation. BR-SIN: load, generation. AU-NSW1: price, load, generation. ERCOT: pending an EIA key.
-
-## 3. Pending Tasks & Roadmap
-
-**Immediate, blocking first publication**
-- [ ] Create the GitHub repository and push. `gh` CLI is not installed on this machine; create via the web UI or `winget install GitHub.cli`.
-- [ ] Enable GitHub Pages with source set to "GitHub Actions".
-- [ ] Register for a free EIA key at https://www.eia.gov/opendata/register.php, add it as the repository secret `EIA_API_KEY`, then run `gpa backfill --zone ERCOT --years 2`. This lights up North America.
-- [ ] Verify the site renders in a browser. `npm run dev`, then open http://localhost:3000. The build passes and the exported column names were checked programmatically, but the pages have **not** been rendered in a browser yet.
-
-**Next increments, each independently publishable**
-- [ ] Request an ENTSO-E Transparency token by email, then write `sources/entsoe.py` and move DE-LU onto it. This unlocks every European bidding zone at once.
-- [ ] Add zones: PJM and CAISO via the existing EIA adapter; FR, ES, IT, GB, NORD via ENTSO-E; the remaining four NEM regions via the existing AEMO and OpenElectricity adapters. Each is a registry entry, not new code.
-- [ ] CCEE PLD for Brazil, which is the marquee Brazilian price and is currently absent.
-- [ ] A gas, coal and EUA price feed, which is the only thing standing between the tested spread functions and a spread chart on the site.
-- [ ] Asia: Japan via JEPX, or India via Grid-India.
-- [ ] Screenshot in the README once the site is live.
-
-## 4. Technical Constraints & Decisions
-
-**Architecture**
-- Supabase, Deno and React discarded. Static site with git-versioned data. No backend, no database server, no API key reachable from the browser.
-- Parquet partitioned by zone and UTC month, queried with DuckDB. The UTC month is a file-layout choice only and never an analytical grouping.
-- Writes are upserts on the natural key, because operators revise published figures.
-- The site reads pre-computed aggregates from `gpa export`, not Observable data loaders. Loaders invoke an interpreter the framework chooses, which differs between Windows and Linux CI; an explicit step behaves identically on both.
-
-**Domain rules, each enforced by a named test**
-- Every instant is stored UTC-aware and interpreted through the market's timezone. Nothing is ever grouped by UTC calendar day.
-- A local day has 23, 24 or 25 hours. Daily energy integrates power over each interval's real duration.
-- Market time is not always civil time. AEMO settles on AEST year-round, so AU-NSW1 carries `Australia/Brisbane` as market time and `Australia/Sydney` as civil time.
-- Peak and off-peak are market blocks. NERC on-peak is HE0700–HE2200, Mon–Sat, ex-holidays, and **includes Saturday**. NERC does **not** shift a Saturday holiday to the Friday. European peakload is 08:00–20:00 CET Mon–Fri, holidays included.
-- Negative prices are preserved and counted. No log returns, because price goes negative. Volatility annualises on 365 days, not 252.
-- Settlement resolution is measured from timestamp spacing, never assumed. AEMO stamps interval-**ending**, so the resolution is subtracted to get interval start.
-- No currency conversion. Each market stays in its own currency; only normalised quantities are compared across markets.
-- Carbon intensity is published on two clearly separated bases, and is **withheld** when under 80% of generation has a known emission factor. This is why Brazil has no carbon line: ONS publishes one unresolved aggregate thermal column.
-- Missing values are null, never zero.
-
-**Environment**
-- Python 3.13.9, Node 24.14, git 2.53. No `uv`, no `gh` CLI.
-- `tzdata` is a hard dependency: Windows ships no system timezone database, so `zoneinfo` fails without it.
-
-**Known provider limits, encoded as `max_window_days` per adapter**
-- OpenElectricity rejects windows over 32 days at hourly resolution with a 400.
-- Energy-Charts has no documented cap but times out past roughly 60 days, and rate-limits a long backfill with 429s. The HTTP layer honours `Retry-After`.
-- AEMO and ONS publish whole files per month and per year, so a longer window is strictly cheaper.
-
-## 5. Next Prompt Instructions for the Next AI
-
-> The project is `global-power-atlas` at `C:\Users\Pedro\Desktop\Python\global-power-atlas`. It is a Python ETL plus Observable Framework static site that publishes wholesale electricity market data for four continents, already working end to end with two years of history for Germany, Brazil and Australia.
->
-> Read `STATE.md` and `site/methodology.md` first. The domain rules in section 4 of `STATE.md` are non-negotiable and each is enforced by a named test; do not relax one to make something pass.
->
-> Set up the environment with `python -m venv .venv`, `.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Verify with `pytest -q` (expect 103 passing), `.venv\Scripts\gpa.exe stats` and `npm run build`.
->
-> Your next task is: **[state the task]**.
->
-> If the task is adding a market, add a `Zone` to `src/gpa/zones.py` and, only if the provider is new, an adapter in `src/gpa/sources/` following the `Source` protocol in `sources/base.py`. Adapters fetch, normalise timestamps to UTC interval-start, and map fuels onto `gpa.schema.FUELS`. They never analyse and never write to disk. Add a parsing test against a small recorded fixture in `tests/test_sources.py`.
->
-> After any change to ingestion or metrics, run `gpa export` and commit `site/data`, or CI will fail its staleness check.
+After changes to ingestion or metrics, regenerate and commit `site/data`.
+Before publication, scan staged content for credentials, push `main`, enable
+Pages with GitHub Actions and inspect the CI, ingest/deploy runs and live site.

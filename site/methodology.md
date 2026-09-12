@@ -12,7 +12,7 @@ const zones = await FileAttachment("data/zones.json").json();
 
 ## Sources
 
-Every series comes from the system or market operator, or from a named redistributor of the operator's own data. Nothing is modelled, interpolated or synthesised. A zone with no data for a dataset shows as pending rather than being filled in.
+Every series comes from the system or market operator, or from a named redistributor of the operator's own data. Source observations are not synthesised. Carbon intensities and thermal spreads are calculated estimates with explicit assumptions. A zone with no data for a dataset shows as pending rather than being filled in.
 
 | Zone | Dataset | Provider | Credential | Licence |
 |---|---|---|---|---|
@@ -21,6 +21,11 @@ Every series comes from the system or market operator, or from a named redistrib
 | BR-SIN | load, generation | ONS open data, hourly subsystem balance | none | CC BY 4.0 |
 | AU-NSW1 | price, load | AEMO aggregated price and demand archive | none | AEMO terms of use |
 | AU-NSW1 | generation | OpenElectricity, The Superpower Institute | none | CC BY 4.0 |
+| PJM, CAISO | load, generation | US Energy Information Administration, API v2 | free key | US Government public domain |
+| FR, ES | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
+| JP-TOKYO | day-ahead price | Japan Electric Power Exchange | none | provider terms |
+| BR-SECO, BR-S, BR-NE, BR-N | hourly PLD | CCEE open data | none; official local CSV fallback | open-data terms |
+| European spread references | gas and coal: World Bank; EUA: EEX; FX: ECB | public downloads | none | provider-specific |
 
 Australia deliberately uses two providers. Price and demand come from AEMO's own archive rather than a redistributor; only the fuel split needs a third party, because that archive does not carry one.
 
@@ -36,16 +41,16 @@ const freshness = zones.zones.flatMap((z) =>
     Rows: d.rows ?? null,
     From: d.first ? String(d.first).slice(0, 10) : null,
     To: d.last ? String(d.last).slice(0, 10) : null,
-    "Age (h)": d.age_hours ?? null,
+    "Age (h)": d.last ? Math.round(Math.max(0, (Date.now() - new Date(d.last.replace(" ", "T"))) / 3600000)) : null,
   })),
 );
 ```
 
 ```js
-Inputs.table(freshness, { rows: 12, layout: "auto" })
+Inputs.table(freshness, { rows: 30, layout: "auto" })
 ```
 
-Data as of `${zones.generated_at.slice(0, 16).replace("T", " ")} UTC`.
+Latest observation across datasets: `${zones.data_as_of ? zones.data_as_of.slice(0, 16).replace("T", " ") + " UTC" : "pending"}`. Each dataset's own coverage is listed above; ages are calculated when this page loads.
 
 ## Time
 
@@ -105,7 +110,7 @@ AEMO stamps its settlement rows **interval-ending**, so a row marked 00:05 descr
 
 ## Prices
 
-**Negative prices are preserved and counted.** They are the signature of inflexible supply meeting renewable surplus, and filtering them out deletes exactly the observations that matter.
+**Negative prices are preserved and counted.** They are economically meaningful observations, and filtering them out changes averages, tails and volatility. Their cause cannot be established from price alone.
 
 **No log returns.** Price reaches zero and goes negative, so a log return is undefined precisely where the market is interesting. Every return here is an arithmetic difference in money per MWh.
 
@@ -141,19 +146,30 @@ That threshold is strict on purpose. Brazil is the case that sets it: the ONS ba
 
 A coverage number alone cannot catch that, because 87 percent looks reassuring. The rule of thumb behind the 95 percent threshold is that uncovered generation is almost always unresolved thermal output, so even a tenth of it left out can move the answer by more than a hundred grams per kWh.
 
+## Coverage and interpretation
+
+The earliest and latest years and months may be partial. Gaps remain missing observations; they must not be read as zero prices or zero demand. Comparisons need matching observation periods and units. Negative prices alone do not establish curtailment or identify its cause. Technology-based emission factors estimate generation intensity rather than measuring hourly emissions.
+
+## Fuel, carbon and spread assumptions
+
+The spread page uses monthly, historical references. German/Luxembourg all-hours day-ahead power is aligned with World Bank European natural gas and Australian coal. Dollar fuel prices are converted with the ECB monthly average USD/EUR rate. EEX EUA primary-auction prices are volume-weighted across successful general-allowance auctions; aviation contracts are excluded.
+
+Clean spark assumes 50% net efficiency and 0.20196 tCO₂/MWh thermal. Clean dark assumes 38% net efficiency, 0.34056 tCO₂/MWh thermal, and 6.978 MWh thermal per tonne of coal (6,000 kcal/kg). The outputs are screening indicators rather than traded forward spreads or realised margins. They omit local fuel basis, transport, variable operations, starts, outages and hedging.
+
 ## Known limitations
 
-- **ERCOT is pending a credential.** The adapter is written and tested; it needs a free EIA key.
+- **ERCOT has no price series.** EIA supplies balancing-authority demand and generation; prices require a separate market-operator feed.
 - **US solar excludes rooftop.** EIA's hourly fuel-type series covers utility-scale plant only, so a US solar share is not directly comparable against a market whose operator reports behind-the-meter output.
 - **Brazilian thermal is unresolved**, as described above.
-- **One zone per market.** ERCOT is a single hub, not its 8,000 settlement nodes. Germany is the DE-LU bidding zone, not its four control areas. Australia is New South Wales alone, not the whole NEM. Nothing here says anything about congestion or locational spreads.
-- **No fuel or carbon price feed yet.** The spark, dark and clean spread functions are implemented and tested against worked examples, but nothing on this site plots one, because a gas, coal and EUA price source has not been wired in.
+- **Zone boundaries differ.** US load and generation cover balancing authorities, not price hubs or settlement nodes. Germany is the DE-LU bidding zone, Australia is New South Wales, Japan is the Tokyo price area, and CCEE prices remain four separate submarkets. Nothing here measures nodal congestion.
+- **CCEE automated access can return HTTP 403.** The committed series came from the official `pld_horario_2026` CSV and the same parser accepts future official files through `GPA_CCEE_IMPORT_DIR`.
+- **Fuel references carry basis risk.** World Bank Europe gas and Australian coal are broad monthly benchmarks; they are not a German plant's delivered or hedged fuel price. EEX primary-auction EUA prices can differ from secondary-market executions.
 - **Revisions.** Operators restate published figures for days afterwards. The store upserts on the natural key, so re-running a window converges on the restatement rather than duplicating it, but a figure read today may differ slightly from the same figure read last week.
 
 ## Reproducing any number
 
 ```
-git clone https://github.com/pedrocabral/global-power-atlas
+git clone https://github.com/Pedrods20/global-power-atlas
 cd global-power-atlas
 python -m venv .venv && .venv/Scripts/activate
 pip install -e ".[dev]"
@@ -161,6 +177,7 @@ pip install -e ".[dev]"
 gpa backfill --days 30      # fill the store from the keyless sources
 gpa validate                # check every partition against its contract
 gpa stats                   # what the store holds
+gpa benchmarks              # refresh World Bank, EEX and ECB references
 gpa export                  # rebuild the tables this site reads
 pytest                      # 100+ tests, including every rule on this page
 ```
@@ -174,6 +191,15 @@ gpa query "SELECT zone, count(*) FILTER (WHERE price < 0) * 100.0 / count(*) AS 
 The rules described on this page are enforced by tests, not by convention. The daylight-saving, holiday, block-boundary and negative-price cases each have a named test that fails if the behaviour changes.
 
 <style>
+main.observablehq > table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.observablehq-pre-container {
+  max-width: 100%;
+  overflow-x: auto;
+}
 .warn {
   border-left: 3px solid #E69F00;
   background: color-mix(in srgb, #E69F00 6%, transparent);

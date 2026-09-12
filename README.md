@@ -1,8 +1,8 @@
 # Global Power Atlas
 
-Supply, demand and price across wholesale electricity markets on four continents, rebuilt daily from primary sources and published as a static site.
+Supply, demand and price across wholesale electricity markets in five continents, rebuilt from primary and documented public sources and published as a static site.
 
-**Live site:** _pending first deploy_ · **Methodology:** [`site/methodology.md`](site/methodology.md)
+**Live site:** [Open dashboard](https://pedrods20.github.io/global-power-atlas/) · **Methodology:** [`site/methodology.md`](site/methodology.md)
 
 ---
 
@@ -10,7 +10,9 @@ Supply, demand and price across wholesale electricity markets on four continents
 
 A reproducible pipeline that collects hourly load, generation by fuel, and clearing prices from the system operators themselves, normalises them into one comparable model, and publishes the result. There is no backend, no database server and no API key in the browser. A scheduled job writes Parquet into this repository, and a static site builds from those files.
 
-The point of the project is not that it draws charts. It is that the numbers underneath the charts are defensible. Wholesale power data is full of traps that generic time-series tooling walks straight into, and the [methodology page](site/methodology.md) documents how each one is handled.
+The point of the project is not that it draws charts. It is that the numbers underneath the charts are defensible. Wholesale power data is full of traps that generic time-series tooling walks straight into, and the [methodology page](site/methodology.md) documents the conventions and limitations.
+
+![Dashboard preview](docs/screenshots/dashboard-1440.png)
 
 ## Coverage
 
@@ -19,45 +21,27 @@ The point of the project is not that it draws charts. It is that the numbers und
 | `ERCOT` | Texas | ERCOT | EIA v2 | yes, free |
 | `DE-LU` | Germany-Luxembourg | 50Hertz, Amprion, TenneT, TransnetBW | Energy-Charts | no |
 | `BR-SIN` | Brazil National Interconnected System | ONS | ONS open data | no |
-| `AU-NSW1` | Australia NEM, New South Wales | AEMO | OpenNEM | no |
+| `AU-NSW1` | Australia NEM, New South Wales | AEMO | AEMO / OpenElectricity | no |
+| `PJM` | Eastern US | PJM Interconnection | EIA v2 | yes, free |
+| `CAISO` | California | California ISO | EIA v2 | yes, free |
+| `FR` | France | RTE | Energy-Charts | no |
+| `ES` | Spain | Red Eléctrica | Energy-Charts | no |
+| `JP-TOKYO` | Japan, Tokyo area | JEPX | JEPX | no |
+| `BR-SECO`, `BR-S`, `BR-NE`, `BR-N` | Brazilian PLD submarkets | CCEE | CCEE open data | local official CSV fallback |
 
-One zone per continent, proven end to end. Adding a zone is an entry in [`src/gpa/zones.py`](src/gpa/zones.py) once its source adapter exists; the CLI, the store and the site pick it up with no further change.
+Coverage is dataset-specific. The three US balancing authorities carry hourly demand and generation from EIA, while US wholesale price is a separate integration. Brazilian PLD remains separated by CCEE submarket and is never presented as one national price.
 
-## What two years of data shows
+## Analytical questions
 
-Every figure below is computed by this repository from the sources above, over roughly two years to September 2026, and can be reproduced with the commands further down.
+- How do on-peak and off-peak prices differ under each zone's block definition?
+- What fraction of observed time clears below zero, and how long do negative-price runs last?
+- How do generation-weighted solar and wind revenues compare with baseload prices?
+- How do load shape, generation mix and renewable share vary by market?
+- What do historical German clean spark and dark screening spreads show after benchmark fuel and EUA costs?
 
-**The peak-to-off-peak spread is collapsing, and in Australia it has inverted.**
+The site reports observed data, not causal attribution. A negative-price episode does not by itself prove curtailment, and a falling block spread does not isolate the effect of solar. These hypotheses need additional dispatch, outage and constraint data.
 
-| Year | DE-LU spread, EUR/MWh | AU-NSW1 spread, AUD/MWh |
-|---|---|---|
-| 2024 | 44.59 | 87.99 |
-| 2025 | 17.11 | 38.01 |
-| 2026 | 11.98 | −1.60 |
-
-These are real block spreads, on-peak mean minus off-peak mean under each market's own block definition, not intraday range. New South Wales now clears its business-day peak block *below* the hours around it. Solar has eaten the shape that peaking plant was built to sell into.
-
-**Negative prices are no longer exceptional.**
-
-| Zone | Intervals below zero | Deepest | Longest unbroken run |
-|---|---|---|---|
-| AU-NSW1 | 10.58% of 210,204 five-minute intervals | −1,000 AUD/MWh, the market floor | 11.7 hours |
-| DE-LU | 3.79% of 27,129 quarter-hourly intervals | −250.32 EUR/MWh | 20.0 hours |
-
-A twenty-hour unbroken run below zero is not a price signal, it is a curtailment event. Frequency alone would have missed it.
-
-**Capture rates quantify the cannibalisation directly.**
-
-| Zone | Solar | Wind |
-|---|---|---|
-| DE-LU | 0.563 | 0.876 |
-| AU-NSW1 | 0.512 | 0.864 |
-
-Generation-weighted, not approximated by a fixed window of daylight hours. German solar earns 53.48 EUR/MWh against a time-weighted average of 94.91. Wind holds up far better because its output is not pinned to one time of day.
-
-**Demand shape differs more than demand level.** Brazil runs a load factor of 0.780, Germany 0.700, New South Wales 0.568. The Australian system carries roughly the same peak-to-average burden on a 13 GW peak that Brazil carries on 106 GW.
-
-**Brazil's carbon intensity is deliberately blank.** The operator folds every thermal unit into one aggregate column, so 87% of generation has a known emission factor and the missing 13% is the entire emitting fleet. Renormalising over the clean remainder returns 0 g/kWh for a system that is not carbon free. Germany reports 281 g/kWh and New South Wales 557 g/kWh on the same operational basis, both above 99% coverage.
+The initial store covers approximately September 2024 to September 2026. The first and last calendar years are partial; provider gaps and different settlement resolutions also matter. Compare matched date ranges before making annual trend claims. Carbon intensity is an estimate from technology factors, withheld below 95% known-factor coverage; Brazil's unresolved thermal category currently prevents publication.
 
 ## Why the numbers are trustworthy
 
@@ -66,7 +50,7 @@ These are the decisions that separate this from a dashboard that merely renders:
 - **Market time, not UTC days.** Every instant is stored UTC-aware and interpreted through the zone's market timezone. Nothing is ever grouped by UTC calendar day. The Australian NEM carries a separate civil timezone because AEMO settles on Australian Eastern Standard Time all year, so market time and the clock in Melbourne disagree for half the year.
 - **A local day has 23, 24 or 25 hours.** Daily means divide by the hours that existed, not by 24.
 - **Peak and off-peak are market blocks.** NERC on-peak is hour-ending 0700 through 2200, Monday through Saturday, excluding the six NERC holidays. European peakload is 08:00 to 20:00 CET, Monday through Friday, holidays included. They are not the daily maximum and minimum.
-- **Negative prices are preserved and counted.** They are the signature of renewable penetration, so nothing filters them out. Because price can be zero or negative, log returns are undefined, and this project uses arithmetic differences instead. Volatility annualises at 365 days, not the 252 trading days of a financial exchange, because spot power settles every day of the year.
+- **Negative prices are preserved and counted.** They are economically meaningful observations, so nothing filters them out. Because price can be zero or negative, log returns are undefined, and this project uses arithmetic differences instead. Volatility annualises at 365 days, not the 252 trading days of a financial exchange, because spot power settles every day of the year.
 - **MW and MWh are different units.** Power is integrated over the interval's real duration. Nothing assumes a 60-minute interval.
 - **Every table is validated at the boundary.** Schema contracts in [`src/gpa/schema.py`](src/gpa/schema.py) reject a source that changed shape, naming the offending column, before anything reaches storage.
 
@@ -78,7 +62,7 @@ Brazil is a deliberate caveat rather than a silent gap. It is included for suppl
 GitHub Actions (daily cron)
         │
         ▼
-   Python ETL  ──fetch──►  EIA · Energy-Charts · ONS · OpenNEM
+   Python ETL  ──fetch──►  EIA · Energy-Charts · ONS · AEMO · JEPX · CCEE
         │
         │  validate against schema contracts
         ▼
@@ -104,7 +88,8 @@ src/gpa/           Python package
   sources/         one adapter per upstream provider
   metrics/         load, price, mix and spread analytics
   cli.py           gpa backfill | ingest | validate | stats
-data/curated/      committed Parquet, partitioned by zone and month
+data/curated/      committed interval Parquet, partitioned by zone and month
+data/reference/    committed monthly fuel, EUA and FX references
 site/              Observable Framework site
 tests/             contract, calendar and metric tests
 ```
@@ -123,10 +108,13 @@ gpa backfill --days 30         # fill data/curated from keyless sources
 gpa validate                   # check every Parquet file against its contract
 pytest
 
-cd site && npm install && npm run build
+npm ci
+gpa export
+npm run build
+npm run dev
 ```
 
-`ERCOT` additionally needs a free [EIA API key](https://www.eia.gov/opendata/register.php) in `EIA_API_KEY`. Every other zone works with no credentials at all.
+The US zones need a free [EIA API key](https://www.eia.gov/opendata/register.php) in `EIA_API_KEY`. CCEE can be read automatically when the provider permits it; `GPA_CCEE_IMPORT_DIR` points to official CSV downloads when access returns HTTP 403.
 
 ## Data sources and licensing
 
@@ -136,6 +124,12 @@ cd site && npm install && npm run build
 | [Energy-Charts](https://api.energy-charts.info/) | Fraunhofer ISE | CC BY 4.0 |
 | [ONS Open Data](https://dados.ons.org.br/) | Operador Nacional do Sistema Eletrico | CC BY 4.0 |
 | [OpenNEM](https://opennem.org.au/) | The Superpower Institute | CC BY 4.0 |
+| [AEMO](https://www.aemo.com.au/energy-systems/electricity/national-electricity-market-nem/data-nem/market-data-nemweb) | Australian Energy Market Operator | AEMO terms of use |
+| [JEPX](https://www.jepx.jp/electricpower/market-data/spot/) | Japan Electric Power Exchange | provider terms |
+| [CCEE Open Data](https://dadosabertos.ccee.org.br/dataset/pld_horario) | Câmara de Comercialização de Energia Elétrica | open-data terms |
+| [World Bank Pink Sheet](https://www.worldbank.org/en/research/commodity-markets) | World Bank | CC BY 4.0 |
+| [EEX EU ETS auctions](https://www.eex.com/en/markets/environmentals/eu-ets1-eu-ets2-auctions/eu-ets1-auctions) | European Energy Exchange | provider terms |
+| [ECB exchange rates](https://data.ecb.europa.eu/data/datasets/EXR) | European Central Bank | ECB data terms |
 
 Attribution for each series appears on the methodology page alongside the retrieval date.
 

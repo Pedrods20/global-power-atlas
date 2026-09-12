@@ -43,7 +43,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = "global-power-atlas/0.1 (+https://github.com/pedrocabral/global-power-atlas)"
+USER_AGENT = "global-power-atlas/0.1 (+https://github.com/Pedrods20/global-power-atlas)"
 
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 _MAX_ATTEMPTS = 6

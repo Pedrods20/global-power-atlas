@@ -12,6 +12,7 @@ export default {
     { name: "Prices", path: "/prices" },
     { name: "Demand", path: "/demand" },
     { name: "Supply", path: "/supply" },
+    { name: "Fuel & carbon", path: "/spreads" },
     { name: "Methodology", path: "/methodology" },
   ],
 
@@ -24,7 +25,7 @@ export default {
   header: "",
   footer: ({ path }) =>
     `Built from primary system-operator data. ` +
-    `<a href="https://github.com/pedrocabral/global-power-atlas">Source and methodology on GitHub</a>.`,
+    `<a href="https://github.com/Pedrods20/global-power-atlas">Source and methodology on GitHub</a>.`,
 
   // The site is served from a project page, so assets resolve under the
   // repository name rather than the domain root.

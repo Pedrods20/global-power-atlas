@@ -14,8 +14,10 @@ from gpa.sources.base import (
     SourceError,
     UpstreamError,
 )
+from gpa.sources.ccee import CceeSource
 from gpa.sources.eia import EiaSource
 from gpa.sources.energy_charts import EnergyChartsSource
+from gpa.sources.jepx import JepxSource
 from gpa.sources.ons import OnsSource
 from gpa.sources.openelectricity import OpenElectricitySource
 
@@ -41,6 +43,8 @@ REGISTRY: dict[str, Source] = {
         OnsSource(),
         AemoSource(),
         OpenElectricitySource(),
+        JepxSource(),
+        CceeSource(),
     )
 }
 """Source name to a ready-to-use adapter instance.

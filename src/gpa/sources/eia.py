@@ -116,7 +116,8 @@ class EiaSource:
             # start of the hour.
             pl.col("period")
             .cast(pl.String)
-            .str.to_datetime(format="%Y-%m-%dT%H", strict=False)
+            .str.replace(r"^(\d{4}-\d{2}-\d{2}T\d{2})$", "${1}:00")
+            .str.to_datetime(format="%Y-%m-%dT%H:%M", strict=False)
             .dt.replace_time_zone("UTC")
             .cast(UTC_DATETIME)
             .alias("ts_utc"),

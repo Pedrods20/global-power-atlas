@@ -16,18 +16,17 @@ without a second request.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 import logging
 from pathlib import Path
 
 import polars as pl
 
-from gpa import store
+from gpa import benchmarks, store
 from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
-from gpa.zones import ZONES, Zone
+from gpa.zones import ZONES, Zone, get_zone
 
 __all__ = ["DEFAULT_OUTPUT", "export_all", "site_root"]
 
@@ -69,12 +68,16 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "generation_mix": _generation_mix(),
         "carbon_intensity": _carbon_intensity(),
         "capture_rates": _capture_rates(),
+        "europe_spreads": _europe_spreads(),
     }
 
     written: dict[str, int] = {}
     for name, frame in tables.items():
         path = destination / f"{name}.parquet"
-        _stringify_dates(frame).write_parquet(path, compression="zstd", statistics=True)
+        result = _stringify_dates(frame)
+        if result.columns:
+            result = result.sort(result.columns)
+        result.write_parquet(path, compression="zstd", statistics=True)
         written[path.name] = frame.height
 
     overview = _overview()
@@ -84,6 +87,38 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     written["zones.json"] = len(overview["zones"])
 
     return written
+
+
+def check_exports(destination: Path | None = None) -> list[str]:
+    """Compare tables by values, independently of Parquet writer metadata."""
+    import tempfile
+
+    from polars.testing import assert_frame_equal
+
+    target = destination or site_root()
+    differences = []
+    with tempfile.TemporaryDirectory(prefix="gpa-export-") as temp:
+        actual = Path(temp)
+        for name in export_all(actual):
+            expected_path = target / name
+            if not expected_path.exists():
+                differences.append(name)
+                continue
+            if name.endswith(".json"):
+                if json.loads(expected_path.read_text(encoding="utf-8")) != json.loads(
+                    (actual / name).read_text(encoding="utf-8")
+                ):
+                    differences.append(name)
+            else:
+                try:
+                    expected = pl.read_parquet(expected_path)
+                    observed = pl.read_parquet(actual / name)
+                    if expected.columns:
+                        expected = expected.sort(expected.columns)
+                    assert_frame_equal(expected, observed, check_row_order=True)
+                except (AssertionError, pl.exceptions.PolarsError):
+                    differences.append(name)
+    return differences
 
 
 def _stringify_dates(frame: pl.DataFrame) -> pl.DataFrame:
@@ -141,8 +176,15 @@ def _for_each(dataset: str, builder) -> pl.DataFrame:  # type: ignore[no-untyped
 def _daily_prices() -> pl.DataFrame:
     def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
         blocks = price_metrics.block_prices(frame, zone, period="day")
-        return blocks.rename({"period": "date"}).with_columns(
-            pl.lit(zone.currency).alias("currency")
+        return (
+            blocks.rename({"period": "date"})
+            .sort("date")
+            .with_columns(
+                pl.lit(zone.currency).alias("currency"),
+                (pl.col("date").str.to_date().diff().dt.total_days().fill_null(1) > 1)
+                .cum_sum()
+                .alias("segment"),
+            )
         )
 
     return _for_each("price", build)
@@ -251,13 +293,24 @@ def _capture_rates() -> pl.DataFrame:
     return pl.concat(frames, how="diagonal_relaxed")
 
 
+def _europe_spreads() -> pl.DataFrame:
+    path = benchmarks.reference_path()
+    prices = store.read("price", "DE-LU")
+    if not path.exists() or prices.is_empty():
+        return pl.DataFrame()
+    monthly_power = price_metrics.block_prices(prices, get_zone("DE-LU"), period="month")
+    return benchmarks.calculate_spreads(pl.read_parquet(path), monthly_power)
+
+
 # --- Overview --------------------------------------------------------------
 
 
 def _overview() -> dict[str, object]:
     """Zone metadata plus a freshness snapshot, for the landing page."""
     coverage = store.coverage()
-    now = dt.datetime.now(dt.UTC)
+    # Metadata must depend on the stored observations, not the build clock.
+    # Otherwise every CI export dirties zones.json even when no data changed.
+    data_as_of = coverage["last_ts_utc"].max() if not coverage.is_empty() else None
 
     entries: list[dict[str, object]] = []
     for zone in ZONES:
@@ -271,15 +324,12 @@ def _overview() -> dict[str, object]:
                 continue
 
             record = row.row(0, named=True)
-            last = record["last_ts_utc"]
-            age_hours = (now - last).total_seconds() / 3600 if last else None
             datasets[dataset] = {
                 "status": "ok",
                 "source": zone.sources[dataset],
                 "rows": record["rows"],
                 "first": record["first_ts_utc"],
-                "last": last,
-                "age_hours": round(age_hours, 1) if age_hours is not None else None,
+                "last": record["last_ts_utc"],
             }
 
         entries.append(
@@ -300,4 +350,4 @@ def _overview() -> dict[str, object]:
             }
         )
 
-    return {"generated_at": now.isoformat(), "zones": entries}
+    return {"data_as_of": data_as_of.isoformat() if data_as_of else None, "zones": entries}

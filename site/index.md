@@ -25,9 +25,18 @@ const zoneColor = new Map([
   ["DE-LU", "#0072B2"],
   ["BR-SIN", "#009E73"],
   ["AU-NSW1", "#CC79A7"],
+  ["PJM", "#E69F00"],
+  ["CAISO", "#56B4E9"],
+  ["FR", "#332288"],
+  ["ES", "#88CCEE"],
+  ["JP-TOKYO", "#AA4499"],
+  ["BR-SECO", "#117733"],
+  ["BR-S", "#44AA99"],
+  ["BR-NE", "#999933"],
+  ["BR-N", "#882255"],
 ]);
 
-const zoneOrder = [...zoneColor.keys()];
+const zoneOrder = [...zoneColor.keys()].filter((z) => prices.some((p) => p.zone === z));
 const colorScale = {
   domain: zoneOrder,
   range: zoneOrder.map((z) => zoneColor.get(z)),
@@ -46,20 +55,20 @@ const fuelOrder = Object.keys(fuelColor);
 
 <div class="hero">
   <h1>Global Power Atlas</h1>
-  <h2>Supply, demand and price across four continents, rebuilt daily from the system operators themselves.</h2>
+  <h2>Supply, demand and price across major power markets, rebuilt from primary and documented public sources.</h2>
 </div>
 
-Wholesale electricity is not one market. It is dozens of them, each with its own trading day, its own settlement interval, its own definition of a peak hour, and its own idea of what counts as renewable. This site normalises four of them onto one model so they can be compared without quietly lying about any of them.
+Wholesale electricity is not one market. It is dozens of them, each with its own trading day, settlement interval and definition of a peak hour. This site normalises selected markets onto one model while retaining their currencies, time zones and source boundaries.
 
 Every number here is computed in the market's own local time, over the interval duration the operator actually published, with negative prices left in. The [methodology](./methodology) says exactly how, and what each figure does not mean.
 
-## The four zones
+## Market coverage
 
 ```js
 const zoneRows = zones.zones.map((z) => {
   const parts = Object.entries(z.datasets);
   const ok = parts.filter(([, d]) => d.status === "ok");
-  const freshest = ok.length ? Math.min(...ok.map(([, d]) => d.age_hours ?? Infinity)) : null;
+  const freshest = ok.length ? Math.min(...ok.map(([, d]) => d.last ? Math.max(0, (Date.now() - new Date(d.last.replace(" ", "T"))) / 3600000) : Infinity)) : null;
   return {
     Zone: z.code,
     Market: z.name,
@@ -86,7 +95,7 @@ Inputs.table(zoneRows, {
 
 <div class="note">
 
-**Why one zone per continent, and not thirty.** Each zone here is proven end to end, from the operator's own endpoint through validation to the chart. Breadth is an entry in the zone registry once its source adapter exists; correctness is not. ERCOT shows as pending until a free EIA key is configured.
+Each dataset is published only after its source adapter, schema validation and chart export work end to end. Dataset availability differs by zone: ERCOT, PJM and CAISO currently supply load and generation through EIA-930; US wholesale prices require a separate source.
 
 </div>
 
@@ -108,6 +117,7 @@ Plot.plot({
       x: (d) => new Date(d.date),
       y: "all_hours",
       stroke: "zone",
+      z: (d) => `${d.zone}-${d.segment}`,
       strokeWidth: 1,
       tip: true,
     }),
@@ -126,19 +136,19 @@ Prices are shown in the currency the operator publishes. Converting them to a si
 ```js
 const negByZone = d3.rollups(
   negativeRows.filter((d) => d.n_intervals > 0),
-  (v) => d3.sum(v, (d) => d.n_negative) / d3.sum(v, (d) => d.n_intervals) * 100,
+  (v) => d3.sum(v, (d) => d.negative_hours) / d3.sum(v, (d) => d.observed_hours) * 100,
   (d) => d.zone,
 ).map(([zone, pct]) => ({ zone, pct }));
 ```
 
 ```js
 Plot.plot({
-  title: "Share of settlement intervals priced below zero",
-  subtitle: "Over the full period held for each zone. The clearest single measure of renewable surplus meeting inflexible supply.",
+  title: "Share of observed hours priced below zero",
+  subtitle: "Over the observed period held for each zone; frequency alone does not identify the cause.",
   width,
   height: 200,
   marginLeft: 80,
-  x: { label: "% of intervals", grid: true },
+  x: { label: "% of observed time", grid: true },
   y: { label: null },
   color: colorScale,
   marks: [
