@@ -19,8 +19,10 @@ and publishes them without a backend or browser-visible credentials.
 - Historical German clean spark and clean dark screening spreads with explicit
   efficiency, emissions and coal-energy assumptions.
 
-The active delivery and AI handoff checklist is [`TODO.md`](TODO.md). Treat it
-as the authoritative list of work remaining.
+Steps 1-6 of the original delivery are complete. [`TODO.md`](TODO.md) now
+holds the forward roadmap: 14 open items, ordered by how much each one affects
+the credibility of the published work. Treat it as the authoritative list of
+what is still missing.
 
 ## Completed in the current delivery
 
@@ -120,5 +122,10 @@ npm run build
 ```
 
 After changes to ingestion or metrics, regenerate and commit `site/data`.
-Steps 1–6 are complete. Agree the next scope with the user before beginning a
-new increment. Continue updating `TODO.md` as the handoff record.
+Agree the next scope with the user before beginning a new increment; the
+roadmap is a menu, not a queue to work through unprompted. Keep `TODO.md`
+current as the handoff record.
+
+The largest known gaps are France and Spain holding three months against two
+years elsewhere, CCEE holding 2026 only, and the three US zones carrying no
+wholesale price at all.
