@@ -129,10 +129,14 @@ Plot.plot({
   y: { label: "% of intervals", grid: true },
   color: colorScale,
   marks: [
-    Plot.barY(negativeRows, {
+    // One line per zone rather than stacked bars. Stacking would add two
+    // markets' percentages together, and that sum means nothing.
+    Plot.lineY(negativeRows, {
       x: "local_month",
       y: "negative_pct",
-      fill: "zone",
+      stroke: "zone",
+      strokeWidth: 2,
+      marker: "circle",
       tip: true,
     }),
     Plot.ruleY([0]),

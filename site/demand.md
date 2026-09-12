@@ -143,42 +143,49 @@ Plot.plot({
 ## Seasonality
 
 ```js
-const seasonal = load.map((d) => ({
-  ...d,
-  month: +d.date.slice(5, 7),
-  year: d.date.slice(0, 4),
-}));
+// Each market's daily energy is divided by that market's own mean before the
+// monthly average is taken, so the axis really is a ratio and a 7 GW market
+// and an 80 GW market are directly comparable.
+const zoneMeanEnergy = new Map(
+  d3.rollups(load, (v) => d3.mean(v, (d) => d.energy_mwh), (d) => d.zone),
+);
+
+const seasonal = d3
+  .rollups(
+    load.map((d) => ({
+      zone: d.zone,
+      month: +d.date.slice(5, 7),
+      ratio: d.energy_mwh / zoneMeanEnergy.get(d.zone),
+    })),
+    (v) => d3.mean(v, (d) => d.ratio),
+    (d) => d.zone,
+    (d) => d.month,
+  )
+  .flatMap(([zone, months]) => months.map(([month, ratio]) => ({ zone, month, ratio })))
+  .sort((a, b) => a.month - b.month);
 ```
 
 ```js
 Plot.plot({
-  title: "Demand by calendar month, relative to each market's annual mean",
-  subtitle: "Northern and southern hemisphere seasons run in opposite directions, which is why a global average of raw demand means nothing.",
+  title: "Demand by calendar month, relative to each market's own mean",
+  subtitle: "Northern and southern hemisphere seasons run in opposite directions, which is why a global average of raw demand describes no system.",
   width,
   height: 320,
   marginLeft: 55,
   x: { label: "month", domain: d3.range(1, 13), tickFormat: (m) => "JFMAMJJASOND"[m - 1] },
-  y: { label: "relative to market mean", grid: true },
+  y: { label: "× market mean", grid: true },
   color: colorScale,
   marks: [
     Plot.ruleY([1], { stroke: "currentColor", strokeOpacity: 0.35, strokeDasharray: "3,3" }),
-    Plot.lineY(
-      seasonal,
-      Plot.groupX(
-        { y: "mean" },
-        {
-          x: "month",
-          y: "energy_mwh",
-          stroke: "zone",
-          strokeWidth: 2,
-          curve: "catmull-rom",
-          tip: true,
-        },
-      ),
-    ),
+    Plot.lineY(seasonal, {
+      x: "month",
+      y: "ratio",
+      stroke: "zone",
+      strokeWidth: 2,
+      curve: "catmull-rom",
+      tip: true,
+    }),
   ],
-  // Normalising inside the plot would need a second pass; the mean line above
-  // makes the relative reading legible without one.
 })
 ```
 

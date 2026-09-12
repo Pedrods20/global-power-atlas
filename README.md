@@ -23,6 +23,42 @@ The point of the project is not that it draws charts. It is that the numbers und
 
 One zone per continent, proven end to end. Adding a zone is an entry in [`src/gpa/zones.py`](src/gpa/zones.py) once its source adapter exists; the CLI, the store and the site pick it up with no further change.
 
+## What two years of data shows
+
+Every figure below is computed by this repository from the sources above, over roughly two years to September 2026, and can be reproduced with the commands further down.
+
+**The peak-to-off-peak spread is collapsing, and in Australia it has inverted.**
+
+| Year | DE-LU spread, EUR/MWh | AU-NSW1 spread, AUD/MWh |
+|---|---|---|
+| 2024 | 44.59 | 87.99 |
+| 2025 | 17.11 | 38.01 |
+| 2026 | 11.98 | −1.60 |
+
+These are real block spreads, on-peak mean minus off-peak mean under each market's own block definition, not intraday range. New South Wales now clears its business-day peak block *below* the hours around it. Solar has eaten the shape that peaking plant was built to sell into.
+
+**Negative prices are no longer exceptional.**
+
+| Zone | Intervals below zero | Deepest | Longest unbroken run |
+|---|---|---|---|
+| AU-NSW1 | 10.58% of 210,204 five-minute intervals | −1,000 AUD/MWh, the market floor | 11.7 hours |
+| DE-LU | 3.79% of 27,129 quarter-hourly intervals | −250.32 EUR/MWh | 20.0 hours |
+
+A twenty-hour unbroken run below zero is not a price signal, it is a curtailment event. Frequency alone would have missed it.
+
+**Capture rates quantify the cannibalisation directly.**
+
+| Zone | Solar | Wind |
+|---|---|---|
+| DE-LU | 0.563 | 0.876 |
+| AU-NSW1 | 0.512 | 0.864 |
+
+Generation-weighted, not approximated by a fixed window of daylight hours. German solar earns 53.48 EUR/MWh against a time-weighted average of 94.91. Wind holds up far better because its output is not pinned to one time of day.
+
+**Demand shape differs more than demand level.** Brazil runs a load factor of 0.780, Germany 0.700, New South Wales 0.568. The Australian system carries roughly the same peak-to-average burden on a 13 GW peak that Brazil carries on 106 GW.
+
+**Brazil's carbon intensity is deliberately blank.** The operator folds every thermal unit into one aggregate column, so 87% of generation has a known emission factor and the missing 13% is the entire emitting fleet. Renormalising over the clean remainder returns 0 g/kWh for a system that is not carbon free. Germany reports 281 g/kWh and New South Wales 557 g/kWh on the same operational basis, both above 99% coverage.
+
 ## Why the numbers are trustworthy
 
 These are the decisions that separate this from a dashboard that merely renders:

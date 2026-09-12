@@ -59,7 +59,11 @@ Plot.plot({
   y: { label: "% of generation", grid: true },
   color: fuelScale,
   marks: [
-    Plot.areaY(
+    // Stacked bars rather than a stacked area: the x axis is an ordinal month
+    // label, and an area over an ordinal scale interpolates between categories
+    // that have no space between them. Fuels genuinely sum to the whole, so
+    // the stack itself is meaningful here.
+    Plot.barY(
       mixRows.filter((d) => d.zone === pickedZone),
       {
         x: "month",
@@ -67,7 +71,6 @@ Plot.plot({
         fill: "fuel",
         order: fuelOrder,
         tip: true,
-        curve: "step",
       },
     ),
     Plot.ruleY([0]),
@@ -160,7 +163,7 @@ const coverage = d3.rollups(
 ).map(([zone, pct]) => ({
   Zone: zone,
   "Generation with a known emission factor": Math.round(pct * 10) / 10 + "%",
-  "Intensity published": pct >= 80 ? "yes" : "withheld",
+  "Intensity published": pct >= 95 ? "yes" : "withheld",
 }));
 ```
 
@@ -170,9 +173,11 @@ Inputs.table(coverage, { layout: "auto" })
 
 <div class="note">
 
-The Brazilian operator publishes one aggregate thermal column that does not separate gas, coal, oil and biomass. This project maps it to an unresolved bucket rather than guessing, so Brazilian coverage falls below the threshold and no intensity is reported.
+The Brazilian operator publishes hydro, wind and solar separately and folds every thermal unit into one aggregate column with no fuel breakdown. This project maps that column to an unresolved bucket rather than guessing, so Brazilian coverage sits near 87 percent and falls below the 95 percent threshold.
 
-Dropping the unknown fuel and renormalising over the clean remainder would produce a number, and that number would be badly biased toward zero, because what was dropped is the entire emitting fleet. Refusing to publish is the correct answer, and the coverage column is how you can tell the difference.
+Note what the covered 87 percent consists of: hydro, wind and solar, all of which carry a zero operational factor. Renormalising over them returns 0 g/kWh for a system that is not carbon free, because what was left out is precisely the emitting fleet. That is the number the previous version of this project published.
+
+A coverage figure alone does not catch this, since 87 percent reads as reassuring. Refusing to publish is the correct answer, and the coverage column is how you can tell the difference between a clean grid and an unmeasured one.
 
 </div>
 

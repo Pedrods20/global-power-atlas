@@ -17,8 +17,9 @@ Last updated: 2026-09-13 · Repository: `global-power-atlas` · Replaces: `power
 - [x] Backfilled two years: **1,603,591 rows, 8.0 MB** across DE-LU, BR-SIN and AU-NSW1.
 - [x] `export.py`: reduces the store to **172 KB** of site-ready aggregates.
 - [x] Observable Framework site: five pages, builds clean, all links validated.
-- [x] **103 tests passing**, ruff lint and format clean.
+- [x] **104 tests passing**, ruff lint and format clean.
 - [x] Three GitHub Actions workflows: CI, daily ingest with commit, Pages deploy.
+- [x] Raised the carbon-intensity coverage threshold from 80% to 95% after the two-year backfill exposed the flaw: Brazil passed at 87.4% and published **0 g/kWh**, because the covered 87% is entirely hydro, wind and solar and the uncovered 13% is the whole emitting fleet. Now correctly withheld for all 25 months, while DE-LU (99.6%) and AU-NSW1 (100%) publish.
 
 ## 2. Current Architecture Snapshot
 

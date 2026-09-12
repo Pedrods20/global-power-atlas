@@ -135,7 +135,11 @@ Carbon intensity is published on two bases that are never mixed:
 
 Operational factors are direct combustion only, matching what system operators publish. Lifecycle values are IPCC AR5 Annex III medians. Biomass counts as zero at the stack under the standard convention that books biogenic carbon to the land sector; that is a convention, not a physical claim, and it is the largest judgement call in the table.
 
-**An intensity is withheld when coverage is poor.** If less than 80 percent of a period's generation has a known factor, no number is published and the coverage is reported instead. This is why Brazil has no carbon line: the ONS balance publishes a single aggregate thermal column with no fuel breakdown, so the entire emitting fleet is unresolved. Dropping it and renormalising over the clean remainder would yield a number biased far toward zero.
+**An intensity is withheld when coverage is poor.** If less than 95 percent of a period's generation has a known factor, no number is published and the coverage is reported instead.
+
+That threshold is strict on purpose. Brazil is the case that sets it: the ONS balance publishes hydro, wind and solar separately and folds every thermal unit into one aggregate column with no fuel breakdown. Brazilian coverage lands near 87 percent, and the missing 13 percent is not a random sample of the fleet, it is the entire emitting fleet. Renormalising over the clean remainder returns an intensity of roughly zero for a system that is not carbon free, which is exactly what the previous version of this project reported.
+
+A coverage number alone cannot catch that, because 87 percent looks reassuring. The rule of thumb behind the 95 percent threshold is that uncovered generation is almost always unresolved thermal output, so even a tenth of it left out can move the answer by more than a hundred grams per kWh.
 
 ## Known limitations
 

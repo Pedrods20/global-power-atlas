@@ -208,7 +208,7 @@ def carbon_intensity(
     *,
     basis: FactorBasis = "operational",
     period: str = "month",
-    min_coverage_pct: float = 80.0,
+    min_coverage_pct: float = 95.0,
 ) -> pl.DataFrame:
     """Average carbon intensity of generation, in grams of CO2 per kWh.
 
@@ -217,12 +217,20 @@ def carbon_intensity(
     how much of the period's generation that was, and the result is nulled when
     coverage falls below ``min_coverage_pct``.
 
-    That guard matters. Brazil's ONS balance publishes a single aggregate
-    thermal column that does not separate gas, coal, oil and biomass, so this
-    project maps it to ``other`` and Brazilian coverage is low. Silently
-    dropping the unknown fuel, as the previous version of this project did,
-    renormalises over the clean remainder and reports a carbon intensity biased
-    far too low. Refusing to publish a number is the correct answer there.
+    That guard matters, and the default is deliberately strict. Brazil's ONS
+    balance publishes a single aggregate thermal column that does not separate
+    gas, coal, oil and biomass, so this project maps it to ``other``. Brazilian
+    coverage lands near 87 percent, and the missing 13 percent is not a random
+    sample of the fleet, it *is* the entire emitting fleet. Renormalising over
+    the clean remainder yields an intensity of roughly zero, which is what the
+    previous version of this project reported and is badly wrong.
+
+    A coverage threshold alone cannot detect that, because the uncovered share
+    looks small. The threshold is therefore set at 95 percent rather than a
+    looser figure, on the reasoning that uncovered generation is usually
+    unresolved *thermal* output, so even a tenth of it left out can move the
+    answer by more than a hundred grams per kWh. Publishing nothing, and
+    publishing the coverage alongside, is the honest outcome.
 
     Args:
         frame: Rows matching the ``generation`` schema.
@@ -231,7 +239,8 @@ def carbon_intensity(
             operators publish, or ``"lifecycle"`` for IPCC AR5 medians.
         period: ``"day"``, ``"month"``, ``"year"`` or ``"all"``.
         min_coverage_pct: Minimum share of generation with a known factor
-            required before an intensity is reported.
+            required before an intensity is reported. Lower it only if you know
+            the uncovered fuels are not predominantly thermal.
 
     Returns:
         Columns ``period``, ``basis``, ``intensity_g_per_kwh``, ``coverage_pct``

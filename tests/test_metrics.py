@@ -309,6 +309,37 @@ def test_operational_and_lifecycle_bases_differ_for_nuclear() -> None:
     assert lifecycle["intensity_g_per_kwh"][0] == APPROX(12.0)
 
 
+def test_carbon_intensity_is_withheld_at_brazils_actual_coverage() -> None:
+    """87 percent coverage still reports zero, so the threshold must reject it.
+
+    This is the real Brazilian case, not a contrived one. ONS publishes hydro,
+    wind and solar separately and folds every thermal unit into one aggregate
+    column, so the covered 87 percent is entirely zero-carbon and the uncovered
+    13 percent is the entire emitting fleet. Renormalising over the remainder
+    reports 0 g/kWh for a system that is not carbon free.
+
+    A looser threshold, such as 80 percent, lets this through. That is why the
+    default is 95.
+    """
+    moment = dt.datetime(2026, 6, 15, 12, tzinfo=dt.UTC)
+    frame = generation_frame(
+        [
+            (moment, "hydro", 700.0),
+            (moment, "wind", 120.0),
+            (moment, "solar", 54.0),
+            (moment, "other", 126.0),
+        ]
+    )
+
+    result = mix_metrics.carbon_intensity(frame, GERMANY, basis="operational", period="all")
+    row = result.row(0, named=True)
+
+    assert row["coverage_pct"] == APPROX(87.4, abs=0.1)
+    assert row["intensity_g_per_kwh"] is None, (
+        "87% coverage of exclusively zero-carbon fuels must not publish an intensity"
+    )
+
+
 def test_carbon_intensity_is_withheld_when_fuel_coverage_is_poor() -> None:
     """The Brazil case: an unresolved thermal block must not be silently dropped.
 
