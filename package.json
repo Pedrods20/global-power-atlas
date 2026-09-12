@@ -1,0 +1,18 @@
+{
+  "name": "global-power-atlas-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static site for the Global Power Atlas.",
+  "scripts": {
+    "dev": "observable preview",
+    "build": "observable build",
+    "clean": "observable clean"
+  },
+  "dependencies": {
+    "@observablehq/framework": "^1.13.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-09-12T17:10:46.984847+00:00",
+  "zones": [
+    {
+      "code": "ERCOT",
+      "name": "ERCOT (Texas)",
+      "country": "US",
+      "region": "North America",
+      "operator": "Electric Reliability Council of Texas",
+      "timezone": "America/Chicago",
+      "civil_timezone": null,
+      "observes_market_dst": true,
+      "currency": "USD",
+      "peak_block": "NERC on-peak (HE0700-HE2200, Mon-Sat, ex-NERC holidays)",
+      "peak_note": null,
+      "notes": "Energy-only market with no capacity payment, the largest installed wind fleet in the United States, and a scarcity-pricing mechanism that lets the offer cap drive extreme summer settlements.",
+      "datasets": {
+        "load": {
+          "status": "pending",
+          "source": "eia"
+        },
+        "generation": {
+          "status": "pending",
+          "source": "eia"
+        }
+      }
+    },
+    {
+      "code": "DE-LU",
+      "name": "Germany-Luxembourg",
+      "country": "DE-LU",
+      "region": "Europe",
+      "operator": "50Hertz / Amprion / TenneT DE / TransnetBW",
+      "timezone": "Europe/Berlin",
+      "civil_timezone": null,
+      "observes_market_dst": true,
+      "currency": "EUR",
+      "peak_block": "European peakload (08:00-20:00 CET, Mon-Fri)",
+      "peak_note": null,
+      "notes": "The deepest power market in Europe and the reference for continental price formation. Nuclear phase-out completed in April 2023, leaving a system where wind and solar set price for a large and growing share of hours, and where negative prices are routine rather than exceptional.",
+      "datasets": {
+        "price": {
+          "status": "ok",
+          "source": "energy_charts",
+          "rows": 27129,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-12 16:45:00+00:00",
+          "age_hours": 0.4
+        },
+        "load": {
+          "status": "ok",
+          "source": "energy_charts",
+          "rows": 70075,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-12 15:30:00+00:00",
+          "age_hours": 1.7
+        },
+        "generation": {
+          "status": "ok",
+          "source": "energy_charts",
+          "rows": 840900,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-12 15:30:00+00:00",
+          "age_hours": 1.7
+        }
+      }
+    },
+    {
+      "code": "BR-SIN",
+      "name": "Brazil (SIN)",
+      "country": "BR",
+      "region": "South America",
+      "operator": "Operador Nacional do Sistema Eletrico",
+      "timezone": "America/Sao_Paulo",
+      "civil_timezone": null,
+      "observes_market_dst": true,
+      "currency": "BRL",
+      "peak_block": "Brazilian ponta (18:00-21:00, Mon-Fri)",
+      "peak_note": "Brazil has settled a genuinely hourly PLD since January 2021, so it has no traded peak block. The ponta window is a distribution-tariff construct whose exact hours each distributor sets locally; 18:00-21:00 is the common case and is used here only to make Brazil comparable with other markets. Do not read it as a wholesale product.",
+      "notes": "A continent-scale hydro-dominated system operated as a single optimised cascade, where price is a model output rather than an auction clearing. Reservoir storage substitutes for the fuel-cost stack that sets price elsewhere, so scarcity shows up as a stored-energy problem first.",
+      "datasets": {
+        "load": {
+          "status": "ok",
+          "source": "ons",
+          "rows": 17482,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-11 02:00:00+00:00",
+          "age_hours": 39.2
+        },
+        "generation": {
+          "status": "ok",
+          "source": "ons",
+          "rows": 69928,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-11 02:00:00+00:00",
+          "age_hours": 39.2
+        }
+      }
+    },
+    {
+      "code": "AU-NSW1",
+      "name": "Australia NEM - New South Wales",
+      "country": "AU",
+      "region": "Oceania",
+      "operator": "Australian Energy Market Operator",
+      "timezone": "Australia/Brisbane",
+      "civil_timezone": "Australia/Sydney",
+      "observes_market_dst": false,
+      "currency": "AUD",
+      "peak_block": "AEMO peak (07:00-22:00 AEST, Mon-Fri)",
+      "peak_note": null,
+      "notes": "Five-minute settlement since October 2021, the shortest dispatch and settlement interval of any major market, over a fleet retiring coal faster than it is replacing it. Market time is AEST year-round, which is why this zone carries a separate civil timezone.",
+      "datasets": {
+        "price": {
+          "status": "ok",
+          "source": "aemo",
+          "rows": 210204,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-12 13:55:00+00:00",
+          "age_hours": 3.3
+        },
+        "load": {
+          "status": "ok",
+          "source": "aemo",
+          "rows": 210204,
+          "first": "2024-09-12 17:00:00+00:00",
+          "last": "2026-09-12 13:55:00+00:00",
+          "age_hours": 3.3
+        },
+        "generation": {
+          "status": "ok",
+          "source": "openelectricity",
+          "rows": 157669,
+          "first": "2024-09-12 18:00:00+00:00",
+          "last": "2026-09-12 16:00:00+00:00",
+          "age_hours": 1.2
+        }
+      }
+    }
+  ]
+}

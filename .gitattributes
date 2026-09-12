@@ -1,0 +1,19 @@
+# Normalise line endings so a Windows workstation and a Linux CI runner agree.
+# Without this, every file committed from Windows shows as wholly rewritten the
+# first time CI touches it.
+* text=auto eol=lf
+
+# Parquet is binary. Left to its own devices git would try to normalise it and
+# corrupt every partition.
+*.parquet binary
+*.wasm binary
+*.png binary
+*.jpg binary
+*.ico binary
+
+# Generated, and noisy in review.
+package-lock.json linguist-generated=true -diff
+
+# The curated store is data, not source. Excluding it from language statistics
+# stops GitHub from reporting the repository as mostly Parquet.
+data/curated/** linguist-generated=true

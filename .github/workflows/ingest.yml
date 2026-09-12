@@ -1,0 +1,74 @@
+name: Ingest
+
+# The engine that accumulates history. Runs daily, refetches a trailing window
+# rather than only yesterday because providers publish on a lag and revise
+# afterwards, and commits the resulting Parquet. The store upserts on each
+# dataset's natural key, so overlapping runs converge on the restated figures
+# instead of duplicating them.
+
+on:
+  schedule:
+    # 05:40 UTC. Late enough that the European and Australian previous day is
+    # settled, early enough to be well clear of the hour boundary when every
+    # other scheduled job on GitHub fires.
+    - cron: "40 5 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Trailing days to refetch"
+        required: false
+        default: "7"
+
+permissions:
+  contents: write
+
+concurrency:
+  # Never let two ingests write the store at once; a queued run would commit on
+  # top of a half-written tree.
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e .
+
+      - name: Ingest
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+          ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
+        run: gpa ingest --days ${{ github.event.inputs.days || '7' }}
+
+      - name: Validate
+        run: gpa validate
+
+      - name: Rebuild site tables
+        run: gpa export
+
+      - name: Report coverage
+        run: gpa stats
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/curated site/data
+          if git diff --cached --quiet; then
+            echo "No new observations; nothing to commit."
+            exit 0
+          fi
+          git commit -m "data: ingest $(date -u +%Y-%m-%d)"
+          # Another run, or a push to main, may have landed while this one was
+          # fetching. Rebasing keeps the data history linear.
+          git pull --rebase --autostash origin main
+          git push
