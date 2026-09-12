@@ -27,7 +27,8 @@ Keep this file current so another AI can resume from the first unchecked item.
 
 - [x] Create public repository `Pedrods20/global-power-atlas`.
 - [x] Add encrypted `EIA_API_KEY` GitHub Actions secret.
-- [ ] Commit/push the reviewed implementation, configure Pages and verify the site.
+- [x] Push commit `aa1ea71`, configure Pages with GitHub Actions, and verify the
+  hosted site after successful CI and deploy runs.
 
 ## 5. ERCOT
 
@@ -48,7 +49,7 @@ Keep this file current so another AI can resume from the first unchecked item.
   format; 435 partitions; deterministic export; six-page Observable build.
 - [x] Browser-check all six pages at 1440 px and 390 px with no JavaScript
   errors or overflow; refresh the portfolio screenshots.
-- [ ] Publish the expansion and verify CI/Pages on GitHub.
+- [x] Publish the expansion and verify CI/Pages on GitHub.
 
 ## Current state and next actions
 
@@ -60,8 +61,12 @@ Keep this file current so another AI can resume from the first unchecked item.
 - Verified baseline: 2,380,416 stored observations, 13 zones, 24 spread months,
   113 passing tests, zero credential-scan hits. `.env` and `data/raw/` are
   confirmed ignored.
-- Next exact action: review/stage all intended files, commit, add the GitHub
-  remote, push `main`, enable Pages with Actions and inspect workflow/live site.
+- Steps 1–6 are complete. The public site is
+  `https://pedrods20.github.io/global-power-atlas/`; its six routes passed the
+  browser smoke against the hosted build at both viewport sizes.
+- CI run `34725613826` and Deploy run `34725613889` completed successfully for
+  commit `aa1ea71`. The next AI should begin by agreeing a new scope with the
+  user; do not infer a step 7 from the older roadmap.
 
 ## Useful commands
 

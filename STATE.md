@@ -46,6 +46,10 @@ as the authoritative list of work remaining.
 - Public repository created at
   <https://github.com/Pedrods20/global-power-atlas>; `EIA_API_KEY` is stored as
   an encrypted Actions secret. The local `.env` is ignored.
+- Commit `aa1ea71` was pushed to `main`; CI run `34725613826` and Pages deploy
+  run `34725613889` completed successfully.
+- The public site at <https://pedrods20.github.io/global-power-atlas/> passed the
+  six-route desktop/mobile browser smoke against the hosted build.
 
 ## Architecture
 
@@ -116,5 +120,5 @@ npm run build
 ```
 
 After changes to ingestion or metrics, regenerate and commit `site/data`.
-Before publication, scan staged content for credentials, push `main`, enable
-Pages with GitHub Actions and inspect the CI, ingest/deploy runs and live site.
+Steps 1–6 are complete. Agree the next scope with the user before beginning a
+new increment. Continue updating `TODO.md` as the handoff record.
