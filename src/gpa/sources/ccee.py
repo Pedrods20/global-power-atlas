@@ -5,26 +5,39 @@ Local official CSV downloads can be placed in GPA_CCEE_IMPORT_DIR when the
 provider blocks automated access. No observations are synthesised.
 """
 
+from __future__ import annotations
+
+import datetime as dt
 import io
 import os
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
 from gpa.schema import UTC_DATETIME, empty_frame
 from gpa.sources.base import UpstreamError, fetch_json, fetch_text
+from gpa.zones import Zone
+
+__all__ = ["CceeSource", "parse_ccee"]
 
 
 class CceeSource:
-    name = "ccee"
-    datasets = ("price",)
-    max_window_days = None
+    name: str = "ccee"
+    datasets: tuple[str, ...] = ("price",)
+    max_window_days: int | None = None
 
-    def fetch(self, zone, dataset, start, end):
+    def fetch(
+        self,
+        zone: Zone,
+        dataset: str,
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> pl.DataFrame:
         if dataset != "price":
             raise ValueError("CCEE PLD supplies only price")
         directory = os.environ.get("GPA_CCEE_IMPORT_DIR")
-        frames = []
+        frames: list[pl.DataFrame] = []
         if directory:
             for file in sorted(Path(directory).glob("pld_horario_*.csv")):
                 frames.append(
@@ -39,7 +52,7 @@ class CceeSource:
                 "https://dadosabertos.ccee.org.br/api/3/action/package_show",
                 params={"id": "pld_horario"},
             )
-            resources = payload.get("result", {}).get("resources", [])
+            resources: list[dict[str, Any]] = payload.get("result", {}).get("resources", [])
             for year in range(start.year, end.year + 1):
                 resource = next(
                     (r for r in resources if r.get("name", "").lower() == f"pld_horario_{year}"),
@@ -62,7 +75,12 @@ class CceeSource:
         )
 
 
-def parse_ccee(text, zone_code, submarket):
+def parse_ccee(text: str, zone_code: str, submarket: str) -> pl.DataFrame:
+    """Parse one hourly PLD CSV into canonical price rows for one submarket.
+
+    Exposed for tests, which run it against a recorded fixture rather than the
+    official download.
+    """
     separator = ";" if ";" in text.splitlines()[0] else ","
     frame = pl.read_csv(
         io.StringIO(text.lstrip("\ufeff")), separator=separator, infer_schema_length=0

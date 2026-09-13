@@ -5,23 +5,35 @@ The archive's period code 1 means 00:00-00:30 JST. Bid and traded quantities
 are not system demand and are deliberately not ingested as load.
 """
 
+from __future__ import annotations
+
+import datetime as dt
 import io
 
 import polars as pl
 
 from gpa.schema import UTC_DATETIME, empty_frame
 from gpa.sources.base import UpstreamError, _request, http_client
+from gpa.zones import Zone
+
+__all__ = ["JepxSource", "parse_jepx"]
 
 
 class JepxSource:
-    name = "jepx"
-    datasets = ("price",)
-    max_window_days = None
+    name: str = "jepx"
+    datasets: tuple[str, ...] = ("price",)
+    max_window_days: int | None = None
 
-    def fetch(self, zone, dataset, start, end):
+    def fetch(
+        self,
+        zone: Zone,
+        dataset: str,
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> pl.DataFrame:
         if dataset != "price":
             raise ValueError("JEPX archive supplies prices, not system load or generation")
-        frames = []
+        frames: list[pl.DataFrame] = []
         # The files cover April-March fiscal years, not calendar years.
         with http_client() as client:
             for year in range(start.year - (start.month < 4), end.year + 1):
@@ -43,7 +55,16 @@ class JepxSource:
         )
 
 
-def parse_jepx(text, zone_code="JP-TOKYO", area="東京"):
+def parse_jepx(
+    text: str,
+    zone_code: str = "JP-TOKYO",
+    area: str = "東京",
+) -> pl.DataFrame:
+    """Parse one fiscal-year spot archive into canonical price rows.
+
+    Exposed for tests, which run it against a recorded fixture rather than the
+    live archive.
+    """
     frame = pl.read_csv(io.StringIO(text), infer_schema_length=0)
     date_column = "年月日" if "年月日" in frame.columns else "受渡日"
     price_column = f"エリアプライス{area}(円/kWh)"

@@ -87,12 +87,12 @@ consistent across markets whose providers disagree about what counts.
 class EnergyChartsSource:
     """Fetch price, load and generation for a European bidding zone."""
 
-    name = "energy_charts"
-    datasets = ("price", "load", "generation")
+    name: str = "energy_charts"
+    datasets: tuple[str, ...] = ("price", "load", "generation")
     # No documented cap, but the public_power endpoint returns about twenty
     # series at quarter-hourly resolution and starts timing out well before a
     # quarter's worth of data. Sixty days is comfortably inside that.
-    max_window_days = 60
+    max_window_days: int | None = 60
 
     def fetch(
         self,

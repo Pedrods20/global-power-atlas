@@ -16,9 +16,11 @@ without a second request.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 from pathlib import Path
+from typing import TypedDict
 
 import polars as pl
 
@@ -38,6 +40,17 @@ DEFAULT_OUTPUT = "site/data"
 # past the pixel resolution of any chart the site draws, so the curve's shape,
 # including both tails, survives intact.
 _CURVE_POINTS = 2000
+
+
+class Overview(TypedDict):
+    """Shape of ``zones.json``, the one site file that is not Parquet.
+
+    Declared so that callers can index it without the result widening to
+    ``object``, and so the site's contract is stated in one place.
+    """
+
+    data_as_of: str | None
+    zones: list[dict[str, object]]
 
 
 def site_root() -> Path:
@@ -305,12 +318,16 @@ def _europe_spreads() -> pl.DataFrame:
 # --- Overview --------------------------------------------------------------
 
 
-def _overview() -> dict[str, object]:
+def _overview() -> Overview:
     """Zone metadata plus a freshness snapshot, for the landing page."""
     coverage = store.coverage()
     # Metadata must depend on the stored observations, not the build clock.
     # Otherwise every CI export dirties zones.json even when no data changed.
-    data_as_of = coverage["last_ts_utc"].max() if not coverage.is_empty() else None
+    # polars types `.max()` as a broad union, so narrow it rather than casting:
+    # an unexpected dtype should read as "unknown" instead of crashing on
+    # `.isoformat()` at build time.
+    raw_as_of = coverage["last_ts_utc"].max() if not coverage.is_empty() else None
+    data_as_of = raw_as_of if isinstance(raw_as_of, dt.datetime) else None
 
     entries: list[dict[str, object]] = []
     for zone in ZONES:

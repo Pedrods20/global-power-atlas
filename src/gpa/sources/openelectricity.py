@@ -62,11 +62,11 @@ IGNORED_FUELTECHS: Final[frozenset[str]] = frozenset({"battery_charging", "batte
 class OpenElectricitySource:
     """Fetch generation by fuel for a NEM region."""
 
-    name = "openelectricity"
-    datasets = ("generation",)
+    name: str = "openelectricity"
+    datasets: tuple[str, ...] = ("generation",)
     # The API rejects anything over 32 days at hourly resolution with a 400.
     # Thirty-one leaves room for the timezone shift at the window's edges.
-    max_window_days = 31
+    max_window_days: int | None = 31
 
     def fetch(
         self,

@@ -73,11 +73,11 @@ whose operator does report rooftop, and the methodology page says so.
 class EiaSource:
     """Fetch hourly load and generation by fuel for a US balancing authority."""
 
-    name = "eia"
-    datasets = ("load", "generation")
+    name: str = "eia"
+    datasets: tuple[str, ...] = ("load", "generation")
     # Paginated rather than capped, but a year at a time keeps any single
     # failure small enough to retry cheaply.
-    max_window_days = 365
+    max_window_days: int | None = 365
 
     def fetch(
         self,

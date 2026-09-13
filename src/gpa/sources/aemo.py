@@ -64,11 +64,11 @@ _REQUIRED = ("REGION", "SETTLEMENTDATE", "TOTALDEMAND", "RRP")
 class AemoSource:
     """Fetch regional reference price and total demand for a NEM region."""
 
-    name = "aemo"
-    datasets = ("price", "load")
+    name: str = "aemo"
+    datasets: tuple[str, ...] = ("price", "load")
     # The archive is one whole file per region-month, so a longer window costs
     # no extra requests and there is nothing to cap.
-    max_window_days = None
+    max_window_days: int | None = None
 
     def fetch(
         self,

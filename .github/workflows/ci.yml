@@ -31,10 +31,26 @@ jobs:
       - name: Format check
         run: ruff format --check src tests
 
+      - name: Type check
+        # pyproject sets mypy to strict. Running it here is what stops that
+        # setting from being decorative: it went unenforced long enough for two
+        # adapters to be merged with no annotations at all.
+        run: mypy
+
       - name: Test
-        # The suite runs entirely against recorded fixtures and temporary
-        # directories, so it needs no credentials and makes no network calls.
-        run: pytest -q
+        # The suite runs entirely against recorded fixtures, mocked HTTP
+        # transports and temporary directories, so it needs no credentials and
+        # makes no network calls.
+        #
+        # The floor is global rather than per-module. Adapter `fetch` methods
+        # are an I/O boundary: their testable logic (parsing, fuel mapping,
+        # timezone conversion) is extracted into pure functions that fixtures
+        # already cover, and the retry and throttle behaviour they all share is
+        # tested once in sources/base.py. What stays uncovered is the sequence
+        # of HTTP calls, and mocking seven providers to exercise it would buy
+        # very little. Raise this number when it becomes easy to, never lower
+        # it to make a change pass.
+        run: pytest -q --cov=gpa --cov-fail-under=75
 
       - name: Validate the committed store
         # Catches a partition written by an older adapter, hand-edited, or

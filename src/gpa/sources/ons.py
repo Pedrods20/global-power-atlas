@@ -109,11 +109,11 @@ in a two-year backfill is cheaper to retry at this size."""
 class OnsSource:
     """Fetch load and generation for a Brazilian subsystem."""
 
-    name = "ons"
-    datasets = ("load", "generation")
+    name: str = "ons"
+    datasets: tuple[str, ...] = ("load", "generation")
     # One whole file per calendar year, so a longer window is strictly cheaper
     # than several short ones.
-    max_window_days = None
+    max_window_days: int | None = None
 
     def fetch(
         self,
