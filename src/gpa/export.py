@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
@@ -164,9 +165,9 @@ def check_exports(destination: Path | None = None) -> list[str]:
                 differences.append(name)
                 continue
             if name.endswith(".json"):
-                if json.loads(expected_path.read_text(encoding="utf-8")) != json.loads(
-                    (actual / name).read_text(encoding="utf-8")
-                ):
+                expected_json = json.loads(expected_path.read_text(encoding="utf-8"))
+                actual_json = json.loads((actual / name).read_text(encoding="utf-8"))
+                if not _json_values_close(expected_json, actual_json):
                     differences.append(name)
             else:
                 try:
@@ -178,6 +179,29 @@ def check_exports(destination: Path | None = None) -> list[str]:
                 except (AssertionError, pl.exceptions.PolarsError):
                     differences.append(name)
     return differences
+
+
+def _json_values_close(expected: object, actual: object) -> bool:
+    """Compare parsed JSON, tolerating the float noise a different platform's
+    BLAS or LightGBM build introduces into the forecast benchmark.
+
+    Every other exported table already tolerates this: Parquet comparisons go
+    through :func:`polars.testing.assert_frame_equal`, which allows a relative
+    tolerance by default. Exact ``!=`` on JSON held forecast metrics to a
+    stricter, bit-identical standard that a fitted model cannot promise across
+    a Windows workstation and a Linux CI runner even with a fixed seed.
+    """
+    if isinstance(expected, float) and isinstance(actual, float):
+        return math.isclose(expected, actual, rel_tol=1e-6, abs_tol=1e-9)
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        return expected.keys() == actual.keys() and all(
+            _json_values_close(expected[k], actual[k]) for k in expected
+        )
+    if isinstance(expected, list) and isinstance(actual, list):
+        return len(expected) == len(actual) and all(
+            _json_values_close(e, a) for e, a in zip(expected, actual, strict=True)
+        )
+    return expected == actual
 
 
 def _stringify_dates(frame: pl.DataFrame) -> pl.DataFrame:
