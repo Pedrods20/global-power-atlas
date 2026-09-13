@@ -61,7 +61,7 @@
       "evaluation": "retrospective development benchmark; not an untouched holdout",
       "data_vintages": "latest revised observations; publication-time vintages unavailable",
       "benchmark_end": "2026-09-12",
-      "input_sha256": "d6edc2fd09732784bf38c5366fae7a1d5b85e488026d1702e276dbe1a1c719bb",
+      "input_sha256": "b2f253fb85ff830479acd1b4a9ecaa746c4a52478df0afb06c67e70e1c5f9100",
       "eligible_hours": 8975,
       "min_train_days": 270,
       "validation_days": 90,

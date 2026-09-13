@@ -279,6 +279,21 @@ def select_alpha(
     return float(search.get_column("alpha").item(0)), search.sort("alpha")
 
 
+def stable_hash(frame: pl.DataFrame) -> str:
+    """SHA-256 of a frame's content, insensitive to platform floating-point noise.
+
+    A duration-weighted mean or join is a parallel reduction, and its
+    summation order (and so its last bit) can differ between machines with
+    different core counts even given byte-identical input. Rounding before
+    serialising keeps the hash stable across a Windows workstation and a
+    Linux CI runner, at a precision far finer than any real change to the
+    underlying market data would produce.
+    """
+    float_cols = [name for name, dtype in frame.schema.items() if dtype.is_float()]
+    stable = frame.with_columns(pl.col(c).round(6) for c in float_cols) if float_cols else frame
+    return hashlib.sha256(stable.write_json().encode()).hexdigest()
+
+
 def run(
     zone: Zone | str,
     *,
@@ -332,9 +347,7 @@ def run(
         )
     if prepared.frame.select(pl.struct("local_date", "local_hour").is_duplicated().any()).item():
         raise ValueError("panel has duplicate local date/hour keys")
-    input_sha256 = hashlib.sha256(
-        prepared.frame.sort(["local_date", "local_hour"]).write_json().encode()
-    ).hexdigest()
+    input_sha256 = stable_hash(prepared.frame.sort(["local_date", "local_hour"]))
 
     usable = prepared.complete().get_column("local_date").unique().sort().to_list()
     required = min_train_days + validation_days + 1

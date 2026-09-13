@@ -428,6 +428,17 @@ def test_validation_and_cutoff_do_not_read_later_prices():
     assert_frame_equal(original_search, changed_search)
 
 
+def test_stable_hash_absorbs_last_bit_noise_but_catches_a_real_change():
+    # A duration-weighted mean is a parallel reduction; its last bit can
+    # differ between a Windows workstation and a Linux CI runner even given
+    # byte-identical input, which broke `gpa export --check` in practice.
+    base = pl.DataFrame({"local_date": ["2025-01-01"], "price": [21.035589562218991]})
+    noisy = base.with_columns(pl.col("price") + 1e-10)
+    assert backtest.stable_hash(base) == backtest.stable_hash(noisy)
+    changed = base.with_columns(pl.col("price") + 1e-3)
+    assert backtest.stable_hash(base) != backtest.stable_hash(changed)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [{"min_train_days": 0}, {"validation_days": 0}, {"alpha": -1.0}, {"alpha": float("nan")}],

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import polars as pl
 
-from gpa.forecast.backtest import BacktestResult
+from gpa.forecast.backtest import BacktestResult, stable_hash
 
 ROOT = Path(__file__).resolve().parents[3] / "data" / "experiments"
 CURRENT = ROOT / "current.json"
@@ -60,9 +60,7 @@ def read() -> tuple[dict[str, object], dict[str, pl.DataFrame]] | None:
         if hashlib.sha256(file.read_bytes()).hexdigest() != metadata["checksums"][file.name]:
             raise ValueError(f"modified experiment artifact: {file}")
         tables[name] = pl.read_parquet(file)
-    actual_hash = hashlib.sha256(
-        tables["input_panel"].sort("local_date", "local_hour").write_json().encode()
-    ).hexdigest()
+    actual_hash = stable_hash(tables["input_panel"].sort("local_date", "local_hour"))
     if actual_hash != metadata["input_sha256"]:
         raise ValueError("input snapshot does not match recorded fingerprint")
     return metadata, tables

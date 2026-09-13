@@ -190,22 +190,14 @@ def _json_diff(expected: object, actual: object, path: str = "$") -> list[str]:
     """
     if _json_values_close(expected, actual):
         return []
-    if (
-        isinstance(expected, dict)
-        and isinstance(actual, dict)
-        and expected.keys() == actual.keys()
-    ):
+    if isinstance(expected, dict) and isinstance(actual, dict) and expected.keys() == actual.keys():
         out: list[str] = []
         for key in expected:
             out.extend(_json_diff(expected[key], actual[key], f"{path}.{key}"))
             if len(out) >= 5:
                 break
         return out[:5]
-    if (
-        isinstance(expected, list)
-        and isinstance(actual, list)
-        and len(expected) == len(actual)
-    ):
+    if isinstance(expected, list) and isinstance(actual, list) and len(expected) == len(actual):
         out = []
         for i, (e, a) in enumerate(zip(expected, actual, strict=True)):
             out.extend(_json_diff(e, a, f"{path}[{i}]"))
