@@ -168,7 +168,8 @@ def check_exports(destination: Path | None = None) -> list[str]:
                 expected_json = json.loads(expected_path.read_text(encoding="utf-8"))
                 actual_json = json.loads((actual / name).read_text(encoding="utf-8"))
                 if not _json_values_close(expected_json, actual_json):
-                    differences.append(name)
+                    detail = "; ".join(_json_diff(expected_json, actual_json))
+                    differences.append(f"{name} ({detail})" if detail else name)
             else:
                 try:
                     expected = pl.read_parquet(expected_path)
@@ -176,9 +177,42 @@ def check_exports(destination: Path | None = None) -> list[str]:
                     if expected.columns:
                         expected = expected.sort(expected.columns)
                     assert_frame_equal(expected, observed, check_row_order=True)
-                except (AssertionError, pl.exceptions.PolarsError):
-                    differences.append(name)
+                except (AssertionError, pl.exceptions.PolarsError) as exc:
+                    differences.append(f"{name} ({exc})")
     return differences
+
+
+def _json_diff(expected: object, actual: object, path: str = "$") -> list[str]:
+    """Dotted-path descriptions of where two JSON values first disagree.
+
+    Bounded to a handful of entries: this is for a human reading a failed
+    `gpa export --check`, not an exhaustive report.
+    """
+    if _json_values_close(expected, actual):
+        return []
+    if (
+        isinstance(expected, dict)
+        and isinstance(actual, dict)
+        and expected.keys() == actual.keys()
+    ):
+        out: list[str] = []
+        for key in expected:
+            out.extend(_json_diff(expected[key], actual[key], f"{path}.{key}"))
+            if len(out) >= 5:
+                break
+        return out[:5]
+    if (
+        isinstance(expected, list)
+        and isinstance(actual, list)
+        and len(expected) == len(actual)
+    ):
+        out = []
+        for i, (e, a) in enumerate(zip(expected, actual, strict=True)):
+            out.extend(_json_diff(e, a, f"{path}[{i}]"))
+            if len(out) >= 5:
+                break
+        return out[:5]
+    return [f"{path}: expected {expected!r}, got {actual!r}"]
 
 
 def _json_values_close(expected: object, actual: object) -> bool:
