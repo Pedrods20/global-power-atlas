@@ -92,29 +92,92 @@ rebuild" section. Summary:
   `data_quality.parquet` and gated with a new `gpa audit` CLI command wired
   into both `ci.yml` (after `gpa validate`) and `ingest.yml` (before commit,
   so a structural problem blocks persistence rather than only staleness).
-  Not yet done: `data_quality.parquet` is exported but no site page reads it,
-  so a reader has no visible view of per-fuel coverage — only CI/ingest see
-  it. A methodology-page or dedicated table would close that last piece, but
-  it is presentation, not correctness.
-- [ ] **Version experiment inputs and separate future prediction rows.** The
-  cutoff date does not freeze revised history, and fitted models currently
-  require target prices to select prediction rows. `src/gpa/forecast/snapshot.py`
-  (new, 2026-09-13) provides content-addressed, checksum-verified experiment
-  snapshots (`save()`/`read()`) but nothing yet calls `save()` from the backtest
-  CLI path or wires `read()` into export, so no snapshot has actually been
-  taken yet. Retain a snapshot and implement issuance without target labels
-  before prospective evaluation.
-- [ ] **Open question from the rebuild's own audit, not a prior review
-  finding:** `scripts/audit_external.py`'s solar-generation "clock" check
-  (peak output should sit near local solar noon, an interval-labelling check
-  that needs no second publisher) reads Spain's generation timestamps as
-  marginally closer to interval-*end* than interval-*start* — about 7 minutes
-  at quarter-hour resolution, against a heuristic coarse enough that this may
-  be noise rather than a real defect. DE-LU, FR and BR-SIN all read cleanly as
-  interval-start. Worth another look with a tighter method (e.g. restricting
-  to the days nearest the equinox, or a per-day rather than per-month
-  centroid) before either dismissing it or treating ES generation timestamps
-  as suspect.
+  Done 2026-09-13: `site/methodology.md`'s new "Structural coverage" section
+  renders `data_quality.parquet` as a table sorted worst-coverage-first, with
+  a fix along the way — the paragraph above it used a backtick-quoted
+  `${...}` expression, which Markdown renders as a literal code span rather
+  than evaluating; Observable Framework expects `${...}` directly in prose.
+  It had been silently broken since it was written, undetected because it
+  produced text, not a runtime error, and the browser smoke check only
+  catches the latter. Verified against both the local preview and the
+  hosted build.
+- [ ] **Version experiment inputs and separate future prediction rows.**
+  Half done, deliberately not the other half without asking first.
+
+  **Done 2026-09-13:** `gpa backtest --save-snapshot` now calls
+  `forecast.snapshot.save()`, freezing the run's inputs, predictions, scores
+  and source under a content-addressed `data/experiments/<hash>/`, checksum
+  every artifact, and refuses to silently overwrite an existing experiment.
+  `export.py` already preferred a saved snapshot over a live recompute when
+  one exists (`snapshot.read()`, wired earlier); it just had nothing to read.
+  `snapshot.py` went from 25% to 100% test coverage
+  (`tests/test_forecast_snapshot.py`): round-trip, a tampered artifact
+  rejected by its checksum, a tampered fingerprint rejected separately, and a
+  malformed pointer file rejected rather than followed.
+
+  **Deliberately not done yet: no snapshot has actually been saved into the
+  repository.** Doing so is not just plumbing — the moment
+  `data/experiments/.../current.json` exists and is committed, `gpa export`
+  (called by every scheduled `Ingest` run) switches from recomputing the
+  forecast tables against the latest data to serving that one frozen
+  experiment, indefinitely, until someone runs `--save-snapshot` again. That
+  is exactly what a prospective evaluation needs, but it silently stops the
+  forecast page from reflecting new data on the daily job, which is a bigger
+  behavioural change than "wire the CLI flag" and needs the user's go-ahead
+  first, the same way the scope reduction did.
+
+  **Still fully open regardless:** the panel only ever builds rows that
+  already have a target price (`Panel.frame` is documented as "one row per
+  market-local hour that has a target price" — see `load_panel` in
+  `forecast/panel.py`), so there is still no way to construct a genuine
+  future prediction row before its price is known. A real prospective
+  evaluation needs that issuance path, plus a later reconciliation step once
+  the target becomes known, neither of which exists. This is materially more
+  work than the snapshot plumbing above.
+- [ ] **Confirmed 2026-09-13: ES generation timestamps are interval-end,
+  opposite to DE-LU/FR/BR-SIN, and nothing corrects for it.** The original
+  crude solar-clock check (broad "near equinox" months, no equation-of-time
+  correction) only found a small, dismissable-looking margin. Tightened
+  twice — first by correcting each observation's expected solar noon for the
+  equation of time (a ±16-minute-per-year wobble the crude check ignored
+  entirely), then by narrowing to ±10 days of the actual equinoxes — the
+  signal went from "maybe noise" to unambiguous:
+
+  | Zone | Corrected offset from expected solar noon | Half the interval | Reading |
+  |---|---|---|---|
+  | DE-LU | −9.6 min | 7.5 min | interval-start |
+  | FR | −9.5 min | 7.5 min | interval-start |
+  | BR-SIN | −30.1 min | 30 min | interval-start |
+  | ES | **+7.3 min** | 7.5 min | **interval-end** |
+
+  ES sits within 0.2 minutes of the theoretical exact interval-end value
+  (n=8,206 solar observations in the tight window), while the other three
+  cleanly read interval-start with 2-3 minutes of residual noise each
+  (plausibly asymmetric morning/afternoon solar output, e.g. from cloud
+  patterns, not a labelling artefact). The equation-of-time approximation
+  used was checked against known reference dates (Feb 11, Mar 21, Nov 3,
+  ...) to within about a minute before trusting it.
+
+  This means Spain's generation timestamps, and only Spain's, appear to be
+  labelled by the underlying provider (Red Eléctrica via Energy-Charts)
+  one interval later than Germany's and France's, even though the same
+  adapter and the same "unix_seconds" field handling is used for all three
+  and applies no per-country shift. ES **price** is independently confirmed
+  correct (zero mismatches against OMIE, which publishes unambiguous
+  period-of-delivery data), so this is isolated to generation — but that
+  still means every ES metric that joins price against generation
+  (`capture_rate` for ES solar/wind, and by extension the supply page's
+  capture-rate chart) is combining two series offset by up to one interval
+  for that one zone. ES load was not checked (no independent reference
+  and no natural periodicity to test against, unlike solar).
+
+  **Not yet fixed, deliberately** — this needs the user's sign-off before
+  touching the adapter and re-running the rebuild-and-audit cycle again,
+  the same way the original scope decision did. If confirmed further and
+  accepted, the fix is a per-country (or per-provider-quirk) timestamp
+  correction in `energy_charts.py` for ES generation specifically, followed
+  by another `rebuild_verified.py` + `audit_external.py` pass limited to ES
+  generation, then re-promoting just that data and re-exporting.
 
 ### Two bugs the first deploy attempt found
 
@@ -417,11 +480,11 @@ anything, rather than being assumed to.
   the two export-check bugs the first deploy attempt found — see above), CI
   run `34785003344` passed both jobs and its called `Deploy` workflow built
   and published successfully. The live site now serves the four-zone,
-  independently-audited build, including forecasting. Not yet done: a
-  post-deploy desktop/mobile browser smoke against the *hosted* URL (only the
-  local preview was smoke-tested pre-push) — worth a quick pass to confirm
-  the production build behaves the same as the local one before treating this
-  as fully closed.
+  independently-audited build, including forecasting. Confirmed 2026-09-13:
+  `GPA_TEST_URL=https://pedrods20.github.io/global-power-atlas/ node
+  scripts/browser-smoke.mjs` passed all 14 route/viewport combinations
+  against the hosted build itself, not just the local preview — this front
+  is fully closed.
 - [ ] **Record a prospective evaluation.** Issue and retain forecasts before
   prices become known, preserve input vintages and evaluate the separate period.
   The historical benchmark is capped at 2026-09-12; extending that cap is not

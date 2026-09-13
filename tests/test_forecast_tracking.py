@@ -11,7 +11,7 @@ from polars.testing import assert_frame_equal
 from typer.testing import CliRunner
 
 from gpa.cli import app
-from gpa.forecast import backtest, tracking
+from gpa.forecast import backtest, snapshot, tracking
 from tests.test_forecast import ZONE, small_panel
 
 
@@ -96,3 +96,26 @@ def test_cli_rejects_bad_arguments_before_computation(args, monkeypatch):
 
     monkeypatch.setattr(backtest, "run", unexpected)
     assert CliRunner().invoke(app, ["backtest", *args]).exit_code != 0
+
+
+def test_cli_save_snapshot_flag_freezes_the_run(tmp_path, monkeypatch, result):
+    monkeypatch.setattr(backtest, "run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(snapshot, "ROOT", tmp_path)
+    monkeypatch.setattr(snapshot, "CURRENT", tmp_path / "current.json")
+    response = CliRunner().invoke(app, ["backtest", "--save-snapshot", "--scope", "all"])
+    assert response.exit_code == 0, response.exception
+    assert "Snapshot saved" in response.stdout
+    metadata, _ = snapshot.read()
+    assert metadata["input_sha256"] == result.input_sha256
+
+
+def test_cli_save_snapshot_warns_rather_than_fails_when_already_saved(
+    tmp_path, monkeypatch, result
+):
+    monkeypatch.setattr(backtest, "run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(snapshot, "ROOT", tmp_path)
+    monkeypatch.setattr(snapshot, "CURRENT", tmp_path / "current.json")
+    snapshot.save(result)
+    response = CliRunner().invoke(app, ["backtest", "--save-snapshot", "--scope", "all"])
+    assert response.exit_code == 0, response.exception
+    assert "already exists" in response.stdout

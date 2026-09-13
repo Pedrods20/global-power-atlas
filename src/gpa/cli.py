@@ -383,6 +383,13 @@ def backtest(
     tracking_dir: Annotated[
         Path, typer.Option(help="Local MLflow database and artifacts.")
     ] = DEFAULT_TRACKING_DIR,
+    save_snapshot: Annotated[
+        bool,
+        typer.Option(
+            "--save-snapshot",
+            help="Freeze this run as a content-addressed experiment under data/experiments/.",
+        ),
+    ] = False,
     verbose: VerboseOption = False,
 ) -> None:
     """Walk-forward backtest of the day-ahead price forecast.
@@ -413,6 +420,16 @@ def backtest(
 
         run_id = track_result(result, tracking_dir)
         typer.echo(f"MLflow run: {run_id} ({tracking_dir.resolve()})")
+
+    if save_snapshot:
+        from gpa.forecast import snapshot
+
+        try:
+            path = snapshot.save(result)
+        except FileExistsError as exc:
+            typer.secho(str(exc), fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"Snapshot saved: {path}", fg=typer.colors.GREEN)
 
     typer.secho(f"{result.zone.code} day-ahead hourly price", bold=True)
     typer.echo(

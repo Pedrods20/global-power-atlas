@@ -45,7 +45,51 @@ const freshness = zones.zones.flatMap((z) =>
 Inputs.table(freshness, { rows: 30, layout: "auto" })
 ```
 
-Latest observation across datasets: `${zones.data_as_of ? zones.data_as_of.slice(0, 16).replace("T", " ") + " UTC" : "pending"}`. Each dataset's own coverage is listed above; ages are calculated when this page loads.
+Latest observation across datasets: ${zones.data_as_of ? zones.data_as_of.slice(0, 16).replace("T", " ") + " UTC" : "pending"}. Each dataset's own coverage is listed above; ages are calculated when this page loads.
+
+### Structural coverage
+
+Freshness above answers "how recent is the latest observation." That is a
+different question from "how much of the declared history is actually
+present, per fuel." A feed can be perfectly fresh and still carry an internal
+gap, a fuel category the provider only started reporting partway through, or
+(rarer, and more serious) two observations that overlap in time. The table
+below is computed by [`gpa.quality`](https://github.com/Pedrods20/global-power-atlas/blob/main/src/gpa/quality.py)
+over each fuel's own first-to-last observed span, so a technology added last
+year is not penalised for the months before it existed. It is enforced in CI
+and on every scheduled ingest by `gpa audit`, which fails the run on any
+overlapping or otherwise invalid observation; coverage below 100% is reported
+here rather than failing anything, since a gap is a fact about the provider,
+not a broken pipeline.
+
+```js
+const dataQuality = await FileAttachment("data/data_quality.parquet").parquet();
+```
+
+```js
+const coverageRows = [...dataQuality]
+  .map((d) => ({
+    Zone: d.zone,
+    Dataset: d.dataset,
+    Fuel: d.fuel,
+    Rows: Number(d.rows),
+    "Coverage %": d.coverage_pct == null ? null : Math.round(d.coverage_pct * 100) / 100,
+    "Gap (h)": d.gap_hours == null ? null : Math.round(d.gap_hours * 10) / 10,
+    Invalid: Number(d.invalid),
+  }))
+  .sort((a, b) => (a["Coverage %"] ?? -1) - (b["Coverage %"] ?? -1) || b.Invalid - a.Invalid);
+```
+
+```js
+Inputs.table(coverageRows, { rows: 48, layout: "auto" })
+```
+
+Worst rows first. 100% is the expected value for almost every row: a gap
+below it is not automatically a defect, since some come from a fuel a
+provider added partway through the window (its own span still shows 100%) or
+from a real short outage on the provider's side. `Invalid` above zero would
+mean an overlapping timestamp or a value outside its physical range, and
+would already have failed CI before reaching this page.
 
 ## Time
 
