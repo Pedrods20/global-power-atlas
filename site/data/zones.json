@@ -1,5 +1,5 @@
 {
-  "data_as_of": "2026-09-12T23:30:00+00:00",
+  "data_as_of": "2026-09-13T00:00:00+00:00",
   "zones": [
     {
       "code": "ERCOT",
@@ -177,8 +177,15 @@
       "currency": "USD",
       "peak_block": "NERC on-peak (HE0700-HE2200, Mon-Sat, ex-NERC holidays)",
       "peak_note": null,
-      "notes": "Balancing-authority load and generation from EIA-930. No price series is included.",
+      "notes": "Balancing-authority load and generation from EIA-930, and day-ahead price from the CAISO OASIS SP15 trading hub. CAISO is a nodal market, so this price is one hub rather than a single system price, and load covers the whole balancing authority rather than the hub's footprint. Compare its shape against other markets, not its level against a bidding-zone price.",
       "datasets": {
+        "price": {
+          "status": "ok",
+          "source": "caiso",
+          "rows": 17520,
+          "first": "2024-09-13 01:00:00+00:00",
+          "last": "2026-09-13 00:00:00+00:00"
+        },
         "load": {
           "status": "ok",
           "source": "eia",

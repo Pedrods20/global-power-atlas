@@ -37,13 +37,13 @@ The point of the project is not that it draws charts. It is that the numbers und
 | `BR-SIN` | Brazil National Interconnected System | ONS | ONS open data | no |
 | `AU-NSW1` | Australia NEM, New South Wales | AEMO | AEMO / OpenElectricity | no |
 | `PJM` | Eastern US | PJM Interconnection | EIA v2 | yes, free |
-| `CAISO` | California | California ISO | EIA v2 | yes, free |
+| `CAISO` | California | California ISO | EIA v2 + CAISO OASIS (SP15 hub) | yes, free |
 | `FR` | France | RTE | Energy-Charts | no |
 | `ES` | Spain | Red Eléctrica | Energy-Charts | no |
 | `JP-TOKYO` | Japan, Tokyo area | JEPX | JEPX | no |
 | `BR-SECO`, `BR-NE` | Brazilian PLD submarkets | CCEE | CCEE open data | local official CSV fallback |
 
-Coverage is dataset-specific. The three US balancing authorities carry hourly demand and generation from EIA, while US wholesale price is a separate integration. Brazilian PLD remains separated by CCEE submarket and is never presented as one national price.
+Coverage is dataset-specific. The three US balancing authorities carry hourly demand and generation from EIA, which publishes no price at all. California is the one large US market whose price is reachable without a credential, through the public CAISO OASIS interface; ERCOT returns HTTP 403 to automated clients and PJM requires a registered subscription key, so both remain demand and generation only. Brazilian PLD remains separated by CCEE submarket and is never presented as one national price.
 
 **Providers do not publish at the same speed.** Most zones here sit within a few hours of real time. Brazilian generation is the exception: the ONS hourly balance trails real time by about two days, and no faster ONS source for generation by technology exists. Brazilian generation, fuel mix and renewable share therefore end about two days before every other market on the site. Brazilian load does not share that lag, because it comes from the ONS verified-load API instead and stays within about an hour. The [methodology page](site/methodology.md) sets out both, along with two ways that API fails silently if read carelessly.
 
@@ -58,6 +58,32 @@ Coverage is dataset-specific. The three US balancing authorities carry hourly de
 The site reports observed data, not causal attribution. A negative-price episode does not by itself prove curtailment, and a falling block spread does not isolate the effect of solar. These hypotheses need additional dispatch, outage and constraint data.
 
 The initial store covers approximately September 2024 to September 2026. The first and last calendar years are partial; provider gaps and different settlement resolutions also matter. Compare matched date ranges before making annual trend claims. Carbon intensity is an estimate from technology factors, withheld below 95% known-factor coverage; Brazil's unresolved thermal category currently prevents publication.
+
+## What the data shows
+
+Computed by this repository from the sources above, reproducible with the
+commands further down.
+
+**California now shows the most advanced solar cannibalisation in the set.**
+The NERC on-peak block runs hour-ending 0700 to 2200, so it contains the entire
+solar midday. At the SP15 day-ahead hub it has cleared *below* off-peak for
+three consecutive years.
+
+| Year | On-peak | Off-peak | Spread |
+|---|---|---|---|
+| 2024 | 33.70 | 38.47 | −4.77 |
+| 2025 | 28.50 | 36.97 | −8.47 |
+| 2026 | 22.34 | 30.28 | −7.95 |
+
+USD/MWh. Over the same two years 12.04 percent of Californian day-ahead hours
+cleared below zero, with a longest unbroken run of 11 hours. Solar captured
+0.603 of the time-weighted average price against 0.971 for wind, which is the
+mechanism in a single number: solar produces when its own output has made the
+market cheap, and wind largely does not.
+
+Germany and New South Wales show the same pattern at earlier stages, and the
+[prices page](https://pedrods20.github.io/global-power-atlas/prices) puts the
+three side by side.
 
 ## Why the numbers are trustworthy
 

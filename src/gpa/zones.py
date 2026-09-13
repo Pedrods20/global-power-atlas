@@ -293,6 +293,11 @@ ZONES: tuple[Zone, ...] = (
 
 
 # Additional zones reuse adapters; dataset declarations remain explicit.
+#
+# PJM carries no price. EIA-930 publishes balancing-authority load and
+# generation but no price at all, and PJM's own Data Miner requires a
+# registered subscription key. ERCOT is in the same position for a different
+# reason: it returns 403 to automated clients on every host it publishes on.
 ZONES += tuple(
     Zone(
         code=code,
@@ -309,8 +314,37 @@ ZONES += tuple(
     )
     for code, name, timezone, respondent in (
         ("PJM", "PJM Interconnection", "America/New_York", "PJM"),
-        ("CAISO", "California ISO", "America/Los_Angeles", "CISO"),
     )
+)
+
+# California is the one large US market whose price is reachable without a
+# credential, through the CAISO OASIS public interface.
+ZONES += (
+    Zone(
+        code="CAISO",
+        name="California ISO",
+        country="US",
+        region=Region.NORTH_AMERICA,
+        operator="California ISO",
+        timezone="America/Los_Angeles",
+        currency="USD",
+        peak=NERC_ON_PEAK,
+        sources={"load": "eia", "generation": "eia", "price": "caiso"},
+        source_keys={
+            "eia_respondent": "CISO",
+            # SP15 is the Southern California trading hub and the reference most
+            # Californian forward trades settle against.
+            "caiso_node": "TH_SP15_GEN-APND",
+            "caiso_market": "DAM",
+        },
+        notes=(
+            "Balancing-authority load and generation from EIA-930, and day-ahead price "
+            "from the CAISO OASIS SP15 trading hub. CAISO is a nodal market, so this "
+            "price is one hub rather than a single system price, and load covers the "
+            "whole balancing authority rather than the hub's footprint. Compare its "
+            "shape against other markets, not its level against a bidding-zone price."
+        ),
+    ),
 )
 ZONES += tuple(
     Zone(

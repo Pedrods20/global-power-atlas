@@ -14,6 +14,7 @@ from gpa.sources.base import (
     SourceError,
     UpstreamError,
 )
+from gpa.sources.caiso import CaisoSource
 from gpa.sources.ccee import CceeSource
 from gpa.sources.eia import EiaSource
 from gpa.sources.energy_charts import EnergyChartsSource
@@ -24,6 +25,7 @@ from gpa.sources.openelectricity import OpenElectricitySource
 __all__ = [
     "REGISTRY",
     "AemoSource",
+    "CaisoSource",
     "EiaSource",
     "EnergyChartsSource",
     "MissingCredential",
@@ -39,6 +41,7 @@ REGISTRY: dict[str, Source] = {
     source.name: source
     for source in (
         EiaSource(),
+        CaisoSource(),
         EnergyChartsSource(),
         OnsSource(),
         AemoSource(),

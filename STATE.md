@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-Last updated: 2026-09-13 (audit) · Repository: `global-power-atlas` · Replaces:
+Last updated: 2026-09-13 (P2, CAISO price) · Repository: `global-power-atlas` · Replaces:
 `power-pulse-global`
 
 ## Current result
@@ -10,8 +10,8 @@ stores validated interval data as Parquet, computes market-aware aggregates,
 and publishes them without a backend or browser-visible credentials.
 
 - 11 registered zones across five continents.
-- 3,584,484 interval/fuel observations in 591 validated monthly partitions.
-- Price: DE-LU, AU-NSW1, FR, ES, JP-TOKYO and two CCEE submarkets
+- 3,602,004 interval/fuel observations in 616 validated monthly partitions.
+- Price: DE-LU, AU-NSW1, FR, ES, JP-TOKYO, CAISO and two CCEE submarkets
   (Southeast/Central-West and Northeast). South and North were dropped by
   decision on 2026-09-12.
 - Load and generation: DE-LU, AU-NSW1, BR-SIN, ERCOT, PJM, CAISO, FR and ES,
@@ -137,6 +137,39 @@ and the retry and throttle behaviour they share is now tested once in
 `sources/base.py`. The reasoning is recorded in `TODO.md` so it is not mistaken
 for an oversight.
 
+## P2 progress, 2026-09-13
+
+California now has a price. CAISO OASIS is the only one of the three large US
+markets reachable without a credential, and it carries 17,520 contiguous hourly
+day-ahead observations at the SP15 trading hub over two years.
+
+ERCOT and PJM remain demand and generation only, and the reason is access
+rather than effort. Every ERCOT host answers 403 to automated clients and
+`mis.ercot.com` fails the TLS handshake; PJM needs a free Data Miner
+subscription key. Both are recorded in `TODO.md` with the legitimate route to
+unblock them. No attempt was made to defeat ERCOT's bot protection.
+
+Three OASIS behaviours are handled, each with a named test, because each fails
+without raising:
+
+- An LMP is five components, and only the total is a price. The others are
+  energy, congestion, loss, and a greenhouse-gas term that exists because
+  California prices carbon into dispatch.
+- An empty window returns XML inside a 200 response, carrying error code 1000.
+  A CSV parser reads it as a table whose only column is the XML declaration,
+  which is how it first surfaced.
+- Rate limiting also returns 200, carrying HTML rather than a 429, so the
+  shared retry layer cannot detect it. Requests are paced at six seconds.
+
+The window cap is 30 days rather than 31: OASIS counts calendar days touched,
+so a 31-day window starting mid-afternoon spans 32 and is rejected with error
+1004.
+
+What the series shows: the NERC on-peak block has cleared below off-peak at
+SP15 for three consecutive years, 12.04 percent of day-ahead hours are
+negative, and solar captures 0.603 of the time-weighted average price against
+0.971 for wind.
+
 ## Architecture
 
 ```
@@ -239,9 +272,9 @@ npm run build
 >
 > Set up with `python -m venv .venv` and
 > `..\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Baseline to
-> expect before you start: 176 tests passing, ruff clean, `mypy` clean,
-> coverage at 76 percent against a 75 percent gate, `gpa validate`
-> reporting 591 valid partitions, and `gpa export --check` clean.
+> expect before you start: 193 tests passing, ruff clean, `mypy` clean,
+> coverage at 78 percent against a 75 percent gate, `gpa validate`
+> reporting 616 valid partitions, and `gpa export --check` clean.
 >
 > Sprint 1 is complete. **Agree the next scope with the user before starting
 > anything.** The roadmap in `TODO.md` is a menu, not a queue: P2 covers the

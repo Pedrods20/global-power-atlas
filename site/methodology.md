@@ -23,6 +23,7 @@ Every series comes from the system or market operator, or from a named redistrib
 | AU-NSW1 | price, load | AEMO aggregated price and demand archive | none | AEMO terms of use |
 | AU-NSW1 | generation | OpenElectricity, The Superpower Institute | none | CC BY 4.0 |
 | PJM, CAISO | load, generation | US Energy Information Administration, API v2 | free key | US Government public domain |
+| CAISO | day-ahead price | CAISO OASIS, SP15 trading hub | none | CAISO OASIS terms |
 | FR, ES | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
 | JP-TOKYO | day-ahead price | Japan Electric Power Exchange | none | provider terms |
 | BR-SECO, BR-NE | hourly PLD | CCEE open data | none; official local CSV fallback | open-data terms |
@@ -189,9 +190,30 @@ A value of exactly zero from that API means an interval has not been measured
 yet, not that an area drew no power, so those rows are dropped rather than
 stored as zero demand.
 
+## Reading the Californian price
+
+Three properties of CAISO OASIS shape what is stored, and each fails quietly if
+mishandled.
+
+**An LMP is five numbers, and only one of them is the price.** Every interval
+carries a total alongside its energy, congestion and loss components, plus a
+greenhouse-gas term that exists because California prices carbon into dispatch
+through cap-and-trade. Only the total is stored. Taking every row would write
+congestion and loss into the price column.
+
+**An empty result arrives as XML inside a successful response.** A window with
+no data still returns HTTP 200 and a valid archive, but the entry is an
+OASIS report carrying error code 1000. Parsing that as CSV yields a table whose
+only column is the XML declaration.
+
+**Rate limiting also arrives as HTTP 200.** Exceeding the acceptable-use policy
+returns an HTML paragraph asking for a five-second pause, not a 429, so a
+generic retry layer cannot see it. Requests here are paced at six seconds.
+
 ## Known limitations
 
-- **ERCOT has no price series.** EIA supplies balancing-authority demand and generation; prices require a separate market-operator feed.
+- **ERCOT and PJM have no price series.** EIA supplies balancing-authority demand and generation but publishes no price at all. ERCOT returns HTTP 403 to automated clients on every host it publishes on, and PJM's Data Miner requires a registered subscription key. California is the exception: CAISO OASIS is open, so it is the one large US market with a price here.
+- **The Californian price is one hub, not a system price.** CAISO is nodal. The series stored here is the SP15 day-ahead trading hub, which is the reference most Californian forward trades settle against, while the load and generation alongside it cover the whole balancing authority. Compare its shape against other markets rather than its level against a European bidding-zone price.
 - **US solar excludes rooftop.** EIA's hourly fuel-type series covers utility-scale plant only, so a US solar share is not directly comparable against a market whose operator reports behind-the-meter output.
 - **Brazilian thermal is unresolved**, as described above.
 - **Zone boundaries differ.** US load and generation cover balancing authorities, not price hubs or settlement nodes. Germany is the DE-LU bidding zone, Australia is New South Wales, Japan is the Tokyo price area, and CCEE prices are two separate submarkets, Southeast/Central-West and Northeast, which are the two that dominate Brazilian price formation. South and North are published by CCEE but are deliberately not registered here. Nothing here measures nodal congestion.

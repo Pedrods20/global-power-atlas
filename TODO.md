@@ -121,21 +121,40 @@ is retrieval after it.
 
 ## P2 - Analytical asymmetries
 
-The three largest US markets carry no price, which removes the metrics that
-matter most in exactly the systems where gas sets the margin.
+California is done. ERCOT and PJM are blocked on access, not on code.
 
-- [ ] **Add a wholesale price source for ERCOT, PJM and CAISO.** EIA-930
-  publishes balancing-authority load and generation but no hub or nodal price,
-  so these three zones have no price duration curve, no block spread, no
-  capture rate and no spark spread. Evaluate GridStatus (free key), each ISO's
-  own public settlement-point or day-ahead LMP reports, or CAISO OASIS.
-  **Done when** at least ERCOT hub price is stored and its duration curve and
-  block spread render alongside DE-LU.
+- [x] **Californian day-ahead price via CAISO OASIS.** 17,520 contiguous hourly
+  observations over two years at the SP15 trading hub, no gaps. CAISO is the
+  one large US market whose price is reachable without a credential.
+
+  Three OASIS behaviours are now handled and each has a named test, because all
+  three fail quietly: an LMP is five components and only the total is a price;
+  an empty window returns XML with error code 1000 inside a 200 response, which
+  a CSV parser reads as a table whose only column is the XML declaration; and
+  rate limiting also returns 200, carrying HTML rather than a 429, so the
+  shared retry layer cannot see it. The window cap is 30 rather than 31,
+  because OASIS counts calendar days touched, so a 31-day window starting
+  mid-afternoon spans 32 and is rejected with error 1004.
+
+  What it shows: the NERC on-peak block has cleared below off-peak at SP15 for
+  three consecutive years, 12.04 percent of day-ahead hours are negative, and
+  solar captures 0.603 of the average price against 0.971 for wind.
+
+- [ ] **ERCOT price.** Blocked, not unimplemented. Every ERCOT host returns
+  HTTP 403 to automated clients: `api.ercot.com`, `www.ercot.com` and
+  `data.ercot.com` all sit behind the same bot protection, and `mis.ercot.com`
+  fails the TLS handshake. The legitimate route is to register for an ERCOT API
+  account and use the issued credential; do not attempt to defeat the block.
+  Once a credential exists this is an adapter following `caiso.py`.
+
+- [ ] **PJM price.** Needs a free Data Miner 2 subscription key, registered at
+  `dataminer2.pjm.com`. `api.pjm.com` answers 401 without one. Same shape of
+  work as ERCOT once the key exists.
 
 - [ ] **Extend thermal spreads beyond Europe.** `europe_spreads.parquet` covers
-  24 months for Germany only. Once US price exists, add spark and dark spreads
-  for ERCOT and PJM against a Henry Hub gas reference, keeping the efficiency
-  and emissions assumptions as visible as the European ones already are.
+  24 months for Germany only. CAISO price now exists, so a Californian spark
+  spread is possible against a gas reference, though Henry Hub is a poor basis
+  for California and SoCal Border would be the honest choice.
 
 - [ ] **Add load and generation for JP-TOKYO.** The zone holds price only, so
   Asia contributes nothing to the demand, supply or carbon pages. OCCTO
