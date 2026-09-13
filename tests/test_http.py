@@ -194,9 +194,9 @@ def test_a_blank_credential_counts_as_missing(monkeypatch: pytest.MonkeyPatch) -
 def test_a_known_credential_includes_its_registration_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("EIA_API_KEY", raising=False)
-    with pytest.raises(MissingCredential, match=r"eia\.gov"):
-        require_env("EIA_API_KEY", source="EIA")
+    monkeypatch.delenv("ENTSOE_API_KEY", raising=False)
+    with pytest.raises(MissingCredential, match=r"transparency\.entsoe\.eu"):
+        require_env("ENTSOE_API_KEY", source="ENTSO-E")
 
 
 # --- month_range ------------------------------------------------------------

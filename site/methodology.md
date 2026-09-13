@@ -16,22 +16,15 @@ Every series comes from the system or market operator, or from a named redistrib
 
 | Zone | Dataset | Provider | Credential | Licence |
 |---|---|---|---|---|
-| ERCOT | load, generation | US Energy Information Administration, API v2 | free key | US Government public domain |
 | DE-LU | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
+| FR, ES | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
 | BR-SIN | generation | ONS open data, hourly subsystem balance | none | CC BY 4.0 |
 | BR-SIN | load | ONS verified-load API, half-hourly | none | CC BY 4.0 |
-| AU-NSW1 | price, load | AEMO aggregated price and demand archive | none | AEMO terms of use |
-| AU-NSW1 | generation | OpenElectricity, The Superpower Institute | none | CC BY 4.0 |
-| PJM, CAISO | load, generation | US Energy Information Administration, API v2 | free key | US Government public domain |
-| CAISO | day-ahead price | CAISO OASIS, SP15 trading hub | none | CAISO OASIS terms |
-| FR, ES | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
-| JP-TOKYO | day-ahead price | Japan Electric Power Exchange | none | provider terms |
-| BR-SECO, BR-NE | hourly PLD | CCEE open data | none; official local CSV fallback | open-data terms |
 | European spread references | gas and coal: World Bank; EUA: EEX; FX: ECB | public downloads | none | provider-specific |
 
-Australia deliberately uses two providers. Price and demand come from AEMO's own archive rather than a redistributor; only the fuel split needs a third party, because that archive does not carry one.
+Germany, France and Spain are served through Energy-Charts rather than ENTSO-E directly. The underlying figures are the same ones ENTSO-E publishes, and the switch to a direct ENTSO-E Transparency connection is a change of adapter, not of method.
 
-Germany is served through Energy-Charts rather than ENTSO-E directly. The underlying figures are the same ones ENTSO-E publishes, and the switch to a direct ENTSO-E Transparency connection is a change of adapter, not of method.
+Every registered zone comes from a source that needs no credential and no manual import. Markets whose only price source required a subscription key, returned HTTP 403 to automated clients, or could only be imported by hand from a CSV were removed from the registry rather than kept half-covered; see "Removed for lack of independent verification" below.
 
 ```js
 const freshness = zones.zones.flatMap((z) =>
@@ -62,8 +55,6 @@ This is where most power market analysis goes wrong, so it is worth being explic
 
 **A local day has 23, 24 or 25 hours.** Daily means divide by the hours that actually existed. Daily energy is the sum of power times each interval's real duration, never a mean multiplied by 24.
 
-**Market time is not always civil time.** AEMO settles every region of the National Electricity Market on Australian Eastern Standard Time all year and never applies daylight saving, even though New South Wales civil clocks do. The Australian zone therefore carries two timezones: `Australia/Brisbane` for the market and `Australia/Sydney` for civil life. Reading NEM data on the Sydney clock invents a 23-hour trading day the market does not have.
-
 Brazil abolished daylight saving in 2019, so its local time has been a constant UTC-3 since then. Files covering 2018 and earlier do contain the ambiguous and non-existent hours of a transition, and those are resolved explicitly rather than left to a library default.
 
 ## Blocks
@@ -84,7 +75,7 @@ const blocks = zones.zones.map((z) => ({
 Inputs.table(blocks, { layout: "auto" })
 ```
 
-Two details catch people out. NERC on-peak **includes Saturday**, so a five-weekday assumption is wrong for North America. And NERC does **not** move a Saturday holiday to the preceding Friday the way the US federal calendar does, so the two calendars disagree in some years.
+European peakload excludes Saturday and public holidays are not adjusted for; the Brazilian ponta window is not a traded product at all, which is why it carries the caveat below rather than being read as a market clearing block.
 
 ```js
 const caveats = zones.zones.filter((z) => z.peak_note);
@@ -104,9 +95,9 @@ ${caveats.map((z) => html`<p><strong>${z.code}.</strong> ${z.peak_note}</p>`)}
 | Load | average MW over the interval beginning at the timestamp | energy = MW × minutes ÷ 60 |
 | Generation | average MW over the interval, per fuel | energy = MW × minutes ÷ 60 |
 
-The settlement interval is measured from the spacing of the timestamps, never assumed. This matters because providers change it without notice: Energy-Charts moved German data from hourly to quarter-hourly, and the NEM moved from 30-minute to 5-minute settlement in October 2021. A backfill spanning that change shifts each era by its own interval.
+The settlement interval is measured from the spacing of the timestamps, never assumed. This matters because providers change it without notice: Energy-Charts moved the European day-ahead auction from hourly to quarter-hourly products on 2025-10-01, a switch that is now handled per request window rather than inferred once across a whole backfill (see "Rebuilding the record" below). A backfill spanning that change shifts each era by its own interval.
 
-AEMO stamps its settlement rows **interval-ending**, so a row marked 00:05 describes 00:00 to 00:05. This project stores interval-starting instants, so the resolution is subtracted from every AEMO timestamp. Omitting that shift moves the whole series forward by one interval and misaligns price against generation.
+All stored timestamps mark an interval's **start**. An independent check exists for this: solar generation should peak within a few minutes of local solar noon regardless of provider convention, and computing the generation-weighted centroid of each zone's solar output around the equinoxes (when the equation of time is smallest) confirms interval-start labelling for three of the four zones. Spain's centroid sits closer to the interval-end hypothesis by a small margin (about seven minutes at quarter-hour resolution); this is noted as an open question in `TODO.md` rather than asserted as a defect, since the check is a coarse heuristic and the margin is within its own noise.
 
 **No currency conversion is applied.** Converting a multi-year price series at a single spot rate, which is a common shortcut, folds exchange-rate drift into what is presented as a power-price signal. Converting at historical rates is defensible but strips the FX variance out of volatility without saying so. Both are avoided by keeping each market in its own currency and comparing only normalised quantities across markets.
 
@@ -190,25 +181,31 @@ A value of exactly zero from that API means an interval has not been measured
 yet, not that an area drew no power, so those rows are dropped rather than
 stored as zero demand.
 
-## Reading the Californian price
+## Rebuilding the record
 
-Three properties of CAISO OASIS shape what is stored, and each fails quietly if
-mishandled.
+Every partition in the store was rebuilt from scratch from cached provider
+responses after the resolution-transition defect above was found, rather than
+patched in place, so that a mixed-resolution window is re-fetched and
+re-labelled consistently end to end instead of only at the seam. Two
+independent checks then confirmed the rebuild rather than the adapter checking
+itself:
 
-**An LMP is five numbers, and only one of them is the price.** Every interval
-carries a total alongside its energy, congestion and loss components, plus a
-greenhouse-gas term that exists because California prices carbon into dispatch
-through cap-and-trade. Only the total is stored. Taking every row would write
-congestion and loss into the price column.
+- **Prices against a second publisher.** DE-LU and FR day-ahead prices are
+  compared against Bundesnetzagentur SMARD, which redistributes the same
+  auction result through a separate pipeline; ES against OMIE's own
+  `marginalpdbc` daily files. Both comparisons match to the cent over the full
+  two-year history, with zero mismatches.
+- **Brazilian load against a second ONS publication.** The verified-load API
+  the store uses is checked against the ONS hourly subsystem balance, which is
+  collected and republished independently. The two differ in level by about 2
+  percent, consistent with the two APIs using slightly different load
+  definitions rather than a timestamp or resolution error, and the median
+  absolute difference is smallest at zero offset, confirming the stored
+  timestamps are not shifted.
 
-**An empty result arrives as XML inside a successful response.** A window with
-no data still returns HTTP 200 and a valid archive, but the entry is an
-OASIS report carrying error code 1000. Parsing that as CSV yields a table whose
-only column is the XML declaration.
-
-**Rate limiting also arrives as HTTP 200.** Exceeding the acceptable-use policy
-returns an HTML paragraph asking for a five-second pause, not a 429, so a
-generic retry layer cannot see it. Requests here are paced at six seconds.
+Energy-Charts redistributes ENTSO-E data, so comparing it against itself would
+have proven nothing; both external references are collected independently of
+Energy-Charts.
 
 ## Freshness rules
 
@@ -220,28 +217,33 @@ genuinely different speeds and those differences are legitimate.
 |---|---|---|
 | Default | 36 hours | Most feeds land within twelve hours; this absorbs one missed run plus a provider's own delay. |
 | BR-SIN generation | 96 hours | The ONS hourly balance trails real time by about two days. |
-| ERCOT, PJM, CAISO generation | 48 hours | EIA-930 restates hourly generation and lands roughly a day behind. |
-| BR-SECO, BR-NE price | 30 days | CCEE blocks automated download, so PLD is refreshed by hand. |
 
 The scheduled run checks these after it commits, so a stale feed raises an
 alarm without discarding a day of good observations from every other market.
 A breach opens an issue on the repository rather than only turning a badge red.
 
-The two CCEE zones report but never fail the run. Nobody can refresh them from
-a cron job, and failing nightly for something the job cannot fix would train
-everyone to ignore the failure. Their age is shown on the front page instead,
-which is the honest way to handle a feed that drifts by design.
-
 ## Known limitations
 
-- **ERCOT and PJM have no price series.** EIA supplies balancing-authority demand and generation but publishes no price at all. ERCOT returns HTTP 403 to automated clients on every host it publishes on, and PJM's Data Miner requires a registered subscription key. California is the exception: CAISO OASIS is open, so it is the one large US market with a price here.
-- **The Californian price is one hub, not a system price.** CAISO is nodal. The series stored here is the SP15 day-ahead trading hub, which is the reference most Californian forward trades settle against, while the load and generation alongside it cover the whole balancing authority. Compare its shape against other markets rather than its level against a European bidding-zone price.
-- **US solar excludes rooftop.** EIA's hourly fuel-type series covers utility-scale plant only, so a US solar share is not directly comparable against a market whose operator reports behind-the-meter output.
+- **Only four zones are registered, deliberately.** Every market that needed a
+  credential (a US EIA key, a PJM Data Miner subscription), returned HTTP 403
+  to automated clients (ERCOT, CCEE), or depended on a hand-imported CSV was
+  removed rather than kept as a partially reproducible, partially trusted
+  entry. The four that remain are the ones this project can both collect and
+  independently verify without a human step; see "Rebuilding the record"
+  above. `TODO.md` records what was dropped and why.
 - **Brazilian thermal is unresolved**, as described above.
-- **Zone boundaries differ.** US load and generation cover balancing authorities, not price hubs or settlement nodes. Germany is the DE-LU bidding zone, Australia is New South Wales, Japan is the Tokyo price area, and CCEE prices are two separate submarkets, Southeast/Central-West and Northeast, which are the two that dominate Brazilian price formation. South and North are published by CCEE but are deliberately not registered here. Nothing here measures nodal congestion.
-- **CCEE automated access can return HTTP 403.** The committed series came from the official `pld_horario_2026` CSV and the same parser accepts future official files through `GPA_CCEE_IMPORT_DIR`.
-- **Fuel references carry basis risk.** World Bank Europe gas and Australian coal are broad monthly benchmarks; they are not a German plant's delivered or hedged fuel price. EEX primary-auction EUA prices can differ from secondary-market executions.
-- **Revisions.** Operators restate published figures for days afterwards. The store upserts on the natural key, so re-running a window converges on the restatement rather than duplicating it, but a figure read today may differ slightly from the same figure read last week.
+- **Zone boundaries differ.** Germany is the DE-LU bidding zone; France and
+  Spain are their national bidding zones; Brazil is the SIN, the whole
+  interconnected national system rather than a submarket. Nothing here
+  measures nodal congestion.
+- **Fuel references carry basis risk.** World Bank Europe gas and Australian
+  coal are broad monthly benchmarks; they are not a German plant's delivered
+  or hedged fuel price. EEX primary-auction EUA prices can differ from
+  secondary-market executions.
+- **Revisions.** Operators restate published figures for days afterwards. The
+  store upserts on the natural key, so re-running a window converges on the
+  restatement rather than duplicating it, but a figure read today may differ
+  slightly from the same figure read last week.
 
 ## Reproducing any number
 

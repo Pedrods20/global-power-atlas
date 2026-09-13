@@ -8,19 +8,18 @@ and tested in ``tests/test_calendar.py``:
    timezone. No aggregation is ever keyed on a UTC calendar day.
 2. A local day has 23, 24 or 25 hours. Daily means divide by the hours that
    actually existed, not by 24.
-3. On-peak is a market block defined over local hours, weekdays and holidays.
+3. On-peak is a market block defined over local hours and weekdays.
    It is never the daily maximum, and off-peak is never the daily minimum.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from gpa.zones import HolidayCalendar, Zone
+from gpa.zones import Zone
 
 __all__ = [
     "BLOCK_OFF_PEAK",
@@ -29,65 +28,10 @@ __all__ = [
     "attach_local_time",
     "hours_in_local_day",
     "is_on_peak",
-    "nerc_holidays",
 ]
 
 BLOCK_ON_PEAK = "on_peak"
 BLOCK_OFF_PEAK = "off_peak"
-
-
-# --- Holidays --------------------------------------------------------------
-
-
-def _nth_weekday(year: int, month: int, weekday: int, n: int) -> dt.date:
-    """The ``n``-th ``weekday`` of a month. ISO weekday, Monday=1."""
-    first = dt.date(year, month, 1)
-    offset = (weekday - first.isoweekday()) % 7
-    return first + dt.timedelta(days=offset + 7 * (n - 1))
-
-
-def _last_weekday(year: int, month: int, weekday: int) -> dt.date:
-    """The last ``weekday`` of a month. ISO weekday, Monday=1."""
-    next_month = dt.date(year + (month == 12), month % 12 + 1, 1)
-    last = next_month - dt.timedelta(days=1)
-    return last - dt.timedelta(days=(last.isoweekday() - weekday) % 7)
-
-
-def _sunday_observed(day: dt.date) -> dt.date:
-    """Apply the NERC rule that a Sunday holiday is observed on the Monday."""
-    return day + dt.timedelta(days=1) if day.isoweekday() == 7 else day
-
-
-@lru_cache(maxsize=256)
-def nerc_holidays(year: int) -> frozenset[dt.date]:
-    """The six NERC holidays observed in ``year``.
-
-    North American power markets exclude these six days from the on-peak block,
-    treating them as off-peak in full. A holiday falling on a Sunday is observed
-    on the following Monday. Note that NERC does *not* shift a Saturday holiday
-    to the preceding Friday, unlike the US federal rule, so the two calendars
-    disagree in some years.
-
-    Returns:
-        The observed dates: New Year's Day, Memorial Day, Independence Day,
-        Labor Day, Thanksgiving, and Christmas Day.
-    """
-    return frozenset(
-        {
-            _sunday_observed(dt.date(year, 1, 1)),
-            _last_weekday(year, 5, 1),
-            _sunday_observed(dt.date(year, 7, 4)),
-            _nth_weekday(year, 9, 1, 1),
-            _nth_weekday(year, 11, 4, 4),
-            _sunday_observed(dt.date(year, 12, 25)),
-        }
-    )
-
-
-def _holiday_dates(calendar: HolidayCalendar, years: range) -> frozenset[dt.date]:
-    if calendar is HolidayCalendar.NERC:
-        return frozenset().union(*(nerc_holidays(y) for y in years)) if years else frozenset()
-    return frozenset()
 
 
 # --- Local time ------------------------------------------------------------
@@ -97,8 +41,7 @@ def hours_in_local_day(zone: Zone, day: dt.date) -> int:
     """How many clock hours ``day`` actually has in the zone's market timezone.
 
     Returns 23 on a spring-forward day, 25 on a fall-back day, and 24 otherwise.
-    A market that pins itself to standard time all year, such as the Australian
-    NEM, always returns 24.
+    A market without daylight saving, such as Brazil since 2019, always returns 24.
     """
     tz = ZoneInfo(zone.timezone)
     start = dt.datetime.combine(day, dt.time(0), tzinfo=tz)
@@ -161,20 +104,14 @@ def is_on_peak(zone: Zone, moment: dt.datetime) -> bool:
 
     if local.isoweekday() not in block.weekdays:
         return False
-    if not block.start_hour <= local.hour < block.end_hour:
-        return False
-    return not (
-        block.holidays is HolidayCalendar.NERC and local.date() in nerc_holidays(local.year)
-    )
+    return block.start_hour <= local.hour < block.end_hour
 
 
 def attach_block(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
     """Label every row ``on_peak`` or ``off_peak`` per the zone's block rule.
 
     Requires the local-time columns from :func:`attach_local_time`, and adds
-    them first if they are absent. The holiday test is a set membership against
-    the calendar years actually present in the data, so it costs nothing on
-    markets whose block ignores holidays.
+    them first if they are absent.
     """
     if "local_date" not in frame.columns or "local_hour" not in frame.columns:
         frame = attach_local_time(frame, zone)
@@ -188,14 +125,6 @@ def attach_block(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
     )
 
     condition = in_hours & in_weekdays
-
-    if block.holidays is not HolidayCalendar.NONE:
-        dates = frame.get_column("local_date")
-        if dates.len() and dates.null_count() < dates.len():
-            years = range(dates.min().year, dates.max().year + 1)  # type: ignore[union-attr]
-            holidays = _holiday_dates(block.holidays, years)
-            if holidays:
-                condition = condition & ~pl.col("local_date").is_in(list(holidays))
 
     return frame.with_columns(
         pl.when(condition)

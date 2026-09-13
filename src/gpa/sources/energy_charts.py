@@ -26,7 +26,7 @@ import polars as pl
 
 from gpa.schema import UTC_DATETIME
 from gpa.schema import empty_frame as _empty
-from gpa.sources.base import UpstreamError, fetch_json, http_client, infer_resolution_minutes
+from gpa.sources.base import UpstreamError, fetch_json, http_client
 from gpa.zones import Zone
 
 __all__ = ["DERIVED_SERIES", "FUEL_MAP", "LOAD_SERIES", "EnergyChartsSource"]
@@ -53,6 +53,9 @@ FUEL_MAP: Final[dict[str, str]] = {
     "Wind onshore": "wind",
     "Solar": "solar",
     "Battery Storage (Power)": "battery",
+    "Battery": "battery",
+    "Battery Consumption": "battery",
+    "Other renewables": "other",
     "Others": "other",
     "Other": "other",
     "Cross border electricity trading": "imports",
@@ -129,16 +132,15 @@ class EnergyChartsSource:
             {"_epoch": seconds[: len(prices)], "price": prices[: len(seconds)]},
             schema={"_epoch": pl.Int64, "price": pl.Float64},
         )
-        frame = _stamp(frame).drop_nulls("price")
+        frame = (
+            _stamp(frame).join(_resolution_table(seconds, zone), on="ts_utc").drop_nulls("price")
+        )
         frame = _window(frame, start, end)
         if frame.is_empty():
             return _empty("price")
 
         return frame.with_columns(
             pl.lit(zone.code).alias("zone"),
-            pl.lit(infer_resolution_minutes(frame["ts_utc"]))
-            .cast(pl.Int16)
-            .alias("resolution_min"),
             pl.lit(currency).alias("currency"),
             pl.lit(self.name).alias("source"),
         ).select("zone", "ts_utc", "resolution_min", "price", "currency", "source")
@@ -167,16 +169,28 @@ class EnergyChartsSource:
             return _empty(dataset)
 
         wanted = LOAD_SERIES if dataset == "load" else None
+        # These are alternative definitions, not additive areas. Prefer the
+        # public-power load corresponding to the generation boundary.
+        labels = {str(entry.get("name", "")) for entry in series}
+        load_label = "Load" if "Load" in labels else "Load (incl. self-consumption)"
+        # France publishes battery output and charging as two signed series;
+        # other countries publish one net series. Both at once would double count.
+        if "Battery Storage (Power)" in labels and labels & {"Battery", "Battery Consumption"}:
+            raise UpstreamError("net and gross battery series published together")
         frames: list[pl.DataFrame] = []
 
         for entry in series:
             label = str(entry.get("name", ""))
             if label in DERIVED_SERIES:
                 continue
-            if wanted is not None and label not in wanted:
+            if wanted is not None and label != load_label:
                 continue
-            if wanted is None and (label in LOAD_SERIES or label not in FUEL_MAP):
+            if wanted is None and label in LOAD_SERIES:
                 continue
+            if wanted is None and label not in FUEL_MAP:
+                raise UpstreamError(
+                    f"unrecognised generation series {label!r}; review its units and meaning"
+                )
 
             values = entry.get("data") or []
             n = min(len(seconds), len(values))
@@ -199,16 +213,14 @@ class EnergyChartsSource:
         if combined.is_empty():
             return _empty(dataset)
 
-        resolution = infer_resolution_minutes(combined["ts_utc"].unique())
+        resolutions = _resolution_table(seconds, zone)
 
         if dataset == "load":
-            # Only one load series should survive the filter, but summing is
-            # harmless and guards against the provider splitting it.
             out = combined.group_by("ts_utc").agg(pl.col("_value").sum().alias("load_mw"))
             return (
-                out.with_columns(
+                out.join(resolutions, on="ts_utc")
+                .with_columns(
                     pl.lit(zone.code).alias("zone"),
-                    pl.lit(resolution).cast(pl.Int16).alias("resolution_min"),
                     pl.lit(self.name).alias("source"),
                 )
                 .select("zone", "ts_utc", "resolution_min", "load_mw", "source")
@@ -218,9 +230,9 @@ class EnergyChartsSource:
         # Several upstream names share a canonical fuel, so sum after mapping.
         out = combined.group_by(["ts_utc", "fuel"]).agg(pl.col("_value").sum().alias("gen_mw"))
         return (
-            out.with_columns(
+            out.join(resolutions, on="ts_utc")
+            .with_columns(
                 pl.lit(zone.code).alias("zone"),
-                pl.lit(resolution).cast(pl.Int16).alias("resolution_min"),
                 pl.lit(self.name).alias("source"),
             )
             .select("zone", "ts_utc", "resolution_min", "fuel", "gen_mw", "source")
@@ -266,4 +278,58 @@ def _window(frame: pl.DataFrame, start: dt.datetime, end: dt.datetime) -> pl.Dat
 def _currency_from_unit(unit: str, zone: Zone) -> str:
     """Read the ISO currency out of a unit string such as ``'EUR / MWh'``."""
     head = unit.split("/")[0].strip().upper()
-    return head if len(head) == 3 and head.isalpha() else zone.currency
+    if head != zone.currency or unit.split("/")[-1].strip().lower() != "mwh":
+        raise UpstreamError(f"unexpected price unit {unit!r} for {zone.code}")
+    return head
+
+
+def _resolution_table(seconds: list[int], zone: Zone) -> pl.DataFrame:
+    """Measure cadence on the complete timestamp axis, separately per delivery day.
+
+    Resolution changes take effect on a market-local delivery day. Null values
+    and requested-window edges must not change that day's cadence. Missing
+    timestamps do not extend the preceding interval; sparse ambiguous days fail.
+    """
+    axis = _stamp(pl.DataFrame({"_epoch": seconds}, schema={"_epoch": pl.Int64})).sort("ts_utc")
+    if axis["ts_utc"].n_unique() != axis.height:
+        raise UpstreamError("duplicate timestamps in Energy-Charts response")
+    axis = axis.with_columns(
+        pl.col("ts_utc").dt.convert_time_zone(zone.timezone).dt.date().alias("_day"),
+        pl.col("ts_utc")
+        .diff()
+        .over(pl.col("ts_utc").dt.convert_time_zone(zone.timezone).dt.date())
+        .dt.total_minutes()
+        .alias("_step"),
+    )
+    cadence = (
+        axis.group_by("_day")
+        .agg(
+            pl.col("_step").min().alias("resolution_min"),
+            pl.col("_step").drop_nulls().alias("_steps"),
+        )
+        .sort("_day")
+    )
+    unsupported = cadence.filter(
+        pl.col("resolution_min").is_not_null() & ~pl.col("resolution_min").is_in([15, 60])
+    )
+    if unsupported.height:
+        raise UpstreamError(f"unsupported timestamp cadence on {unsupported['_day'].to_list()[:3]}")
+    # Every gap inside a day must be a whole number of that day's intervals,
+    # otherwise the day mixes products and no single duration describes it.
+    irregular = cadence.filter(
+        pl.col("_steps").list.eval(pl.element() % pl.element().min() != 0).list.any()
+    )
+    if irregular.height:
+        raise UpstreamError(f"irregular timestamp spacing on {irregular['_day'].to_list()[:3]}")
+    # A day holding a single timestamp (a response edge) has no measurable
+    # cadence. Products change only at delivery-day boundaries, so it takes the
+    # adjacent day's; a response with no measurable day at all is rejected.
+    cadence = cadence.with_columns(pl.col("resolution_min").forward_fill().backward_fill())
+    if cadence["resolution_min"].null_count():
+        raise UpstreamError("cannot measure timestamp cadence from a single observation")
+    resolved = axis.join(cadence.select("_day", "resolution_min"), on="_day")
+    if resolved.filter(
+        pl.col("ts_utc").dt.epoch("s") % (pl.col("resolution_min") * 60) != 0
+    ).height:
+        raise UpstreamError("timestamps are not aligned to their interval boundaries")
+    return resolved.select("ts_utc", pl.col("resolution_min").cast(pl.Int16))

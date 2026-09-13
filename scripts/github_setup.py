@@ -1,21 +1,18 @@
 """Configure the authorized portfolio repository using local Git credentials.
 
-No credential is printed or stored here. Requires httpx, python-dotenv and
-PyNaCl (the latter only for uploading an encrypted Actions secret).
+No credential is printed or stored here. Requires httpx.
 """
 
 import argparse
-import base64
 import os
 import subprocess
 
 import httpx
-from dotenv import load_dotenv
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["create", "pages", "secret", "status", "runs"])
+    parser.add_argument("action", choices=["create", "pages", "status", "runs"])
     args = parser.parse_args()
     result = subprocess.run(
         ["git", "credential", "fill"],
@@ -47,19 +44,6 @@ def main():
         response = client.request("PUT" if exists.is_success else "POST", repo + "/pages", json={"build_type": "workflow"})
         response.raise_for_status()
         print("Pages configured for GitHub Actions")
-    elif args.action == "secret":
-        from nacl.public import PublicKey, SealedBox
-        load_dotenv()
-        secret = os.environ["EIA_API_KEY"]
-        response = client.get(repo + "/actions/secrets/public-key")
-        response.raise_for_status()
-        key = response.json()
-        encrypted = SealedBox(PublicKey(base64.b64decode(key["key"]))).encrypt(secret.encode())
-        response = client.put(repo + "/actions/secrets/EIA_API_KEY", json={
-            "key_id": key["key_id"], "encrypted_value": base64.b64encode(encrypted).decode(),
-        })
-        response.raise_for_status()
-        print("EIA_API_KEY installed as encrypted Actions secret")
     elif args.action == "runs":
         response = client.get(repo + "/actions/runs", params={"per_page": 10})
         response.raise_for_status()

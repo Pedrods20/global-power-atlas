@@ -7,30 +7,20 @@ needs to change.
 
 from __future__ import annotations
 
-from gpa.sources.aemo import AemoSource
 from gpa.sources.base import (
     MissingCredential,
     Source,
     SourceError,
     UpstreamError,
 )
-from gpa.sources.caiso import CaisoSource
-from gpa.sources.ccee import CceeSource
-from gpa.sources.eia import EiaSource
 from gpa.sources.energy_charts import EnergyChartsSource
-from gpa.sources.jepx import JepxSource
 from gpa.sources.ons import OnsSource
-from gpa.sources.openelectricity import OpenElectricitySource
 
 __all__ = [
     "REGISTRY",
-    "AemoSource",
-    "CaisoSource",
-    "EiaSource",
     "EnergyChartsSource",
     "MissingCredential",
     "OnsSource",
-    "OpenElectricitySource",
     "Source",
     "SourceError",
     "UpstreamError",
@@ -40,14 +30,8 @@ __all__ = [
 REGISTRY: dict[str, Source] = {
     source.name: source
     for source in (
-        EiaSource(),
-        CaisoSource(),
         EnergyChartsSource(),
         OnsSource(),
-        AemoSource(),
-        OpenElectricitySource(),
-        JepxSource(),
-        CceeSource(),
     )
 }
 """Source name to a ready-to-use adapter instance.

@@ -57,6 +57,12 @@ jobs:
         # left half-written by an interrupted run.
         run: gpa validate
 
+      - name: Audit structural coverage
+        # Schema validity is not the same claim as gap-free time coverage:
+        # this catches overlapping observations and internal missing time per
+        # zone, dataset and fuel that a schema-only check would miss.
+        run: gpa audit
+
   site:
     name: Build site
     runs-on: ubuntu-latest
@@ -80,3 +86,43 @@ jobs:
         run: gpa export --check
 
       - run: npm run build
+
+      - name: Install Playwright's Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke against the local preview
+        # Started and stopped inside one step: a server backgrounded here would
+        # not reliably survive into a later step on the runner.
+        env:
+          GPA_SCREENSHOT_DIR: ${{ runner.temp }}/screenshots
+        run: |
+          npm run dev &
+          server=$!
+          ready=
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/ > /dev/null; then ready=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ready" ]; then
+            echo "preview server did not become ready"
+            kill "$server" 2>/dev/null || true
+            exit 1
+          fi
+          set +e
+          npm run test:browser
+          status=$?
+          set -e
+          kill "$server" 2>/dev/null || true
+          exit $status
+
+  deploy:
+    name: Deploy
+    needs: [python, site]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: ${{ github.sha }}

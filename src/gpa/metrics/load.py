@@ -46,7 +46,15 @@ def daily_profile(frame: pl.DataFrame, zone: Zone, *, by_block: bool = False) ->
     prepared = attach_block(frame, zone) if by_block else attach_local_time(frame, zone)
     keys = ["local_hour", "block"] if by_block else ["local_hour"]
 
-    return prepared.group_by(keys).agg(pl.col("load_mw").mean().alias("avg_load_mw")).sort(keys)
+    return (
+        prepared.group_by(keys)
+        .agg(
+            ((pl.col("load_mw") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias(
+                "avg_load_mw"
+            )
+        )
+        .sort(keys)
+    )
 
 
 def daily_energy(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
@@ -177,7 +185,9 @@ def load_factor(frame: pl.DataFrame, zone: Zone, *, period: str = "month") -> pl
         .with_columns(pl.col("local_date").dt.strftime(formats[period]).alias("period"))
         .group_by("period")
         .agg(
-            pl.col("load_mw").mean().alias("avg_load_mw"),
+            ((pl.col("load_mw") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias(
+                "avg_load_mw"
+            ),
             pl.col("load_mw").max().alias("peak_load_mw"),
         )
         .with_columns(
@@ -195,17 +205,21 @@ def _duration_curve(frame: pl.DataFrame, column: str, points: int | None) -> pl.
     if frame.is_empty():
         return pl.DataFrame(schema={"exceedance_pct": pl.Float64, column: pl.Float64})
 
-    ordered = frame.select(pl.col(column)).drop_nulls().sort(column, descending=True)
+    ordered = frame.select(column, "resolution_min").drop_nulls().sort(column, descending=True)
     n = ordered.height
     if n == 0:
         return pl.DataFrame(schema={"exceedance_pct": pl.Float64, column: pl.Float64})
 
     curve = ordered.with_columns(
-        ((pl.int_range(1, n + 1, eager=False) / n) * 100.0).alias("exceedance_pct")
+        (pl.col("resolution_min").cum_sum() / pl.col("resolution_min").sum() * 100.0).alias(
+            "exceedance_pct"
+        )
     ).select("exceedance_pct", column)
 
     if points is not None and points > 0 and n > points:
-        step = max(1, n // points)
-        curve = curve.gather_every(step)
+        if points < 2:
+            return curve.tail(1)
+        indices = sorted({round(i * (n - 1) / (points - 1)) for i in range(points)})
+        curve = curve[indices]
 
     return curve

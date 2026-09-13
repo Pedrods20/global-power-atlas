@@ -35,6 +35,20 @@ Missing values are not zero.
     it returns rows with ``val_cargaglobal`` of exactly zero for intervals it has
     not yet measured, and those are dropped rather than recorded as no demand.
 
+The two endpoints stamp intervals differently.
+    The balance file stamps each hour at its *start*. The verified-load API
+    stamps each half-hour at its *end*: local day D runs from ``00:30`` to
+    ``24:00``, which the API writes as the next day's ``03:00Z``. Load rows are
+    shifted back thirty minutes so every stored ``ts_utc`` is an interval start.
+    Both conventions were verified on 2026-09-13 against the raw payload and
+    against the solar-noon centroid of generation; see ``docs/DATA-AUDIT.md``.
+
+Dates in requests are Brasilia dates.
+    The load API filters on ``dat_referencia`` and each yearly balance file
+    covers a local calendar year, so windows are widened by one day on each
+    side before trimming to the caller's UTC window. Otherwise the first three
+    UTC hours of each requested window would fall between two requests.
+
 The load API's own national aggregate is unusable.
     Requesting ``cod_areacarga=SIN`` returns timestamps with every value zeroed.
     National load is therefore summed from the four submarket areas, and a
@@ -54,12 +68,10 @@ import polars as pl
 
 from gpa.schema import UTC_DATETIME, empty_frame
 from gpa.sources.base import (
-    SourceError,
     UpstreamError,
     fetch_json,
     fetch_text,
     http_client,
-    infer_resolution_minutes,
 )
 from gpa.zones import Zone
 
@@ -101,6 +113,9 @@ load has to be summed from these four. The Southeast is ``SECO`` here; the
 an error, which is the quietest possible way for a feed to break.
 """
 
+_LOAD_API_RESOLUTION: Final = 30
+"""Minutes per verified-load interval."""
+
 _LOAD_API_CHUNK_DAYS: Final = 30
 """Days requested per call. The API answers a longer span, but one bad request
 in a two-year backfill is cheaper to retry at this size."""
@@ -133,16 +148,15 @@ class OnsSource:
             )
 
         if dataset == "load" and subsystem == "SIN":
-            # The balance file trails real time by about two days. The load API
-            # carries the same history within roughly an hour of now, so it is
-            # preferred, and the balance file is the fallback if it fails.
-            api = self._fetch_load_api(zone, start, end)
-            if not api.is_empty():
-                return api
+            # Never silently mix hourly balance load into the half-hourly
+            # verified-load series: upserts would leave overlapping intervals.
+            return self._fetch_load_api(zone, start, end)
 
         frames: list[pl.DataFrame] = []
         with http_client() as client:
-            for year in range(start.year, end.year + 1):
+            # Local time trails UTC, so a window opening at UTC midnight on
+            # 1 January begins in the previous year's file.
+            for year in range((start - dt.timedelta(days=1)).year, end.year + 1):
                 raw = fetch_text(_BALANCE.format(year=year), client=client, allow_missing=True)
                 if raw is None:
                     # A year the archive has not published, which is normal when
@@ -165,7 +179,7 @@ class OnsSource:
         if combined.is_empty():
             return empty_frame(dataset)
 
-        resolution = infer_resolution_minutes(combined["ts_utc"])
+        resolution = 60  # The official hourly subsystem balance contract.
 
         if dataset == "load":
             out = combined.select("ts_utc", pl.col(_LOAD_COLUMN).alias("load_mw")).drop_nulls(
@@ -203,33 +217,32 @@ class OnsSource:
     ) -> pl.DataFrame:
         """National load summed from the four submarket areas of the load API.
 
-        Returns an empty frame rather than raising when the API is unreachable
-        or answers with nothing usable, so the caller falls back to the balance
-        file instead of failing the whole ingest.
+        A transport failure propagates; no alternative load definition is used.
         """
         collected: list[pl.DataFrame] = []
-        try:
-            with http_client() as client:
-                cursor = start
-                step = dt.timedelta(days=_LOAD_API_CHUNK_DAYS)
-                while cursor < end:
-                    stop = min(cursor + step, end)
-                    for area in LOAD_AREAS:
-                        payload = fetch_json(
-                            _LOAD_API,
-                            client=client,
-                            params={
-                                "dat_inicio": cursor.astimezone(dt.UTC).date().isoformat(),
-                                "dat_fim": stop.astimezone(dt.UTC).date().isoformat(),
-                                "cod_areacarga": area,
-                            },
-                        )
-                        parsed = _parse_load_api(payload, area)
-                        if not parsed.is_empty():
-                            collected.append(parsed)
-                    cursor = stop
-        except SourceError:
-            return empty_frame("load")
+        with http_client() as client:
+            # Padding by a local day on each side covers the rows whose local
+            # reference date differs from their UTC date.
+            first = start - dt.timedelta(days=1)
+            last = end + dt.timedelta(days=1)
+            cursor = first
+            step = dt.timedelta(days=_LOAD_API_CHUNK_DAYS)
+            while cursor < last:
+                stop = min(cursor + step, last)
+                for area in LOAD_AREAS:
+                    payload = fetch_json(
+                        _LOAD_API,
+                        client=client,
+                        params={
+                            "dat_inicio": cursor.astimezone(dt.UTC).date().isoformat(),
+                            "dat_fim": stop.astimezone(dt.UTC).date().isoformat(),
+                            "cod_areacarga": area,
+                        },
+                    )
+                    parsed = _parse_load_api(payload, area)
+                    if not parsed.is_empty():
+                        collected.append(parsed)
+                cursor = stop
 
         if not collected:
             return empty_frame("load")
@@ -239,7 +252,7 @@ class OnsSource:
         if national.is_empty():
             return empty_frame("load")
 
-        resolution = infer_resolution_minutes(national["ts_utc"], default=30)
+        resolution = _LOAD_API_RESOLUTION
         return (
             national.with_columns(
                 pl.lit(zone.code).alias("zone"),
@@ -280,6 +293,8 @@ def _parse_load_api(payload: object, area: str) -> pl.DataFrame:
             pl.col("val_cargaglobal").cast(pl.Float64, strict=False).alias("load_mw"),
         )
         .drop_nulls(["ts_utc", "load_mw"])
+        # The API stamps the end of each half-hour; store the interval start.
+        .with_columns(pl.col("ts_utc") - pl.duration(minutes=_LOAD_API_RESOLUTION))
         # A value of exactly zero means the interval has not been measured yet,
         # not that the area drew no power. Keeping it would drag the national
         # sum down and, worse, look like a real observation.

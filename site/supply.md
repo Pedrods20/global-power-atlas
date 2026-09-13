@@ -16,17 +16,10 @@ const carbonRows = [...carbonFile];
 const captureRows = [...captureFile];
 
 const zoneColor = new Map([
-  ["ERCOT", "#D55E00"],
   ["DE-LU", "#0072B2"],
   ["BR-SIN", "#009E73"],
-  ["AU-NSW1", "#CC79A7"],
-  ["PJM", "#E69F00"],
-  ["CAISO", "#56B4E9"],
   ["FR", "#332288"],
   ["ES", "#88CCEE"],
-  ["JP-TOKYO", "#AA4499"],
-  ["BR-SECO", "#117733"],
-  ["BR-NE", "#999933"],
 ]);
 const zoneOrder = [...zoneColor.keys()].filter((z) => mixRows.some((d) => d.zone === z));
 const colorScale = {

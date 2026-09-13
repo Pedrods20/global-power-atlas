@@ -2,9 +2,8 @@
 
 These run against small recorded fixtures rather than the live providers, so
 the suite stays fast, deterministic and usable offline. The fixtures preserve
-the exact quirks each provider has: Brazilian semicolon CSVs with blank fields,
-AEMO's interval-ending stamps, and Energy-Charts mixing measurements with
-derived indicators in one list.
+the exact quirks each provider has: Brazilian semicolon CSVs with blank fields
+and Energy-Charts mixing measurements with derived indicators in one list.
 """
 
 from __future__ import annotations
@@ -16,11 +15,9 @@ import pytest
 
 from gpa.schema import FUELS
 from gpa.sources import REGISTRY, get_source
-from gpa.sources.aemo import NEM_MARKET_TIMEZONE, _parse_archive
 from gpa.sources.base import infer_resolution_minutes
 from gpa.sources.energy_charts import DERIVED_SERIES, FUEL_MAP, LOAD_SERIES
 from gpa.sources.ons import LOAD_AREAS, _aggregate_load_areas, _parse_balance, _parse_load_api
-from gpa.sources.openelectricity import IGNORED_FUELTECHS, _collect
 
 # --- Registry --------------------------------------------------------------
 
@@ -154,7 +151,8 @@ def test_ons_load_api_parses_utc_stamps_and_values() -> None:
     parsed = _parse_load_api(payload, "SECO")
 
     assert parsed.height == 1
-    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 12, 0, 0, tzinfo=dt.UTC)
+    # The API stamps the interval end, so 00:00Z describes 23:30Z to 00:00Z.
+    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 11, 23, 30, tzinfo=dt.UTC)
     assert parsed["load_mw"][0] == pytest.approx(49411.0)
     assert parsed["area"][0] == "SECO"
 
@@ -172,7 +170,7 @@ def test_ons_load_api_treats_exact_zero_as_unmeasured() -> None:
     parsed = _parse_load_api(payload, "SECO")
 
     assert parsed.height == 1
-    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 12, 0, 0, tzinfo=dt.UTC)
+    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 11, 23, 30, tzinfo=dt.UTC)
 
 
 def test_ons_national_load_requires_all_four_areas() -> None:
@@ -194,7 +192,7 @@ def test_ons_national_load_requires_all_four_areas() -> None:
     national = _aggregate_load_areas(frame)
 
     assert national.height == 1
-    assert national["ts_utc"][0] == dt.datetime(2026, 9, 12, 0, 0, tzinfo=dt.UTC)
+    assert national["ts_utc"][0] == dt.datetime(2026, 9, 11, 23, 30, tzinfo=dt.UTC)
     assert national["load_mw"][0] == pytest.approx(49411.0 + 14140.0 + 15766.0 + 9930.0)
 
 
@@ -222,59 +220,6 @@ def test_ons_load_api_tolerates_an_empty_response() -> None:
 
 
 # --- AEMO ------------------------------------------------------------------
-
-AEMO_5MIN = """REGION,SETTLEMENTDATE,TOTALDEMAND,RRP,PERIODTYPE
-NSW1,2026/08/01 00:05:00,8898.91,89.88,TRADE
-NSW1,2026/08/01 00:10:00,9032.33,-95.05,TRADE
-NSW1,2026/08/01 00:15:00,8989.12,88.88,TRADE
-NSW1,2026/08/01 00:20:00,9036.72,88.88,TRADE
-"""
-
-AEMO_30MIN = """REGION,SETTLEMENTDATE,TOTALDEMAND,RRP,PERIODTYPE
-NSW1,2019/08/01 00:30:00,7898.91,59.88,TRADE
-NSW1,2019/08/01 01:00:00,7832.33,55.05,TRADE
-NSW1,2019/08/01 01:30:00,7789.12,58.88,TRADE
-"""
-
-
-def test_aemo_shifts_interval_ending_stamps_to_interval_start() -> None:
-    """A row stamped 00:05 describes 00:00 to 00:05, so the start is 00:00.
-
-    Skipping this shifts the whole series forward by one interval and moves the
-    evening peak, while quietly misaligning price against generation.
-    """
-    parsed = _parse_archive(AEMO_5MIN).sort("ts_utc")
-    # 00:00 AEST on 1 August is 14:00 UTC on 31 July.
-    assert parsed["ts_utc"][0] == dt.datetime(2026, 7, 31, 14, 0, tzinfo=dt.UTC)
-
-
-def test_aemo_detects_the_thirty_minute_settlement_era() -> None:
-    """The NEM moved to five-minute settlement in October 2021.
-
-    A backfill spanning that change must shift each era by its own interval.
-    """
-    parsed = _parse_archive(AEMO_30MIN).sort("ts_utc")
-    # 00:00 AEST on 1 August 2019 is 14:00 UTC on 31 July 2019.
-    assert parsed["ts_utc"][0] == dt.datetime(2019, 7, 31, 14, 0, tzinfo=dt.UTC)
-    gap = parsed["ts_utc"][1] - parsed["ts_utc"][0]
-    assert gap == dt.timedelta(minutes=30)
-
-
-def test_aemo_preserves_negative_prices() -> None:
-    parsed = _parse_archive(AEMO_5MIN)
-    assert parsed["RRP"].min() == pytest.approx(-95.05)
-
-
-def test_aemo_market_timezone_never_observes_daylight_saving() -> None:
-    assert NEM_MARKET_TIMEZONE == "Australia/Brisbane"
-
-
-def test_aemo_rejects_a_file_missing_expected_columns() -> None:
-    from gpa.sources.base import UpstreamError
-
-    with pytest.raises(UpstreamError, match="missing expected columns"):
-        _parse_archive("REGION,SETTLEMENTDATE\nNSW1,2026/08/01 00:05:00\n")
-
 
 # --- Energy-Charts ---------------------------------------------------------
 
@@ -310,81 +255,3 @@ def test_energy_charts_drops_derived_indicators() -> None:
 
 def test_energy_charts_separates_load_from_generation_series() -> None:
     assert not LOAD_SERIES & set(FUEL_MAP)
-
-
-# --- OpenElectricity -------------------------------------------------------
-
-OE_FIXTURE = {
-    "success": True,
-    "data": [
-        {
-            "metric": "power",
-            "unit": "MW",
-            "interval": "1h",
-            "results": [
-                {
-                    "columns": {"region": "NSW1", "fueltech_group": "coal"},
-                    "data": [["2026-09-01T00:00:00+10:00", 5079.1]],
-                },
-                {
-                    "columns": {"region": "NSW1", "fueltech_group": "battery"},
-                    "data": [["2026-09-01T00:00:00+10:00", -19.85]],
-                },
-                {
-                    "columns": {"region": "NSW1", "fueltech_group": "battery_charging"},
-                    "data": [["2026-09-01T00:00:00+10:00", 29.86]],
-                },
-                {
-                    "columns": {"region": "NSW1", "fueltech_group": "battery_discharging"},
-                    "data": [["2026-09-01T00:00:00+10:00", 10.0]],
-                },
-                {
-                    "columns": {"region": "QLD1", "fueltech_group": "coal"},
-                    "data": [["2026-09-01T00:00:00+10:00", 4000.0]],
-                },
-            ],
-        }
-    ],
-}
-
-
-def test_openelectricity_keeps_only_net_battery() -> None:
-    """Net plus both halves would count the same megawatts three times."""
-    rows = _collect(OE_FIXTURE, region="NSW1")
-    battery = [r for r in rows if r["fuel"] == "battery"]
-
-    assert len(battery) == 1
-    assert battery[0]["gen_mw"] == pytest.approx(-19.85)
-    assert {"battery_charging", "battery_discharging"} == IGNORED_FUELTECHS
-
-
-def test_openelectricity_filters_to_the_requested_region() -> None:
-    rows = _collect(OE_FIXTURE, region="NSW1")
-    assert len(rows) == 2  # coal and net battery
-    assert all("QLD" not in str(r) for r in rows)
-
-
-def test_openelectricity_buckets_an_unmapped_technology_rather_than_dropping_it() -> None:
-    """A new fueltech should appear as 'other', not silently vanish from the mix."""
-    payload = {
-        "success": True,
-        "data": [
-            {
-                "results": [
-                    {
-                        "columns": {"region": "NSW1", "fueltech_group": "fusion"},
-                        "data": [["2026-09-01T00:00:00+10:00", 42.0]],
-                    }
-                ]
-            }
-        ],
-    }
-    rows = _collect(payload, region="NSW1")
-    assert rows[0]["fuel"] == "other"
-
-
-def test_openelectricity_raises_on_a_reported_failure() -> None:
-    from gpa.sources.base import UpstreamError
-
-    with pytest.raises(UpstreamError, match="reported failure"):
-        _collect({"success": False, "error": "bad request"}, region="NSW1")

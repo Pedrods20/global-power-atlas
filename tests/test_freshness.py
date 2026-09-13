@@ -89,11 +89,6 @@ def test_brazilian_load_is_not_given_the_generation_allowance() -> None:
     assert rule_for("BR-SIN", "load").max_lag_hours < rule_for("BR-SIN", "generation").max_lag_hours
 
 
-def test_us_generation_is_allowed_the_eia_restatement_delay() -> None:
-    for zone in ("ERCOT", "PJM", "CAISO"):
-        assert rule_for(zone, "generation").max_lag_hours == 48.0
-
-
 def test_every_declared_rule_carries_a_reason() -> None:
     """A rule nobody can explain is a rule nobody will trust at 3am."""
     for (zone, dataset), rule in RULES.items():
@@ -118,7 +113,7 @@ def test_a_stale_scheduled_series_blocks_the_run() -> None:
 
 
 def test_a_stale_manual_series_reports_without_blocking() -> None:
-    """Nobody can refresh CCEE from a cron job.
+    """Nobody can refresh a manual series from a cron job.
 
     Failing the nightly run for something the run cannot fix would train people
     to ignore the failure, which costs more than the staleness does.
@@ -135,11 +130,6 @@ def test_a_series_with_no_data_at_all_is_missing_and_blocking() -> None:
 
     assert entry.missing is True
     assert entry.blocking is True
-
-
-def test_the_ccee_zones_are_declared_manual() -> None:
-    for zone in ("BR-SECO", "BR-NE"):
-        assert rule_for(zone, "price").manual is True
 
 
 # --- check() against a store ------------------------------------------------

@@ -20,7 +20,6 @@ from gpa.metrics import spreads
 from gpa.zones import get_zone
 
 GERMANY = get_zone("DE-LU")
-ERCOT = get_zone("ERCOT")
 
 
 def test_negative_duration_and_block_mean_weight_mixed_resolutions():

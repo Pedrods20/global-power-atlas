@@ -23,6 +23,37 @@ class LightGBM:
     name: str = "lightgbm"
     description: str = "Pooled LightGBM on panel features and market-local hour."
 
+    def predict_day(self, panel: Panel, day: dt.date, *, min_train_rows: int) -> pl.DataFrame:
+        """Predict unknown targets with the same fixed specification as the backtest."""
+        training = (
+            panel.complete().filter(pl.col("local_date") < day).sort("local_date", "local_hour")
+        )
+        days = training["local_date"].unique().sort()
+        if len(days) < min_train_rows:
+            return pl.DataFrame(schema=_FORECAST_SCHEMA)
+        if self.window is not None:
+            training = training.filter(pl.col("local_date") >= days[-self.window])
+        target = panel.frame.filter(pl.col("local_date") == day).drop_nulls(list(panel.features))
+        if target.is_empty():
+            return pl.DataFrame(schema=_FORECAST_SCHEMA)
+        features = [*panel.features, "local_hour"]
+        fitted = lgb.train(
+            self.parameters(),
+            lgb.Dataset(
+                training.select(features).to_numpy(),
+                label=training[panel.target].to_numpy(),
+                feature_name=features,
+            ),
+            num_boost_round=100,
+        )
+        return target.select("local_date", "local_hour").with_columns(
+            pl.Series(
+                "forecast",
+                fitted.predict(target.select(features).to_numpy(), num_threads=1),
+                dtype=pl.Float64,
+            )
+        )
+
     def parameters(self) -> dict[str, object]:
         """Fixed before inspecting the challenger results; CPU deterministic."""
         return {

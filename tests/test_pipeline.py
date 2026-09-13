@@ -141,8 +141,8 @@ def test_an_empty_provider_response_is_empty_not_failed(monkeypatch: pytest.Monk
 def test_a_missing_credential_is_skipped_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unconfigured key must not fail the scheduled run.
 
-    ERCOT sat in exactly this state for days while an EIA key was obtained, and
-    the daily ingest had to keep updating every other market throughout.
+    A market waiting for a provider key must not stop the daily ingest from
+    updating every other market.
     """
     install(monkeypatch, [fake_zone()], {"fake": FakeSource("missing_credential")})
 
@@ -242,7 +242,7 @@ def test_an_unknown_source_name_fails_only_its_own_target(
 def test_a_source_window_cap_overrides_the_callers_chunk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """OpenElectricity returns 400 above 32 days, so the cap has to win.
+    """A provider may reject long windows, so the source cap has to win.
 
     The caller asks for 60-day chunks; the source declares 2. The run must issue
     several short requests rather than one the provider would reject.

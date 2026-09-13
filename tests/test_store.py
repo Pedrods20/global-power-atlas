@@ -133,10 +133,10 @@ def test_generation_upsert_keys_on_fuel_as_well() -> None:
 
 def test_read_filters_by_zone() -> None:
     store.write(price_rows([1.0], zone="DE-LU"), "price")
-    store.write(price_rows([2.0], zone="AU-NSW1"), "price")
+    store.write(price_rows([2.0], zone="FR"), "price")
 
     assert store.read("price", "DE-LU").height == 1
-    assert store.read("price", ["DE-LU", "AU-NSW1"]).height == 2
+    assert store.read("price", ["DE-LU", "FR"]).height == 2
 
 
 def test_read_window_is_half_open() -> None:
@@ -191,7 +191,7 @@ def test_coverage_reports_range_and_size() -> None:
 
 def test_duckdb_view_exposes_the_partition_key_as_a_column() -> None:
     store.write(price_rows([10.0, 20.0], zone="DE-LU"), "price")
-    store.write(price_rows([30.0], zone="AU-NSW1"), "price")
+    store.write(price_rows([30.0], zone="FR"), "price")
 
     con = store.connect()
     try:
@@ -199,7 +199,7 @@ def test_duckdb_view_exposes_the_partition_key_as_a_column() -> None:
     finally:
         con.close()
 
-    assert result == [("AU-NSW1", 1), ("DE-LU", 2)]
+    assert result == [("DE-LU", 2), ("FR", 1)]
 
 
 def test_connect_skips_datasets_with_no_files() -> None:

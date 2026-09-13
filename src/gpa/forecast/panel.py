@@ -41,6 +41,7 @@ import datetime as dt
 import math
 from dataclasses import dataclass
 from typing import Final
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -284,6 +285,7 @@ def build_panel(
     *,
     load: pl.DataFrame | None = None,
     generation: pl.DataFrame | None = None,
+    delivery_date: dt.date | None = None,
 ) -> Panel:
     """Assemble the target and its lawful features from canonical frames.
 
@@ -313,6 +315,27 @@ def build_panel(
         return Panel(zone=zone, frame=_empty_panel(), features=())
 
     panel = hourly.rename({"covered_hours": "target_covered_hours"})
+    if delivery_date is not None:
+        # These are modelling keys, not fabricated provider prices. Target
+        # values remain null and all feature joins still read observed history.
+        timezone = ZoneInfo(zone.timezone)
+        start = dt.datetime.combine(delivery_date, dt.time(), timezone).astimezone(dt.UTC)
+        stop = dt.datetime.combine(
+            delivery_date + dt.timedelta(days=1), dt.time(), timezone
+        ).astimezone(dt.UTC)
+        grid = pl.DataFrame(
+            {"ts_utc": pl.datetime_range(start, stop, interval="1h", closed="left", eager=True)}
+        )
+        grid = (
+            attach_local_time(grid, zone)
+            .group_by("local_date", "local_hour")
+            .agg(pl.col("ts_utc").min(), pl.len().cast(pl.Float64).alias("target_covered_hours"))
+            .with_columns(pl.lit(None, dtype=pl.Float64).alias("price"))
+        )
+        panel = pl.concat(
+            [panel.filter(pl.col("local_date") != delivery_date), grid.select(panel.columns)],
+            how="vertical_relaxed",
+        )
     features: list[str] = []
 
     for days in PRICE_LAG_DAYS:

@@ -27,5 +27,4 @@ def test_empty_store_has_no_data_timestamp(tmp_path, monkeypatch):
 
 def test_market_dst_is_not_inferred_from_civil_timezone_presence():
     assert not get_zone("BR-SIN").observes_market_dst
-    assert not get_zone("AU-NSW1").observes_market_dst
     assert get_zone("DE-LU").observes_market_dst

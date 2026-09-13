@@ -1,31 +1,106 @@
 # PROJECT STATE
 
-Last recorded delivery: 2026-09-13 (P3, freshness alerting) · Repository: `global-power-atlas` · Replaces:
-`power-pulse-global`
+Last recorded delivery: 2026-09-13 (scope reduction and independently-audited
+rebuild) · Repository: `global-power-atlas` · Replaces: `power-pulse-global`
 
-Working-tree review: 2026-09-13 (local forecasting acceptance and interval diagnostics).
+## Scope reduction and rebuild, 2026-09-13 (supersedes the review below)
 
-## Latest review after commit
+The [full review](docs/REVIEW-2026-09-13.md) below found a window-wide
+resolution-inference defect mislabelling part of the European price history,
+plus other data, metric and workflow gaps. Rather than patch each source
+adapter in place, the registry was cut back to the two sources that need no
+credential, block no automated client, and can be checked against a publisher
+independent of themselves: Energy-Charts (DE-LU, FR, ES) and ONS (BR-SIN).
+ERCOT, PJM, CAISO, AU-NSW1, JP-TOKYO and the two CCEE submarkets (and their
+adapters: `aemo.py`, `caiso.py`, `ccee.py`, `eia.py`, `jepx.py`,
+`openelectricity.py`) were removed rather than kept half-verified. This work
+was interrupted mid-rebuild and resumed and finished in this session; see
+`git log` for the commit this produced.
+
+What was done, in order:
+
+1. **Registry and adapters trimmed** to `{DE-LU, FR, ES, BR-SIN}` /
+   `{energy_charts, ons}`. A named test,
+   `test_active_markets_need_no_market_credentials_or_manual_imports` in
+   `tests/test_data_review.py`, asserts this so the claim cannot silently
+   drift again.
+2. **`scripts/rebuild_verified.py`** re-fetched every partition for the four
+   remaining zones from provider responses cached under
+   `.gpa/provider-audit/`, writing to a side directory
+   (`.gpa/audited-data/`) rather than the live store, so an interrupted run
+   could never leave `data/curated` half-written. Re-running it resumes from
+   the cached responses already retrieved.
+3. **`scripts/audit_external.py`** checked the rebuild against a publisher
+   independent of the one already stored: SMARD for DE-LU/FR price, OMIE for
+   ES price, and the ONS hourly subsystem balance for BR-SIN load. Energy-Charts
+   redistributes ENTSO-E, so checking it against itself would have proven
+   nothing. Result: **zero price mismatches** over the full two-year history
+   against both SMARD and OMIE. BR-SIN load matched best at zero timestamp
+   offset (median absolute difference 1.3%, consistent with the two ONS
+   publications using slightly different load definitions, not a labelling
+   error). One open question, not a confirmed defect: the solar generation
+   "clock" check (peak output should sit near local solar noon) reads Spain's
+   generation timestamps as marginally closer to interval-*end* than
+   interval-*start* (about 7 minutes at quarter-hour resolution, against a
+   heuristic coarse enough that this may just be noise) — see the review
+   priorities in `TODO.md`.
+4. **The audited data was promoted into `data/curated`**, replacing the old
+   partitions for these four zones. `gpa validate`, the full test suite, ruff,
+   mypy, `gpa export`/`--check`, `npm run build` and the 14-route/viewport
+   browser smoke all pass against the rebuilt store.
+5. **Deploy was made conditional on CI**, closing the review's "deploy is not
+   gated on CI" finding: `deploy.yml` is now a `workflow_call`-only workflow
+   that publishes one exact commit SHA. `ci.yml` calls it (with a new
+   browser-smoke step added to the site job) only after a push to `main` where
+   both jobs pass; `ingest.yml` calls it with the commit it just made,
+   independent of whether the freshness check that runs after that commit
+   passes — a quiet provider must not hold back observations every other
+   market published successfully.
+6. **Docs, workflows and the site's own prose were brought in line**:
+   `README.md`, this file, `TODO.md`, `site/methodology.md` and the other site
+   pages (color legends and narrative text) no longer describe the removed
+   zones as live; `pyproject.toml`, `scripts/github_setup.py` and
+   `ingest.yml` no longer reference `EIA_API_KEY`/`ENTSOE_API_KEY` or a CCEE
+   secret step, since no remaining source needs one.
+
+The forecasting benchmark numbers changed once the underlying DE-LU price
+history was corrected — exactly the review's warning that "a capped benchmark
+still changes when revised inputs arrive." Current numbers are in `README.md`
+and reproduced by `gpa backtest`; do not average this run's figures with any
+figure quoted before this rebuild.
+
+### Review findings not yet addressed
+
+Only the resolution-transition/provenance finding (review priority 1) was
+closed by this rebuild. Still open, and now scoped to just four zones:
+duration-aware metrics and capture alignment for repeated autumn hours (review
+priority 2, though `test_data_review.py` now covers some of this — see
+`TODO.md`), source-semantics/gap reporting beyond dataset-level freshness
+(priority 4), and experiment-input versioning ahead of a prospective forecast
+evaluation (priority 5). Priority 3, the deploy/CI gating gap, was closed in
+step 5 above.
+
+## Original review, 2026-09-13 (superseded above for scope; data findings below are why the rebuild happened)
 
 All implementation changes were committed as `083063a` at the user's request.
 The subsequent [full review](docs/REVIEW-2026-09-13.md) found unresolved data,
 metric and workflow defects despite passing existing checks. Treat its findings
 and the new review priorities in `TODO.md` as the current handoff, ahead of older
-claims that domain rules are completely enforced. No fixes to those new findings
-were attempted during the review.
+claims that domain rules are completely enforced.
 
 The remote scheduled ingestion advanced `main` to `92a4d83` and deployed
 successfully, with 3,604,404 observations. The local implementation snapshot
-still contains 3,602,004. The branches diverge; remote data must be integrated
-and derived exports regenerated before publication. No push was performed.
+still contained 3,602,004. That divergence is moot now: the store for all four
+remaining zones was rebuilt from scratch in the increment above, superseding
+both figures.
 
 Main findings: window-wide resolution inference mislabels part of September
-2025 European price history; some duration metrics still count rows; capture
-rates merge repeated autumn delivery hours; explicit upstream failures can
-prevent persistence of other successful targets; deploy is not gated on CI.
-The forecast API requires target values to choose prediction rows, and a capped
-benchmark still changes when revised inputs arrive. Details, reproductions and
-the proposed next sequence are in the review.
+2025 European price history (fixed above); some duration metrics still count
+rows; capture rates merge repeated autumn delivery hours; explicit upstream
+failures can prevent persistence of other successful targets; deploy was not
+gated on CI (fixed above). The forecast API requires target values to choose
+prediction rows, and a capped benchmark still changes when revised inputs
+arrive (confirmed above — it did). Details and reproductions are in the review.
 
 ## Current result
 
@@ -33,13 +108,14 @@ Global Power Atlas is a Python ETL and Observable Framework static site. It
 stores validated interval data as Parquet, computes market-aware aggregates,
 and publishes them without a backend or browser-visible credentials.
 
-- 11 registered zones across five continents.
-- 3,602,004 interval/fuel observations in 616 validated monthly partitions.
-- Price: DE-LU, AU-NSW1, FR, ES, JP-TOKYO, CAISO and two CCEE submarkets
-  (Southeast/Central-West and Northeast). South and North were dropped by
-  decision on 2026-09-12.
-- Load and generation: DE-LU, AU-NSW1, BR-SIN, ERCOT, PJM, CAISO, FR and ES,
-  subject to each provider's reported categories.
+- 4 registered zones: Germany-Luxembourg, France, Spain and Brazil (SIN).
+  Every zone's source needs no credential and no manual import.
+- 2,546,845 interval/fuel observations in 275 validated monthly partitions,
+  rebuilt and independently checked against SMARD, OMIE and the ONS hourly
+  balance (see "Scope reduction and rebuild" above).
+- Price: DE-LU, FR, ES. Brazilian PLD by submarket (CCEE) is not registered.
+- Load and generation: DE-LU, FR, ES, BR-SIN, subject to each provider's
+  reported categories.
 - 24 aligned months of World Bank fuel, EEX EUA and ECB FX references.
 - Historical German clean spark and clean dark screening spreads with explicit
   efficiency, emissions and coal-energy assumptions.
@@ -290,36 +366,38 @@ Important paths:
 
 - Store UTC-aware interval-start timestamps; group through market-local time.
 - Integrate MW over each observation's duration; never assume an hourly row.
-- Keep market time separate from civil time where required by AEMO.
 - Apply each market's declared peak block. Do not substitute daily max/min.
 - Preserve negative and zero prices. Use arithmetic price changes.
 - Keep currencies separate except where historical ECB FX is explicitly part
   of a European spread calculation.
-- Keep CCEE PLD by submarket and BR-SIN physical load/generation separate.
 - Missing observations stay missing. Do not synthesize provider data.
 - Withhold carbon intensity below 95% known-factor generation coverage.
 - Label carbon intensity and thermal spreads as estimates with assumptions.
+- Every registered zone's source must need no credential and no manual import
+  step, and must be checkable against a publisher independent of itself
+  (`scripts/audit_external.py`). This is what the 2026-09-13 scope reduction
+  enforces and `test_data_review.py` asserts; do not register a new zone that
+  fails either test without discussing it with the user first.
 
 ## Provider constraints
 
-- EIA requires `EIA_API_KEY`; the key is in ignored local configuration and
-  GitHub Actions secrets.
 - The ONS verified-load API exposes a `SIN` aggregate that answers with every
   value zeroed, so national load is summed from its four submarket areas and a
   timestamp is only kept when all four reported. Its Southeast code is `SECO`;
   the older `SE` returns an empty list rather than an error.
 - The ONS hourly balance trails real time by about two days. No faster ONS
   source for generation by technology exists.
-- CCEE returned HTTP 403 to automated requests on this workstation. The
-  official file is under `data/raw/ccee/`, and `GPA_CCEE_IMPORT_DIR` in the
-  local `.env` enables its parser. Raw downloads are ignored; curated output
-  is committed.
 - Energy-Charts can return HTTP 429 during long backfills; the HTTP layer
-  retries and honours `Retry-After`.
-- OpenElectricity rejects hourly windows longer than 32 days.
-- US EIA-930 data contains balancing-authority load/generation, not hub or
-  nodal wholesale prices.
+  retries and honours `Retry-After`. It moved the European day-ahead auction
+  from hourly to quarter-hourly products on 2025-10-01; the adapter now infers
+  resolution per request window rather than once per backfill (this was the
+  2026-09-13 rebuild's fix).
 - Fuel and carbon inputs are monthly reference benchmarks and carry basis risk.
+- EIA, PJM Data Miner, AEMO/OpenElectricity, JEPX and CCEE were the sources
+  behind the seven zones removed on 2026-09-13. Their constraints (credential
+  requirements, HTTP 403 to automated clients, manual CSV import) are recorded
+  in `TODO.md` under "Removed for lack of independent verification" as the
+  reason each was dropped, not as an active integration note.
 
 ## Resume instructions
 
@@ -327,14 +405,20 @@ Work from `C:\Users\Pedro\Desktop\Python\global-power-atlas`. Read
 `TODO.md` first and inspect `git status` for existing work. Do not use the
 old `power-pulse-global` directory.
 
-Sprint 1 and P3 are complete. Front C is retrospectively validated locally;
-preserve its existing implementation and distinguish local validation from
-publication and prospective acceptance. Remaining Front C TODOs track both.
-The later full review reopens specific data/metric and operational guarantees;
-read `docs/REVIEW-2026-09-13.md` before treating these historical milestones as
-evidence that all failure paths or interval conventions are covered.
+Sprint 1 and P3 are complete. Front C is retrospectively validated locally on
+the rebuilt four-zone store; preserve its existing implementation and
+distinguish local validation from publication and prospective acceptance.
+Remaining Front C TODOs track both. Read `docs/REVIEW-2026-09-13.md` for the
+full original review, and the "Scope reduction and rebuild" section above for
+what it triggered and what remains open from it.
 
-Two scope decisions are settled and should not be reopened without the user:
+As of this session's end, the scope-reduction and rebuild work described above
+is complete in the working tree (`git status` will show the deleted adapters
+and zone data, the promoted partitions, the workflow changes and the doc
+updates) but **not yet committed**; check whether a later session or the user
+committed it before assuming it is still pending.
+
+Three scope decisions are settled and should not be reopened without the user:
 
 - **No Airflow.** Orchestration stays on GitHub Actions. Airflow would need a
   scheduler, a metadata database and a webserver, none of which fit the free
@@ -342,6 +426,10 @@ Two scope decisions are settled and should not be reopened without the user:
   and reproduce the pipeline with no infrastructure.
 - **Forecasting before retrieval.** The evaluation harness built for Front C is
   what will later decide whether regulatory signals improve anything.
+- **Four zones, two keyless and independently-checkable sources.** Decided
+  2026-09-13. Do not re-add ERCOT, PJM, CAISO, AU-NSW1, JP-TOKYO or the CCEE
+  submarkets without either a credential-free path or a second independent
+  publisher to check the data against — see "Why four zones" in `README.md`.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
@@ -350,14 +438,18 @@ Two scope decisions are settled and should not be reopened without the user:
 .\.venv\Scripts\gpa.exe export
 .\.venv\Scripts\gpa.exe export --check
 npm run build
+.\.venv\Scripts\python.exe scripts\audit_external.py
 ```
 
 ### Prompt for the next AI
 
-> Work in `C:\Users\Pedro\Desktop\Python\global-power-atlas`. This is a Python ETL and
-> Observable Framework static site publishing wholesale electricity market
-> data for 11 zones across five continents, already live at
-> <https://pedrods20.github.io/global-power-atlas/>.
+> Work in `C:\Users\Pedro\Desktop\Python\global-power-atlas`. This is a Python
+> ETL and Observable Framework static site publishing wholesale electricity
+> market data for 4 zones (Germany-Luxembourg, France, Spain, Brazil's national
+> system), already live at
+> <https://pedrods20.github.io/global-power-atlas/> (the live site may still
+> show the older 11-zone build until this increment is committed and deployed
+> — check before assuming the two match).
 >
 > Read `STATE.md` and `TODO.md` before touching anything, and read
 > `site/methodology.md` before touching any metric. The domain rules in
@@ -365,27 +457,29 @@ npm run build
 > change pass.
 >
 > Set up with `python -m venv .venv` and
-> `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Historical P3 baseline:
-> 193 tests passing, ruff clean, `mypy` clean,
-> coverage at 78 percent against a 75 percent gate, `gpa validate`
-> reporting 616 valid partitions, and `gpa export --check` clean. Recheck these
-> before publishing; this historical baseline predates forecasting acceptance.
+> `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Baseline as of this
+> session: 259+ tests passing, ruff clean, mypy clean, coverage at 85 percent
+> against a 75 percent gate, `gpa validate` reporting 275 valid partitions, and
+> `gpa export --check` clean. Recheck these before publishing.
 >
-> Sprint 1 is complete. The user requested continuation of the TODOs on
-> 2026-09-13; this increment validates existing Front C work. Follow `TODO.md`
-> for remaining acceptance: Front C publication and prospective evaluation,
-> P2 data gaps, then Front B regulatory retrieval after Front C.
+> Sprint 1, P3 and the 2026-09-13 scope-reduction rebuild are complete. Follow
+> `TODO.md` for remaining acceptance: the still-open review priorities (2, 4
+> and 5 — duration-aware metrics, source-semantics/gap reporting, and
+> experiment-input versioning), Front C publication and prospective
+> evaluation, then Front B regulatory retrieval after Front C.
 >
-> Do not introduce Airflow, and do not start Front B before Front C. Both
-> decisions are recorded under "Scope decisions" in `TODO.md`.
+> Do not introduce Airflow, do not start Front B before Front C, and do not
+> re-add a removed zone without either a credential-free source or an
+> independent publisher to check it against. All three are recorded under
+> "Scope decisions" in `TODO.md`.
 >
 > After any change to ingestion or metrics, run `gpa export` and commit
-> `site/data`, or CI fails its freshness check.
+> `site/data`, or CI fails its freshness check. If you touch a source adapter
+> or the zone registry, re-run `scripts/audit_external.py` before trusting the
+> result.
 
 After changes to ingestion or metrics, regenerate and commit `site/data`.
 Keep `TODO.md` current as the handoff record and preserve the scope decisions
-above. Do not equate the local retrospective scores with prospective results.
-
-The remaining US price gaps are ERCOT and PJM, whose separate price sources
-require access credentials. CAISO already carries SP15 day-ahead prices from
-OASIS. Thermal spreads beyond Germany remain a separate open P2 item.
+above. Do not equate the local retrospective scores with prospective results,
+and do not average this rebuild's forecast numbers with any figure quoted
+before it — the underlying price history changed.

@@ -16,17 +16,10 @@ const profileRows = [...profile];
 const factorRows = [...factor];
 
 const zoneColor = new Map([
-  ["ERCOT", "#D55E00"],
   ["DE-LU", "#0072B2"],
   ["BR-SIN", "#009E73"],
-  ["AU-NSW1", "#CC79A7"],
-  ["PJM", "#E69F00"],
-  ["CAISO", "#56B4E9"],
   ["FR", "#332288"],
   ["ES", "#88CCEE"],
-  ["JP-TOKYO", "#AA4499"],
-  ["BR-SECO", "#117733"],
-  ["BR-NE", "#999933"],
 ]);
 const zoneOrder = [...zoneColor.keys()].filter((z) => load.some((d) => d.zone === z));
 const colorScale = {
@@ -68,7 +61,7 @@ Plot.plot({
 
 <div class="note">
 
-**Local hour, not UTC hour.** Grouping by UTC calendar hour would place the Australian evening peak in the middle of the chart and the Brazilian one three hours off. The Australian series uses Australian Eastern Standard Time year-round, because that is what AEMO settles on, not the civil clock in Sydney.
+**Local hour, not UTC hour.** Grouping by UTC calendar hour would place the Brazilian evening peak three hours off and the European one in the middle of the night for part of the year, since DE-LU, FR and ES shift between CET and CEST while Brazil does not observe daylight saving.
 
 </div>
 
@@ -198,7 +191,7 @@ Plot.plot({
 
 <div class="note">
 
-Brazil and Australia peak in the southern summer, Germany in the northern winter, and ERCOT in the northern summer. Averaging raw demand across them produces a flat line that describes no system. That is why every cross-market figure on this site is either normalised or kept in separate series.
+Brazil peaks in the southern summer; Germany, France and Spain peak in the northern winter. Averaging raw demand across them produces a flat line that describes no system. That is why every cross-market figure on this site is either normalised or kept in separate series.
 
 </div>
 

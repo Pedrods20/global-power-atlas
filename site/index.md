@@ -30,17 +30,10 @@ const freshnessRows = [...freshnessTable].map((d) => {
 // the mapping once. Okabe-Ito, which stays distinguishable for the most common
 // forms of colour vision deficiency.
 const zoneColor = new Map([
-  ["ERCOT", "#D55E00"],
   ["DE-LU", "#0072B2"],
   ["BR-SIN", "#009E73"],
-  ["AU-NSW1", "#CC79A7"],
-  ["PJM", "#E69F00"],
-  ["CAISO", "#56B4E9"],
   ["FR", "#332288"],
   ["ES", "#88CCEE"],
-  ["JP-TOKYO", "#AA4499"],
-  ["BR-SECO", "#117733"],
-  ["BR-NE", "#999933"],
 ]);
 
 const zoneOrder = [...zoneColor.keys()].filter((z) => prices.some((p) => p.zone === z));
@@ -96,10 +89,9 @@ html`<div class="freshness ${stale.length ? "freshness-warn" : "freshness-ok"}">
 
 Providers do not publish at the same speed, so each series carries its own
 limit rather than one global threshold. Brazilian generation is allowed four
-days because the ONS hourly balance trails real time by about two. The two CCEE
-price zones are allowed a month because the provider refuses automated clients
-and they are imported by hand. The [methodology](./methodology) sets out each
-limit and the reason behind it.
+days because the ONS hourly balance trails real time by about two; every other
+series here defaults to 36 hours. The [methodology](./methodology) sets out
+each limit and the reason behind it.
 
 ```js
 Plot.plot({
@@ -158,7 +150,7 @@ Inputs.table(zoneRows, {
 
 <div class="note">
 
-Each dataset is published only after its source adapter, schema validation and chart export work end to end. Dataset availability differs by zone: ERCOT, PJM and CAISO currently supply load and generation through EIA-930; US wholesale prices require a separate source.
+Each dataset is published only after its source adapter, schema validation and chart export work end to end. Dataset availability differs by zone: Brazil (BR-SIN) carries load and generation but no price, since PLD by submarket is a separate, credentialed source that is not currently registered.
 
 </div>
 

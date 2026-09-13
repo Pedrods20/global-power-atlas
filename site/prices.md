@@ -18,17 +18,9 @@ const negativeRows = [...negatives];
 const volRows = [...volatility];
 
 const zoneColor = new Map([
-  ["ERCOT", "#D55E00"],
   ["DE-LU", "#0072B2"],
-  ["BR-SIN", "#009E73"],
-  ["AU-NSW1", "#CC79A7"],
-  ["PJM", "#E69F00"],
-  ["CAISO", "#56B4E9"],
   ["FR", "#332288"],
   ["ES", "#88CCEE"],
-  ["JP-TOKYO", "#AA4499"],
-  ["BR-SECO", "#117733"],
-  ["BR-NE", "#999933"],
 ]);
 const zoneOrder = [...zoneColor.keys()].filter((z) => prices.some((p) => p.zone === z));
 const colorScale = {
@@ -41,7 +33,7 @@ const currencyOf = new Map(prices.map((d) => [d.zone, d.currency]));
 
 ## Peak against off-peak
 
-The spread below is the mean of on-peak intervals minus the mean of off-peak intervals, where membership follows each market's own block rule. NERC on-peak runs hour-ending 0700 to 2200, Monday to Saturday, excluding six holidays. European peakload runs 08:00 to 20:00 CET, Monday to Friday, holidays included. They are genuinely different products and cannot be swapped.
+The spread below is the mean of on-peak intervals minus the mean of off-peak intervals, where membership follows each market's own block rule. European peakload runs 08:00 to 20:00 CET, Monday to Friday, with public holidays not adjusted for.
 
 This is not the daily maximum minus the daily minimum. That quantity is intraday range, it is much larger, and it is the most common thing mislabelled as a peak spread.
 
@@ -79,7 +71,7 @@ Plot.plot({
 
 <div class="note">
 
-**A negative spread is a market state, not a data error.** When enough solar is installed, midday output pushes the middle of the day below the shoulders, and the on-peak block ends up cheaper than off-peak. Germany, Spain, California and South Australia all reach this routinely now. It is the mechanism that erodes solar's own revenue, and it is quantified as the [capture rate](./supply).
+**A negative spread is a market state, not a data error.** When enough solar is installed, midday output pushes the middle of the day below the shoulders, and the on-peak block ends up cheaper than off-peak. Germany and Spain both reach this routinely now. It is the mechanism that erodes solar's own revenue, and it is quantified as the [capture rate](./supply).
 
 </div>
 

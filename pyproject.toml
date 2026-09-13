@@ -1,12 +1,12 @@
 [project]
 name = "global-power-atlas"
 version = "0.1.0"
-description = "Reproducible ingestion and analytics for wholesale electricity markets across five continents."
+description = "Reproducible ingestion, analytics and price forecasting for European and Brazilian electricity markets."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Pedro Cabral" }]
-keywords = ["electricity", "power-markets", "energy", "entsoe", "eia", "ons", "opennem"]
+keywords = ["electricity", "power-markets", "energy", "energy-charts", "ons", "forecasting"]
 
 dependencies = [
     "httpx>=0.27",

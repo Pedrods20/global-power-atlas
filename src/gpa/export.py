@@ -104,10 +104,26 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     }
     # The backtest is the one expensive step in this module, so it is run once
     # here and its results are handed to both consumers rather than recomputed.
+    from gpa import quality
     from gpa.forecast import backtest as harness
+    from gpa.forecast import snapshot
 
-    forecasts = harness.published()
-    tables.update(_forecast_tables(forecasts))
+    tables["data_quality"] = quality.report()
+    saved = snapshot.read()
+    if saved is None:
+        forecasts = harness.published()
+        tables.update(_forecast_tables(forecasts))
+        runs = _forecast_runs(forecasts)
+    else:
+        metadata, frames = saved
+        runs = {"runs": [metadata]}
+        for suffix in ("scores", "daily", "predictions", "coefficients"):
+            result = frames[suffix]
+            if suffix == "predictions":
+                result = result.drop("ts_utc").with_columns(pl.col(pl.Float64).round(2))
+            tables[f"forecast_{suffix}"] = result.with_columns(
+                pl.lit(metadata["zone"]).alias("zone")
+            )
 
     written: dict[str, int] = {}
     for name, frame in tables.items():
@@ -124,11 +140,10 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     )
     written["zones.json"] = len(overview["zones"])
 
-    runs = _forecast_runs(forecasts)
     (destination / "forecast.json").write_text(
         json.dumps(runs, indent=2, default=str), encoding="utf-8"
     )
-    written["forecast.json"] = len(forecasts)
+    written["forecast.json"] = len(runs["runs"])  # type: ignore[arg-type]
 
     return written
 
@@ -203,11 +218,7 @@ def _for_each(dataset: str, builder) -> pl.DataFrame:  # type: ignore[no-untyped
         frame = store.read(dataset, zone.code)
         if frame.is_empty():
             continue
-        try:
-            result = builder(frame, zone)
-        except Exception:
-            log.exception("export failed for %s %s", zone.code, dataset)
-            continue
+        result = builder(frame, zone)
         if result.is_empty():
             continue
         frames.append(result.with_columns(pl.lit(zone.code).alias("zone")))
@@ -317,13 +328,7 @@ def _capture_rates() -> pl.DataFrame:
             continue
 
         for fuel in ("solar", "wind"):
-            try:
-                result = price_metrics.capture_rate(
-                    prices, generation, zone, fuel=fuel, period="month"
-                )
-            except Exception:
-                log.exception("capture rate failed for %s %s", zone.code, fuel)
-                continue
+            result = price_metrics.capture_rate(prices, generation, zone, fuel=fuel, period="month")
             if result.is_empty():
                 continue
             frames.append(
@@ -401,10 +406,9 @@ def _freshness() -> pl.DataFrame:
     ``gpa export --check`` fail on every run.
 
     Published so a reader can see the age of what they are looking at instead
-    of assuming every series is equally current. That matters most for the two
-    CCEE zones, which are refreshed by hand because the provider blocks
-    automated clients, and for Brazilian generation, which trails real time by
-    about two days for reasons that belong to ONS rather than to this project.
+    of assuming every series is equally current. That matters most for Brazilian
+    generation, which trails real time by about two days for reasons that belong
+    to ONS rather than to this project.
     """
     from gpa import freshness as freshness_module
 
@@ -453,7 +457,6 @@ def _overview() -> Overview:
                 "region": zone.region.value,
                 "operator": zone.operator,
                 "timezone": zone.timezone,
-                "civil_timezone": zone.civil_timezone,
                 "observes_market_dst": zone.observes_market_dst,
                 "currency": zone.currency,
                 "peak_block": zone.peak.label,

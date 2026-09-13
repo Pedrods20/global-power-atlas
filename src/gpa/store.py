@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import tempfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -139,10 +140,23 @@ def write(frame: pl.DataFrame, dataset: str, *, validate_first: bool = True) -> 
             merged = incoming
 
         merged = merged.unique(subset=key, keep="last").sort(key)
-        merged.write_parquet(path, compression="zstd", statistics=True)
+        atomic_parquet(merged, path)
         written.append(path)
 
     return sorted(written)
+
+
+def atomic_parquet(frame: pl.DataFrame, path: Path) -> None:
+    """Replace a complete partition on the same filesystem; never truncate it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=".gpa-", suffix=".tmp", dir=path.parent)
+    os.close(descriptor)
+    temporary = Path(name)
+    try:
+        frame.write_parquet(temporary, compression="zstd", statistics=True)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def available_months(dataset: str, zone: str) -> list[str]:

@@ -7,12 +7,12 @@
       "timezone": "Europe/Berlin",
       "target": "Day-ahead price for one market-local hour, as the duration-weighted mean of the intervals the auction published for that hour.",
       "gate": "12:00 market time on the day before delivery, when the day-ahead auction closes for the following delivery day.",
-      "train_start": "2024-09-20",
-      "validation_start": "2025-06-17",
-      "test_start": "2025-10-15",
+      "train_start": "2024-09-09",
+      "validation_start": "2025-06-06",
+      "test_start": "2025-09-04",
       "test_end": "2026-09-12",
-      "test_days": 333,
-      "scored_hours": 7982,
+      "test_days": 374,
+      "scored_hours": 8971,
       "alpha": 0.1,
       "reference": "naive_similar_day",
       "features": [
@@ -49,9 +49,9 @@
         "naive_previous_week",
         "naive_similar_day"
       ],
-      "best_mae": 21.060292830420345,
-      "best_skill_pct": 27.767014173250814,
-      "best_skill_vs_best_baseline_pct": 25.92293432193299,
+      "best_mae": 21.03558956221899,
+      "best_skill_pct": 30.33660751134939,
+      "best_skill_vs_best_baseline_pct": 26.967710005584678,
       "quantile_levels": [
         0.1,
         0.5,
@@ -61,8 +61,8 @@
       "evaluation": "retrospective development benchmark; not an untouched holdout",
       "data_vintages": "latest revised observations; publication-time vintages unavailable",
       "benchmark_end": "2026-09-12",
-      "input_sha256": "d891960f87329ab566389cf79acb2ad86f3ad238f15c9e4e41af8e632e6b2e6f",
-      "eligible_hours": 7986,
+      "input_sha256": "d6edc2fd09732784bf38c5366fae7a1d5b85e488026d1702e276dbe1a1c719bb",
+      "eligible_hours": 8975,
       "min_train_days": 270,
       "validation_days": 90,
       "window": null,
@@ -105,38 +105,38 @@
       "alpha_search": [
         {
           "alpha": 0.01,
-          "n": 2150,
-          "mae": 16.841407792647455
+          "n": 2155,
+          "mae": 16.579941693983606
         },
         {
           "alpha": 0.03,
-          "n": 2150,
-          "mae": 16.582128174237067
+          "n": 2155,
+          "mae": 16.263254842214852
         },
         {
           "alpha": 0.1,
-          "n": 2150,
-          "mae": 16.364270882232923
+          "n": 2155,
+          "mae": 15.974193385235989
         },
         {
           "alpha": 0.3,
-          "n": 2150,
-          "mae": 16.652056244019033
+          "n": 2155,
+          "mae": 16.20415524284527
         },
         {
           "alpha": 1.0,
-          "n": 2150,
-          "mae": 17.719543951845772
+          "n": 2155,
+          "mae": 17.48121701856278
         },
         {
           "alpha": 3.0,
-          "n": 2150,
-          "mae": 19.668709918084332
+          "n": 2155,
+          "mae": 20.021082099109783
         },
         {
           "alpha": 10.0,
-          "n": 2150,
-          "mae": 22.657824079487703
+          "n": 2155,
+          "mae": 23.870137227370048
         }
       ]
     }

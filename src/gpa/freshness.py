@@ -7,8 +7,7 @@ zero if no adapter raised.
 A single global threshold does not work here, because the providers do not
 publish at the same speed and the differences are legitimate. Brazilian
 generation trails real time by about two days because the ONS hourly balance
-does; EIA restates US generation on roughly a day's delay; European and
-Australian feeds arrive within hours. A threshold loose enough for the slowest
+does, while the European feeds arrive within hours. A threshold loose enough for the slowest
 would never catch the fastest going dark.
 
 So every rule is declared per zone and dataset, each with the reason for its
@@ -70,32 +69,6 @@ RULES: Final[dict[tuple[str, str], FreshnessRule]] = {
     ("BR-SIN", "generation"): FreshnessRule(
         max_lag_hours=96.0,
         reason="ONS publishes the hourly balance about two days behind real time.",
-    ),
-    # EIA-930 restates hourly generation for days after first publication and
-    # lands roughly a day behind. Demand arrives noticeably sooner.
-    ("ERCOT", "generation"): FreshnessRule(
-        max_lag_hours=48.0, reason="EIA-930 generation lands about a day behind."
-    ),
-    ("PJM", "generation"): FreshnessRule(
-        max_lag_hours=48.0, reason="EIA-930 generation lands about a day behind."
-    ),
-    ("CAISO", "generation"): FreshnessRule(
-        max_lag_hours=48.0, reason="EIA-930 generation lands about a day behind."
-    ),
-    # CCEE refuses automated clients, so the four PLD zones are imported by hand
-    # from official CSVs and are deliberately excluded from the daily cron.
-    # Staleness here is expected drift, not a broken pipeline, so it reports
-    # without failing. Thirty days is long enough not to nag and short enough
-    # that a forgotten refresh still surfaces.
-    ("BR-SECO", "price"): FreshnessRule(
-        max_lag_hours=24.0 * 30,
-        reason="CCEE blocks automated download; PLD is refreshed manually.",
-        manual=True,
-    ),
-    ("BR-NE", "price"): FreshnessRule(
-        max_lag_hours=24.0 * 30,
-        reason="CCEE blocks automated download; PLD is refreshed manually.",
-        manual=True,
     ),
 }
 

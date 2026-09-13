@@ -171,6 +171,28 @@ class Ridge:
     name: str = "ridge"
     description: str = "Per-hour ridge on lagged prices, residual load and the calendar."
 
+    def predict_day(self, panel: Panel, day: dt.date, *, min_train_rows: int) -> pl.DataFrame:
+        """Fit on known historical targets and predict feature-only delivery rows."""
+        rows: list[dict[str, object]] = []
+        training = panel.complete().filter(pl.col("local_date") < day)
+        future = panel.frame.filter(pl.col("local_date") == day).drop_nulls(list(panel.features))
+        for row in future.iter_rows(named=True):
+            history = training.filter(pl.col("local_hour") == row["local_hour"]).sort("local_date")
+            if self.window is not None:
+                history = history.tail(self.window)
+            if history.height < max(min_train_rows, len(panel.features) + 2):
+                continue
+            gram, cross = _moments(history, panel.features, panel.target)
+            weights = ridge_from_moments(gram, cross, alpha=self.alpha)
+            rows.append(
+                {
+                    "local_date": day,
+                    "local_hour": row["local_hour"],
+                    "forecast": predict(weights, [row[name] for name in panel.features]),
+                }
+            )
+        return pl.DataFrame(rows, schema=_FORECAST_SCHEMA)
+
     def forecasts(
         self,
         panel: Panel,

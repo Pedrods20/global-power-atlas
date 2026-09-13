@@ -2,45 +2,148 @@
 
 Steps 1-6 of the original delivery are complete and recorded in
 [`STATE.md`](STATE.md). The site is live at
-<https://pedrods20.github.io/global-power-atlas/> with 11 zones across five
-continents.
+<https://pedrods20.github.io/global-power-atlas/>, currently showing the
+older 11-zone build until this increment is committed, pushed and deployed.
+The repository now targets **4 zones** (Germany-Luxembourg, France, Spain,
+Brazil's national system) from **2 credential-free sources** (Energy-Charts,
+ONS) — see "Scope reduction, 2026-09-13" below for why.
 
 This file tracks **what is still missing**. Items are ordered by how much they
 affect the credibility of the published work, not by effort.
 
 The P1 block was cleared in the session of 2026-09-12; see
-the completed P1 items below for what changed and what it revealed.
+the completed P1 items below for what changed and what it revealed. Some P1
+and P2 items below describe zones that were later removed entirely (2026-09-13);
+they are kept as historical record with a note rather than deleted, since they
+explain decisions (e.g. why Brazilian load moved sourcing) that still hold for
+the zones that remain.
 
-Continuation, 2026-09-13: validate the existing local Front C implementation,
-correct its interval diagnostics, and align the documentation with the actual
-benchmark. Publication and prospective evaluation remain open.
+## Scope reduction and rebuild, 2026-09-13
 
-Review after commit `083063a`: the existing local checks pass, but the
-[full review](docs/REVIEW-2026-09-13.md) found additional correctness gaps.
-The following repair priorities are proposed for the next scope discussion;
-the historical completed items below do not establish that these cases work.
+The [full review](docs/REVIEW-2026-09-13.md) after commit `083063a` found a
+window-wide resolution-inference defect mislabelling part of the European
+price history, among other gaps. Rather than patch adapters in place, every
+zone whose only source needed a credential, blocked automated clients, or
+depended on a hand-imported CSV was removed from the registry, and the four
+that remained were rebuilt from cached provider responses and checked against
+an independent publisher. Full account in `STATE.md`'s "Scope reduction and
+rebuild" section. Summary:
 
-## Review priorities — before further model expansion
+- **Closed:** review priorities 1 (resolution transitions), 2 (duration-aware
+  metrics and capture alignment), 3 (deploy gated on CI) and 4 (source
+  semantics and structural coverage). Each is marked `[x]` below with what
+  changed.
+- **Removed for lack of independent verification:** ERCOT, PJM, CAISO,
+  AU-NSW1, JP-TOKYO, BR-SECO, BR-NE. See the dedicated section below for what
+  each would need to come back.
+- **Still open:** priority 5 (experiment-input versioning ahead of a
+  prospective evaluation) and one new open question the rebuild's own audit
+  raised (Spain's interval-labelling clock check).
 
-- [ ] **Repair Energy-Charts resolution transitions.** One inferred duration
-  per request mislabels hourly prices in mixed windows. Local September 2025
-  counts: 557 suspicious rows for DE-LU, 550 each for FR and ES. Verify with
-  official history, repair the adapter, re-fetch affected windows and regenerate.
-- [ ] **Finish duration-aware metrics and capture alignment.** Load factor and
-  duration curves count rows; volatility averages rows and bridges missing days;
-  capture rates combine repeated autumn clock hours. Add independently computed
-  counterexamples and refresh the figures after correcting them.
-- [ ] **Persist valid partial ingestion and deploy a validated revision.** A
-  failed ingest/export step currently skips commit; a post-commit freshness
-  failure blocks deployment. Push deploy is independent of CI. Define and test
-  the failure policy, and add automated browser smoke.
-- [ ] **Check source semantics and time coverage.** Flag unknown generation
+### Review priorities — before further model expansion
+
+- [x] **Repair Energy-Charts resolution transitions.** ~~One inferred
+  duration per request mislabels hourly prices in mixed windows. Local
+  September 2025 counts: 557 suspicious rows for DE-LU, 550 each for FR and
+  ES.~~ Fixed 2026-09-13: the adapter now infers resolution per request window;
+  the full store was rebuilt from cached provider responses and checked
+  against SMARD (DE-LU, FR) and OMIE (ES) with zero price mismatches over the
+  full two-year history. See `scripts/rebuild_verified.py` and
+  `scripts/audit_external.py`.
+- [x] **Finish duration-aware metrics and capture alignment.** ~~Load factor
+  and duration curves count rows; volatility averages rows and bridges missing
+  days; capture rates combine repeated autumn clock hours.~~ Fixed 2026-09-13:
+  `load_factor`/`daily_profile` now duration-weight the average instead of a
+  row mean; `duration_curve` ranks by cumulative duration, not row count;
+  `capture_rate` was rewritten to integrate the actual overlapping UTC
+  intervals of price and generation rather than grouping both onto a
+  market-local hour (which is what merged repeated autumn hours);
+  `realised_volatility` now upsamples to an explicit calendar-day index so a
+  rolling window cannot silently bridge a missing day. Named counterexamples
+  in `tests/test_data_review.py` (`test_mixed_duration_statistics_and_curve_endpoints`,
+  `test_capture_preserves_both_autumn_delivery_hours`,
+  `test_capture_integrates_overlaps_without_filling_a_gap`,
+  `test_volatility_does_not_bridge_missing_calendar_days`) exercise the real
+  `metrics/load.py` and `metrics/price.py` functions, not a reimplementation.
+- [x] **Persist valid partial ingestion and deploy a validated revision.**
+  ~~A failed ingest/export step currently skips commit; a post-commit
+  freshness failure blocks deployment. Push deploy is independent of CI.~~
+  Fixed 2026-09-13: `deploy.yml` is now `workflow_call`-only and publishes one
+  exact commit SHA; `ci.yml` calls it after lint/types/tests/export-check/build
+  and a new browser-smoke step all pass on `main`; `ingest.yml` calls it with
+  the commit it just made, independent of whether the subsequent freshness
+  check passes (a quiet provider should not hold back a good day from every
+  other market). Not yet proven on the Linux runner — the next push to `main`
+  is the first real test of the reusable-workflow wiring; watch that Actions
+  run for `workflow_call` permission or trigger errors before trusting it.
+- [x] **Check source semantics and time coverage.** ~~Flag unknown generation
   categories, select one load definition instead of summing alternatives, and
-  report gaps/resolution inconsistencies beyond dataset-level freshness.
+  report gaps/resolution inconsistencies beyond dataset-level freshness.~~
+  Fixed 2026-09-13: the Energy-Charts adapter now selects exactly one load
+  category (`Load`, not `Load (incl. self-consumption)`) and raises on an
+  unrecognised generation category instead of silently dropping or double
+  counting it (`test_energy_charts_selects_one_load_definition_and_rejects_unknown_units`,
+  `test_energy_charts_battery_output_and_charging_net_but_never_double_count`).
+  `src/gpa/quality.py` (new) reports per-fuel structural coverage, gap hours
+  and invalid/overlapping rows per zone and dataset, exported as
+  `data_quality.parquet` and gated with a new `gpa audit` CLI command wired
+  into both `ci.yml` (after `gpa validate`) and `ingest.yml` (before commit,
+  so a structural problem blocks persistence rather than only staleness).
+  Not yet done: `data_quality.parquet` is exported but no site page reads it,
+  so a reader has no visible view of per-fuel coverage — only CI/ingest see
+  it. A methodology-page or dedicated table would close that last piece, but
+  it is presentation, not correctness.
 - [ ] **Version experiment inputs and separate future prediction rows.** The
   cutoff date does not freeze revised history, and fitted models currently
-  require target prices to select prediction rows. Retain experiment snapshots
-  and implement issuance without target labels before prospective evaluation.
+  require target prices to select prediction rows. `src/gpa/forecast/snapshot.py`
+  (new, 2026-09-13) provides content-addressed, checksum-verified experiment
+  snapshots (`save()`/`read()`) but nothing yet calls `save()` from the backtest
+  CLI path or wires `read()` into export, so no snapshot has actually been
+  taken yet. Retain a snapshot and implement issuance without target labels
+  before prospective evaluation.
+- [ ] **Open question from the rebuild's own audit, not a prior review
+  finding:** `scripts/audit_external.py`'s solar-generation "clock" check
+  (peak output should sit near local solar noon, an interval-labelling check
+  that needs no second publisher) reads Spain's generation timestamps as
+  marginally closer to interval-*end* than interval-*start* — about 7 minutes
+  at quarter-hour resolution, against a heuristic coarse enough that this may
+  be noise rather than a real defect. DE-LU, FR and BR-SIN all read cleanly as
+  interval-start. Worth another look with a tighter method (e.g. restricting
+  to the days nearest the equinox, or a per-day rather than per-month
+  centroid) before either dismissing it or treating ES generation timestamps
+  as suspect.
+
+## Removed for lack of independent verification, 2026-09-13
+
+Every zone below was previously registered and delivering data; each is now
+absent from `src/gpa/zones.py`, its adapter deleted, and its old
+`data/curated` partitions removed from git. This is a deliberate scope
+decision (see `README.md`'s "Why four zones" and `STATE.md`'s "Scope reduction
+and rebuild"), not an oversight, and re-adding any of these needs the user's
+sign-off since it reopens a decision the user already made once. What each
+would need to come back cleanly:
+
+- **ERCOT price/load/generation.** Blocked on access: every ERCOT host
+  returns HTTP 403 to automated clients and `mis.ercot.com` fails the TLS
+  handshake. Needs a registered ERCOT API account.
+- **PJM price/load/generation.** Needs a free Data Miner 2 subscription key.
+- **CAISO price/load/generation.** Load/generation came from EIA (needs
+  `EIA_API_KEY`); price came from the credential-free CAISO OASIS interface,
+  which had no independent second publisher on hand to check it against.
+  Reviving just the price series would need finding one (a Californian
+  utility's or the CPUC's own published SP15 reference, if one exists) before
+  it meets the current bar.
+- **AU-NSW1 price/load/generation.** AEMO's own archive (price, load) needs no
+  credential, but had no second publisher to check against; OpenElectricity
+  (generation) is a redistributor of the same AEMO data, so checking one
+  against the other proves nothing about accuracy, only self-consistency.
+- **JP-TOKYO price.** JEPX needs no credential but likewise had no
+  independent second publisher identified.
+- **BR-SECO, BR-NE (CCEE PLD by submarket).** CCEE returns HTTP 403 to
+  automated clients; the only path is a hand-imported official CSV
+  (`GPA_CCEE_IMPORT_DIR`), which fails the "no manual import" bar even though
+  the data itself is likely trustworthy. The raw CSVs used before removal are
+  still under `data/raw/ccee/` if this is revisited.
 
 ---
 
@@ -57,7 +160,11 @@ one changed where Brazilian load comes from.
   Northeast now hold 23,661 contiguous hourly observations each, spanning
   2024-01-01 to date, with no gaps, duplicates or nulls. The official CSVs live
   under `data/raw/ccee/` and are read through `GPA_CCEE_IMPORT_DIR`; the
-  provider still refuses automated download.
+  provider still refuses automated download. **Superseded 2026-09-13:** both
+  CCEE submarkets were later removed from the registry because a hand-imported
+  CSV fails the "no manual import" bar adopted in the scope reduction — see
+  "Removed for lack of independent verification" above. The raw CSVs are still
+  under `data/raw/ccee/` if this is revisited.
 
 - [x] **Diagnose the BR-SIN freshness lag.** It was both a provider lag and a
   correctable sourcing choice, so the answer is split.
@@ -149,47 +256,41 @@ to; never lower it to make a change pass.
 Front C now has local retrospective validation; publication remains pending
 and Front B follows it.
 
-## P2 - Analytical asymmetries
+## P2 - Analytical asymmetries (superseded 2026-09-13)
 
-California is done. ERCOT and PJM are blocked on access, not on code.
+Every item below concerned a zone (CAISO, ERCOT, PJM, JP-TOKYO) removed from
+the registry in the 2026-09-13 scope reduction; see "Removed for lack of
+independent verification" above. Kept as historical record of what was built
+and why it was later dropped, not as active work.
 
-- [x] **Californian day-ahead price via CAISO OASIS.** 17,520 contiguous hourly
-  observations over two years at the SP15 trading hub, no gaps. CAISO is the
-  one large US market whose price is reachable without a credential.
+- [x] **Californian day-ahead price via CAISO OASIS.** ~~17,520 contiguous
+  hourly observations over two years at the SP15 trading hub, no gaps. CAISO
+  is the one large US market whose price is reachable without a credential.~~
+  Three OASIS behaviours were handled, each with a named test, because all
+  three fail quietly: an LMP is five components and only the total is a
+  price; an empty window returns XML with error code 1000 inside a 200
+  response, which a CSV parser reads as a table whose only column is the XML
+  declaration; and rate limiting also returns 200, carrying HTML rather than a
+  429, so the shared retry layer cannot see it. What it showed: the NERC
+  on-peak block cleared below off-peak at SP15 for three consecutive years,
+  12.04 percent of day-ahead hours were negative, and solar captured 0.603 of
+  the average price against 0.971 for wind. Removed 2026-09-13: no independent
+  publisher was found to check the price series against, and the load/
+  generation series depended on `EIA_API_KEY`.
 
-  Three OASIS behaviours are now handled and each has a named test, because all
-  three fail quietly: an LMP is five components and only the total is a price;
-  an empty window returns XML with error code 1000 inside a 200 response, which
-  a CSV parser reads as a table whose only column is the XML declaration; and
-  rate limiting also returns 200, carrying HTML rather than a 429, so the
-  shared retry layer cannot see it. The window cap is 30 rather than 31,
-  because OASIS counts calendar days touched, so a 31-day window starting
-  mid-afternoon spans 32 and is rejected with error 1004.
+- [ ] ~~**ERCOT price.**~~ Removed with the zone. Blocked on access if ever
+  revisited: every ERCOT host returns HTTP 403 to automated clients, and
+  `mis.ercot.com` fails the TLS handshake.
 
-  What it shows: the NERC on-peak block has cleared below off-peak at SP15 for
-  three consecutive years, 12.04 percent of day-ahead hours are negative, and
-  solar captures 0.603 of the average price against 0.971 for wind.
+- [ ] ~~**PJM price.**~~ Removed with the zone. Needs a free Data Miner 2
+  subscription key if ever revisited.
 
-- [ ] **ERCOT price.** Blocked, not unimplemented. Every ERCOT host returns
-  HTTP 403 to automated clients: `api.ercot.com`, `www.ercot.com` and
-  `data.ercot.com` all sit behind the same bot protection, and `mis.ercot.com`
-  fails the TLS handshake. The legitimate route is to register for an ERCOT API
-  account and use the issued credential; do not attempt to defeat the block.
-  Once a credential exists this is an adapter following `caiso.py`.
+- [ ] **Extend thermal spreads beyond Europe.** `europe_spreads.parquet`
+  covers 24 months for Germany only. With CAISO gone, this is deferred until
+  a registered zone has both a price series and a matching fuel-cost
+  reference; France and Spain are the nearer candidates now.
 
-- [ ] **PJM price.** Needs a free Data Miner 2 subscription key, registered at
-  `dataminer2.pjm.com`. `api.pjm.com` answers 401 without one. Same shape of
-  work as ERCOT once the key exists.
-
-- [ ] **Extend thermal spreads beyond Europe.** `europe_spreads.parquet` covers
-  24 months for Germany only. CAISO price now exists, so a Californian spark
-  spread is possible against a gas reference, though Henry Hub is a poor basis
-  for California and SoCal Border would be the honest choice.
-
-- [ ] **Add load and generation for JP-TOKYO.** The zone holds price only, so
-  Asia contributes nothing to the demand, supply or carbon pages. OCCTO
-  publishes area demand; TEPCO publishes its own area records. **Done when**
-  Tokyo appears on the demand and supply pages.
+- [ ] ~~**Add load and generation for JP-TOKYO.**~~ Removed with the zone.
 
 ## P3 - Operations
 
@@ -206,16 +307,18 @@ California is done. ERCOT and PJM are blocked on access, not on code.
   single stale provider discarding a whole day from every other market.
 
   Rules are per zone and dataset because the providers differ legitimately.
-  Brazilian generation is allowed 96 hours because ONS trails by two days; US
-  generation 48 because EIA restates on a day's delay; everything else 36. Each
-  rule carries its reason, and a test asserts none is left unexplained.
+  Brazilian generation is allowed 96 hours because ONS trails by two days;
+  everything else defaults to 36. ~~US generation 48 because EIA restates on a
+  day's delay~~ no longer applies: the US zones that rule covered were removed
+  2026-09-13. Each rule carries its reason, and a test asserts none is left
+  unexplained.
 
-- [x] **Formalise the CCEE refresh.** The two PLD zones are declared manual and
-  allowed 30 days. They report staleness but never fail the run, since nobody
-  can fix them from a cron job and nightly failures would train people to
-  ignore the alarm. Their age is now visible on the front page, alongside every
-  other series measured against its own limit, so a reader sees the drift
-  rather than trusting a stale number.
+- [x] ~~**Formalise the CCEE refresh.**~~ Superseded 2026-09-13: both CCEE
+  zones were removed from the registry rather than kept on a manual-refresh
+  rule, so there is no longer a "manual" freshness category at all — see
+  "Removed for lack of independent verification" above. The mechanism
+  (`FreshnessRule.manual`) still exists in `src/gpa/freshness.py` for a future
+  zone that genuinely needs it, but nothing currently uses it.
 
 - [x] **Add CI and deploy badges to the README.**
 
@@ -254,20 +357,28 @@ anything, rather than being assumed to.
   price, complete observed hours only. Repeated autumn clock hours are averaged
   into one cell. Price lags start at D-1, actuals-derived inputs at D-2; source
   revisions are not historical publication-time vintages.
-- [x] **Show failure honestly in the local page.** LightGBM loses to the best
-  naive baseline on negative hours (skill -3.5%) and scarce hours (-9.5%).
-  Every model uses the same 7,982 cells over 333 calendar days, ending
-  2026-09-12. Ridge MAE is 21.06 EUR/MWh; LightGBM is 22.18. This is a
-  retrospective development benchmark, not an untouched holdout.
+- [x] **Show failure honestly in the local page.** Numbers updated 2026-09-13
+  after the price-history rebuild (previous figures below are stale — this is
+  the "a capped benchmark still changes when revised inputs arrive" review
+  finding, confirmed in practice): LightGBM loses to the best naive baseline
+  on negative hours (skill -8.5%) and scarce hours (-11.8%). Every model uses
+  the same 8,971 cells over 374 calendar days, ending 2026-09-12. Ridge MAE is
+  21.04 EUR/MWh; LightGBM is 22.48. This is a retrospective development
+  benchmark, not an untouched holdout. Do not average these figures with the
+  pre-rebuild ones (7,982 cells, 333 days, ridge 21.06, LightGBM 22.18) —
+  they describe different, non-comparable input data.
 - [x] **Validate predictive intervals numerically.** Pinball, coverage and
   mean width have hand-calculated test cases; coverage is computed before
   chart values are rounded. Incomplete intervals do not enter coverage/width.
   Local MLflow runs record these diagnostics alongside inputs and source.
 - [x] **Commit the local increment.** Forecasting implementation, tests and
   regenerated `site/data` are in `083063a`.
-- [ ] **Publish after resolving review findings.** Integrate the remote ingest
-  (`92a4d83` at review), regenerate derived files, and verify CI, deploy and the
-  hosted desktop/mobile smoke before claiming forecasting is live.
+- [ ] **Publish after resolving review findings.** The data/metric/deploy
+  findings are resolved as of 2026-09-13 (see "Scope reduction and rebuild" in
+  `STATE.md`); the remaining step is committing, pushing, and verifying the
+  new CI→deploy and ingest→deploy wiring actually works on the Linux runner
+  (untested as of this writing — the reusable-workflow call is new), then the
+  hosted desktop/mobile smoke, before claiming forecasting is live.
 - [ ] **Record a prospective evaluation.** Issue and retain forecasts before
   prices become known, preserve input vintages and evaluate the separate period.
   The historical benchmark is capped at 2026-09-12; extending that cap is not
@@ -300,17 +411,22 @@ forecasting helper; the other items still need implementation.
   already used as a lagged feature for Front C; publication as a market metric
   and duration curve is still pending.
 
-- [ ] **Ramp analysis.** Hourly and sub-hourly ramp rates, and the annual
-  worst-case ramp, which is what dimensions flexible capacity. Australia's
-  five-minute data makes this genuinely interesting.
+- [ ] **Ramp analysis.** Hourly ramp rates, and the annual worst-case ramp,
+  which is what dimensions flexible capacity. ~~Australia's five-minute data
+  makes this genuinely interesting~~ — AU-NSW1 was removed 2026-09-13; this is
+  now hourly-resolution analysis on DE-LU/FR/ES/BR-SIN only, still useful but
+  less distinctive without sub-hourly data.
 
 - [ ] **Storage arbitrage value.** Perfect-foresight daily spread capture for a
   one-hour and four-hour battery, per market. Directly answers what storage
   would have earned on the stored history.
 
-- [ ] **Nodal or locational coverage.** Everything is currently hub or zonal,
-  so congestion and basis are invisible. Documented as a limitation today;
-  CAISO OASIS LMP would be the natural first step.
+- [ ] **Nodal or locational coverage.** Everything is currently a bidding zone
+  or a national system, so congestion and basis are invisible. Documented as a
+  limitation today. ~~CAISO OASIS LMP would be the natural first step~~ — CAISO
+  was removed 2026-09-13; no currently-registered zone publishes nodal prices,
+  so this would need either reviving CAISO under a found independent check or
+  registering a new nodal-price zone from scratch.
 
 ---
 
@@ -332,6 +448,18 @@ forecasting helper; the other items still need implementation.
   here. They are the two that dominate Brazilian price formation, and the other
   two added two more series to every chart without changing the reading. This
   was the user's call on 2026-09-12; their curated partitions were deleted.
+  **Superseded 2026-09-13:** moot now that both remaining CCEE submarkets were
+  also removed — see the next decision.
+
+- **Four zones, two keyless and independently-checkable sources.** Decided
+  2026-09-13, at the user's confirmation after this session found the
+  resolution-transition review finding and proposed the trade-off. ERCOT, PJM,
+  CAISO, AU-NSW1, JP-TOKYO and both CCEE submarkets were removed because each
+  either needed a credential this project chooses not to require, or had no
+  publisher independent of the one already stored to check it against — see
+  "Removed for lack of independent verification" above. Do not re-add any of
+  them without either resolving that gap or getting the user's sign-off to
+  accept the weaker guarantee.
 
 ## Constraints that must survive any future work
 
@@ -341,6 +469,10 @@ forecasting helper; the other items still need implementation.
   or CI fails its freshness check.
 - The domain rules in `STATE.md` are enforced by named tests. Do not relax a
   test to make a change pass.
+- Every registered zone's source needs no credential, no manual import step,
+  and must be checkable against a publisher independent of itself. Re-run
+  `scripts/audit_external.py` after touching a source adapter or the zone
+  registry.
 
 ## Commands
 
@@ -349,10 +481,13 @@ Run from the project directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\python.exe -m mypy
 .\.venv\Scripts\gpa.exe validate
+.\.venv\Scripts\gpa.exe audit
 .\.venv\Scripts\gpa.exe stats
 .\.venv\Scripts\gpa.exe export
 .\.venv\Scripts\gpa.exe export --check
 npm run build
 node scripts/browser-smoke.mjs
+.\.venv\Scripts\python.exe scripts\audit_external.py
 ```

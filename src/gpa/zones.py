@@ -1,25 +1,18 @@
 """Canonical registry of wholesale electricity market zones.
 
 Everything in this project derives from this module. A *zone* is the smallest
-unit at which a price is formed and a schedule is settled. Depending on the
-market that is an ISO/RTO hub (ERCOT), a bidding zone (DE-LU), a subsystem
-(BR-SIN) or a NEM region (AU-NSW1).
+unit at which a price is formed or a schedule is settled: a European bidding
+zone (DE-LU) or a national interconnected system (BR-SIN).
 
-Two timezone fields exist on purpose, and the distinction is not cosmetic:
+The registry is deliberately narrow. It carries only markets whose history can
+be refreshed by the scheduled job from public, credential-free interfaces, so
+that every series feeding the forecasting and retrieval work stays current and
+auditable. US, Australian, Japanese and CCEE series were retired on 2026-09-13
+for that reason; their code and data remain recoverable from Git history.
 
-``timezone``
-    The IANA zone in which the market defines its own trading day and its
-    peak/off-peak blocks. This is what all bucketing and block assignment uses.
-
-``civil_timezone``
-    The IANA zone civil life actually runs on. It differs from ``timezone``
-    only where a market deliberately refuses daylight saving. The Australian
-    NEM is the canonical case: AEMO settles every region on Australian Eastern
-    Standard Time all year, so a Victorian summer trading interval is stamped
-    an hour away from the clock on a Melbourne wall.
-
-Bucketing anything by UTC calendar day is always wrong and this project never
-does it. See ``gpa.calendar``.
+``timezone`` is the IANA zone in which the market defines its own trading day
+and its peak/off-peak blocks. Bucketing anything by UTC calendar day is always
+wrong and this project never does it. See ``gpa.calendar``.
 """
 
 from __future__ import annotations
@@ -29,7 +22,6 @@ from enum import StrEnum
 
 __all__ = [
     "ZONES",
-    "HolidayCalendar",
     "PeakBlock",
     "Region",
     "Zone",
@@ -42,39 +34,23 @@ __all__ = [
 class Region(StrEnum):
     """Continental grouping used for navigation and aggregation."""
 
-    NORTH_AMERICA = "North America"
-    ASIA = "Asia"
     EUROPE = "Europe"
     SOUTH_AMERICA = "South America"
-    OCEANIA = "Oceania"
-
-
-class HolidayCalendar(StrEnum):
-    """Which holiday set removes a day from the on-peak block."""
-
-    NERC = "NERC"
-    """The six NERC holidays used by every North American power market."""
-
-    NONE = "none"
-    """No holiday exclusion; the block is purely a weekday/hour rule."""
 
 
 @dataclass(frozen=True, slots=True)
 class PeakBlock:
     """A market's on-peak definition, in *market* local time.
 
-    Hours follow the hour-ending (HE) convention used by power markets, but are
-    stored here as the half-open interval of hour-*beginning* values so that
-    they compose cleanly with timestamp arithmetic. NERC on-peak is HE0700
-    through HE2200, which is hours beginning 06:00 through 21:00 inclusive, so
-    it is stored as ``start_hour=6, end_hour=22``.
+    Hours are stored as the half-open interval of hour-*beginning* values so
+    that they compose cleanly with timestamp arithmetic. European peakload,
+    08:00 to 20:00, is ``start_hour=8, end_hour=20``.
 
     Attributes:
         label: Human-readable name used in documentation and on the site.
         start_hour: First hour-beginning included in the block, 0-23.
         end_hour: First hour-beginning *excluded* from the block, 1-24.
         weekdays: ISO weekday numbers included, Monday=1 through Sunday=7.
-        holidays: Holiday calendar that removes an otherwise-eligible day.
         note: Caveat shown on the methodology page. Used where the block is a
             regulatory or tariff construct rather than a traded product.
     """
@@ -83,7 +59,6 @@ class PeakBlock:
     start_hour: int
     end_hour: int
     weekdays: tuple[int, ...]
-    holidays: HolidayCalendar = HolidayCalendar.NONE
     note: str | None = None
 
     def __post_init__(self) -> None:
@@ -104,31 +79,13 @@ class PeakBlock:
 
 # --- Standard blocks -------------------------------------------------------
 
-NERC_ON_PEAK = PeakBlock(
-    label="NERC on-peak (HE0700-HE2200, Mon-Sat, ex-NERC holidays)",
-    start_hour=6,
-    end_hour=22,
-    weekdays=(1, 2, 3, 4, 5, 6),
-    holidays=HolidayCalendar.NERC,
-)
-"""The North American standard. Note it includes Saturday, which surprises
-people who assume a five-day block."""
-
 EUROPEAN_PEAKLOAD = PeakBlock(
     label="European peakload (08:00-20:00 CET, Mon-Fri)",
     start_hour=8,
     end_hour=20,
     weekdays=(1, 2, 3, 4, 5),
 )
-"""EEX/EPEX Peakload. Unlike NERC it excludes Saturday and ignores holidays."""
-
-AEMO_PEAK = PeakBlock(
-    label="AEMO peak (07:00-22:00 AEST, Mon-Fri)",
-    start_hour=7,
-    end_hour=22,
-    weekdays=(1, 2, 3, 4, 5),
-)
-"""Australian business-day peak, expressed in NEM market time (AEST)."""
+"""EEX/EPEX Peakload. Excludes Saturday and ignores public holidays."""
 
 BR_PONTA = PeakBlock(
     label="Brazilian ponta (18:00-21:00, Mon-Fri)",
@@ -162,10 +119,8 @@ class Zone:
         sources: Dataset name to source identifier, e.g.
             ``{"price": "energy_charts", "load": "energy_charts"}``. A dataset
             absent from this mapping is simply not collected for the zone.
-        source_keys: Per-source upstream identifiers, e.g. the EIA respondent
-            code or the ENTSO-E EIC area code.
-        civil_timezone: IANA zone civil life runs on, when it differs from
-            ``timezone``. ``None`` means they are the same.
+        source_keys: Per-source upstream identifiers, e.g. the Energy-Charts
+            country code or the ONS subsystem.
         notes: Editorial context shown on the site.
     """
 
@@ -179,13 +134,7 @@ class Zone:
     peak: PeakBlock
     sources: dict[str, str] = field(default_factory=dict)
     source_keys: dict[str, str] = field(default_factory=dict)
-    civil_timezone: str | None = None
     notes: str = ""
-
-    @property
-    def market_timezone(self) -> str:
-        """Alias for ``timezone``, for call sites where the intent needs saying."""
-        return self.timezone
 
     @property
     def observes_market_dst(self) -> bool:
@@ -203,30 +152,10 @@ class Zone:
 
 
 # --- The registry ----------------------------------------------------------
-#
-# Phase 0 deliberately carries one zone per continent so the whole pipeline can
-# be proven end to end before breadth is added. Additional zones are cheap once
-# their source adapter exists: append here and the CLI, the store and the site
-# pick them up with no further change.
+
+_ENERGY_CHARTS = {"price": "energy_charts", "load": "energy_charts", "generation": "energy_charts"}
 
 ZONES: tuple[Zone, ...] = (
-    Zone(
-        code="ERCOT",
-        name="ERCOT (Texas)",
-        country="US",
-        region=Region.NORTH_AMERICA,
-        operator="Electric Reliability Council of Texas",
-        timezone="America/Chicago",
-        currency="USD",
-        peak=NERC_ON_PEAK,
-        sources={"load": "eia", "generation": "eia"},
-        source_keys={"eia_respondent": "ERCO"},
-        notes=(
-            "Energy-only market with no capacity payment, the largest installed wind "
-            "fleet in the United States, and a scarcity-pricing mechanism that lets "
-            "the offer cap drive extreme summer settlements."
-        ),
-    ),
     Zone(
         code="DE-LU",
         name="Germany-Luxembourg",
@@ -236,7 +165,7 @@ ZONES: tuple[Zone, ...] = (
         timezone="Europe/Berlin",
         currency="EUR",
         peak=EUROPEAN_PEAKLOAD,
-        sources={"price": "energy_charts", "load": "energy_charts", "generation": "energy_charts"},
+        sources=dict(_ENERGY_CHARTS),
         source_keys={"energy_charts_country": "de", "entsoe_eic": "10Y1001A1001A82H"},
         notes=(
             "The deepest power market in Europe and the reference for continental "
@@ -244,6 +173,28 @@ ZONES: tuple[Zone, ...] = (
             "system where wind and solar set price for a large and growing share of "
             "hours, and where negative prices are routine rather than exceptional."
         ),
+    ),
+    *(
+        Zone(
+            code=code,
+            name=name,
+            country=code,
+            region=Region.EUROPE,
+            operator=operator,
+            timezone=timezone,
+            currency="EUR",
+            peak=EUROPEAN_PEAKLOAD,
+            sources=dict(_ENERGY_CHARTS),
+            source_keys={"energy_charts_country": code.lower(), "energy_charts_bzn": code},
+            notes=(
+                "National generation and load, plus day-ahead bidding-zone prices, "
+                "redistributed by Energy-Charts."
+            ),
+        )
+        for code, name, operator, timezone in (
+            ("FR", "France", "RTE", "Europe/Paris"),
+            ("ES", "Spain", "Red Electrica", "Europe/Madrid"),
+        )
     ),
     Zone(
         code="BR-SIN",
@@ -263,151 +214,6 @@ ZONES: tuple[Zone, ...] = (
             "elsewhere, so scarcity shows up as a stored-energy problem first."
         ),
     ),
-    Zone(
-        code="AU-NSW1",
-        name="Australia NEM - New South Wales",
-        country="AU",
-        region=Region.OCEANIA,
-        operator="Australian Energy Market Operator",
-        timezone="Australia/Brisbane",
-        civil_timezone="Australia/Sydney",
-        currency="AUD",
-        peak=AEMO_PEAK,
-        # Price and demand come from AEMO's own public archive rather than a
-        # redistributor; only the fuel split needs a third party, because that
-        # archive does not carry one.
-        sources={"price": "aemo", "load": "aemo", "generation": "openelectricity"},
-        source_keys={
-            "aemo_region": "NSW1",
-            "opennem_region": "NSW1",
-            "opennem_network": "NEM",
-        },
-        notes=(
-            "Five-minute settlement since October 2021, the shortest dispatch and "
-            "settlement interval of any major market, over a fleet retiring coal "
-            "faster than it is replacing it. Market time is AEST year-round, which "
-            "is why this zone carries a separate civil timezone."
-        ),
-    ),
-)
-
-
-# Additional zones reuse adapters; dataset declarations remain explicit.
-#
-# PJM carries no price. EIA-930 publishes balancing-authority load and
-# generation but no price at all, and PJM's own Data Miner requires a
-# registered subscription key. ERCOT is in the same position for a different
-# reason: it returns 403 to automated clients on every host it publishes on.
-ZONES += tuple(
-    Zone(
-        code=code,
-        name=name,
-        country="US",
-        region=Region.NORTH_AMERICA,
-        operator=name,
-        timezone=timezone,
-        currency="USD",
-        peak=NERC_ON_PEAK,
-        sources={"load": "eia", "generation": "eia"},
-        source_keys={"eia_respondent": respondent},
-        notes="Balancing-authority load and generation from EIA-930. No price series is included.",
-    )
-    for code, name, timezone, respondent in (
-        ("PJM", "PJM Interconnection", "America/New_York", "PJM"),
-    )
-)
-
-# California is the one large US market whose price is reachable without a
-# credential, through the CAISO OASIS public interface.
-ZONES += (
-    Zone(
-        code="CAISO",
-        name="California ISO",
-        country="US",
-        region=Region.NORTH_AMERICA,
-        operator="California ISO",
-        timezone="America/Los_Angeles",
-        currency="USD",
-        peak=NERC_ON_PEAK,
-        sources={"load": "eia", "generation": "eia", "price": "caiso"},
-        source_keys={
-            "eia_respondent": "CISO",
-            # SP15 is the Southern California trading hub and the reference most
-            # Californian forward trades settle against.
-            "caiso_node": "TH_SP15_GEN-APND",
-            "caiso_market": "DAM",
-        },
-        notes=(
-            "Balancing-authority load and generation from EIA-930, and day-ahead price "
-            "from the CAISO OASIS SP15 trading hub. CAISO is a nodal market, so this "
-            "price is one hub rather than a single system price, and load covers the "
-            "whole balancing authority rather than the hub's footprint. Compare its "
-            "shape against other markets, not its level against a bidding-zone price."
-        ),
-    ),
-)
-ZONES += tuple(
-    Zone(
-        code=code,
-        name=name,
-        country=code,
-        region=Region.EUROPE,
-        operator=operator,
-        timezone=timezone,
-        currency="EUR",
-        peak=EUROPEAN_PEAKLOAD,
-        sources={"price": "energy_charts", "load": "energy_charts", "generation": "energy_charts"},
-        source_keys={"energy_charts_country": code.lower(), "energy_charts_bzn": code},
-        notes="National generation and load, plus day-ahead bidding-zone prices, redistributed by Energy-Charts.",
-    )
-    for code, name, operator, timezone in (
-        ("FR", "France", "RTE", "Europe/Paris"),
-        ("ES", "Spain", "Red Electrica", "Europe/Madrid"),
-    )
-)
-ZONES += (
-    Zone(
-        code="JP-TOKYO",
-        name="Japan - Tokyo area",
-        country="JP",
-        region=Region.ASIA,
-        operator="Japan Electric Power Exchange",
-        timezone="Asia/Tokyo",
-        currency="JPY",
-        peak=PeakBlock(
-            label="Analytical daytime (08:00-20:00 JST, Mon-Fri)",
-            start_hour=8,
-            end_hour=20,
-            weekdays=(1, 2, 3, 4, 5),
-            note="Analytical daytime comparison window, not a JEPX traded peakload product; holidays included.",
-        ),
-        sources={"price": "jepx"},
-        source_keys={"jepx_area": "東京"},
-        notes="Tokyo area day-ahead half-hourly spot price. JPY/kWh is converted to JPY/MWh. Traded volume is not system demand.",
-    ),
-)
-ZONES += tuple(
-    Zone(
-        code=code,
-        name=name,
-        country="BR",
-        region=Region.SOUTH_AMERICA,
-        operator="CCEE",
-        timezone="America/Sao_Paulo",
-        currency="BRL",
-        peak=BR_PONTA,
-        sources={"price": "ccee"},
-        source_keys={"ccee_submarket": submarket},
-        notes="Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
-    )
-    # Only the two submarkets that carry the country's load and price formation.
-    # South and North are published by CCEE but are deliberately not registered:
-    # they add two more series to every chart without changing the reading, and
-    # a narrower set that is fully explained beats a wider one that is not.
-    for code, name, submarket in (
-        ("BR-SECO", "Brazil - Southeast/Central-West", "SUDESTE"),
-        ("BR-NE", "Brazil - Northeast", "NORDESTE"),
-    )
 )
 
 _BY_CODE: dict[str, Zone] = {z.code: z for z in ZONES}
@@ -438,7 +244,7 @@ def zones_for_source(source: str, dataset: str | None = None) -> tuple[Zone, ...
     """All zones served by ``source``, optionally narrowed to one dataset.
 
     Args:
-        source: Source identifier such as ``"eia"`` or ``"energy_charts"``.
+        source: Source identifier such as ``"ons"`` or ``"energy_charts"``.
         dataset: If given, only zones collecting that dataset from the source.
     """
     if dataset is not None:

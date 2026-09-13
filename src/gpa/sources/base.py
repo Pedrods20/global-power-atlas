@@ -91,10 +91,9 @@ class Source(Protocol):
     """Largest window the provider will serve in one request, if it caps one.
 
     Providers differ sharply here and the limits are not documented in one
-    place. OpenElectricity rejects anything over 32 days at hourly resolution
-    outright; Energy-Charts accepts a long window but times out serving it;
-    AEMO and ONS publish whole files per month and per year, so a longer window
-    costs no extra requests at all. Declaring the cap here lets the pipeline
+    place. Energy-Charts accepts a long window but times out serving it; ONS
+    publishes whole files per year, so a longer window costs no extra requests
+    at all. Declaring the cap here lets the pipeline
     size its chunks per source instead of guessing one number for everything.
 
     ``None`` means the adapter imposes no limit of its own.
@@ -139,9 +138,7 @@ def require_env(name: str, *, source: str) -> str:
 
 
 _REGISTRATION_HINTS = {
-    "EIA_API_KEY": "https://www.eia.gov/opendata/register.php",
     "ENTSOE_API_KEY": "https://transparency.entsoe.eu/ (request the token by email)",
-    "OPENELECTRICITY_API_KEY": "https://platform.openelectricity.org.au/",
 }
 
 

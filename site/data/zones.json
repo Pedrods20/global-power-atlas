@@ -1,36 +1,6 @@
 {
-  "data_as_of": "2026-09-13T10:30:00+00:00",
+  "data_as_of": "2026-09-13T14:00:00+00:00",
   "zones": [
-    {
-      "code": "ERCOT",
-      "name": "ERCOT (Texas)",
-      "country": "US",
-      "region": "North America",
-      "operator": "Electric Reliability Council of Texas",
-      "timezone": "America/Chicago",
-      "civil_timezone": null,
-      "observes_market_dst": true,
-      "currency": "USD",
-      "peak_block": "NERC on-peak (HE0700-HE2200, Mon-Sat, ex-NERC holidays)",
-      "peak_note": null,
-      "notes": "Energy-only market with no capacity payment, the largest installed wind fleet in the United States, and a scarcity-pricing mechanism that lets the offer cap drive extreme summer settlements.",
-      "datasets": {
-        "load": {
-          "status": "ok",
-          "source": "eia",
-          "rows": 17535,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-13 09:00:00+00:00"
-        },
-        "generation": {
-          "status": "ok",
-          "source": "eia",
-          "rows": 138543,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-12 04:00:00+00:00"
-        }
-      }
-    },
     {
       "code": "DE-LU",
       "name": "Germany-Luxembourg",
@@ -38,7 +8,6 @@
       "region": "Europe",
       "operator": "50Hertz / Amprion / TenneT DE / TransnetBW",
       "timezone": "Europe/Berlin",
-      "civil_timezone": null,
       "observes_market_dst": true,
       "currency": "EUR",
       "peak_block": "European peakload (08:00-20:00 CET, Mon-Fri)",
@@ -48,157 +17,23 @@
         "price": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 42560,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-13 10:30:00+00:00"
+          "rows": 42855,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 14:00:00+00:00"
         },
         "load": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 70143,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-13 08:30:00+00:00"
+          "rows": 71282,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 12:15:00+00:00"
         },
         "generation": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 841716,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-13 08:30:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "BR-SIN",
-      "name": "Brazil (SIN)",
-      "country": "BR",
-      "region": "South America",
-      "operator": "Operador Nacional do Sistema Eletrico",
-      "timezone": "America/Sao_Paulo",
-      "civil_timezone": null,
-      "observes_market_dst": false,
-      "currency": "BRL",
-      "peak_block": "Brazilian ponta (18:00-21:00, Mon-Fri)",
-      "peak_note": "Brazil has settled a genuinely hourly PLD since January 2021, so it has no traded peak block. The ponta window is a distribution-tariff construct whose exact hours each distributor sets locally; 18:00-21:00 is the common case and is used here only to make Brazil comparable with other markets. Do not read it as a wholesale product.",
-      "notes": "A continent-scale hydro-dominated system operated as a single optimised cascade, where price is a model output rather than an auction clearing. Reservoir storage substitutes for the fuel-cost stack that sets price elsewhere, so scarcity shows up as a stored-energy problem first.",
-      "datasets": {
-        "load": {
-          "status": "ok",
-          "source": "ons",
-          "rows": 35062,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 10:30:00+00:00"
-        },
-        "generation": {
-          "status": "ok",
-          "source": "ons",
-          "rows": 69928,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-11 02:00:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "AU-NSW1",
-      "name": "Australia NEM - New South Wales",
-      "country": "AU",
-      "region": "Oceania",
-      "operator": "Australian Energy Market Operator",
-      "timezone": "Australia/Brisbane",
-      "civil_timezone": "Australia/Sydney",
-      "observes_market_dst": false,
-      "currency": "AUD",
-      "peak_block": "AEMO peak (07:00-22:00 AEST, Mon-Fri)",
-      "peak_note": null,
-      "notes": "Five-minute settlement since October 2021, the shortest dispatch and settlement interval of any major market, over a fleet retiring coal faster than it is replacing it. Market time is AEST year-round, which is why this zone carries a separate civil timezone.",
-      "datasets": {
-        "price": {
-          "status": "ok",
-          "source": "aemo",
-          "rows": 210204,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-12 13:55:00+00:00"
-        },
-        "load": {
-          "status": "ok",
-          "source": "aemo",
-          "rows": 210204,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-12 13:55:00+00:00"
-        },
-        "generation": {
-          "status": "ok",
-          "source": "openelectricity",
-          "rows": 157831,
-          "first": "2024-09-12 18:00:00+00:00",
-          "last": "2026-09-13 10:00:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "PJM",
-      "name": "PJM Interconnection",
-      "country": "US",
-      "region": "North America",
-      "operator": "PJM Interconnection",
-      "timezone": "America/New_York",
-      "civil_timezone": null,
-      "observes_market_dst": true,
-      "currency": "USD",
-      "peak_block": "NERC on-peak (HE0700-HE2200, Mon-Sat, ex-NERC holidays)",
-      "peak_note": null,
-      "notes": "Balancing-authority load and generation from EIA-930. No price series is included.",
-      "datasets": {
-        "load": {
-          "status": "ok",
-          "source": "eia",
-          "rows": 17535,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-13 09:00:00+00:00"
-        },
-        "generation": {
-          "status": "ok",
-          "source": "eia",
-          "rows": 140023,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-12 03:00:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "CAISO",
-      "name": "California ISO",
-      "country": "US",
-      "region": "North America",
-      "operator": "California ISO",
-      "timezone": "America/Los_Angeles",
-      "civil_timezone": null,
-      "observes_market_dst": true,
-      "currency": "USD",
-      "peak_block": "NERC on-peak (HE0700-HE2200, Mon-Sat, ex-NERC holidays)",
-      "peak_note": null,
-      "notes": "Balancing-authority load and generation from EIA-930, and day-ahead price from the CAISO OASIS SP15 trading hub. CAISO is a nodal market, so this price is one hub rather than a single system price, and load covers the whole balancing authority rather than the hub's footprint. Compare its shape against other markets, not its level against a bidding-zone price.",
-      "datasets": {
-        "price": {
-          "status": "ok",
-          "source": "caiso",
-          "rows": 17530,
-          "first": "2024-09-13 01:00:00+00:00",
-          "last": "2026-09-13 10:00:00+00:00"
-        },
-        "load": {
-          "status": "ok",
-          "source": "eia",
-          "rows": 17535,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-13 09:00:00+00:00"
-        },
-        "generation": {
-          "status": "ok",
-          "source": "eia",
-          "rows": 146337,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-12 06:00:00+00:00"
+          "rows": 855384,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 12:15:00+00:00"
         }
       }
     },
@@ -209,7 +44,6 @@
       "region": "Europe",
       "operator": "RTE",
       "timezone": "Europe/Paris",
-      "civil_timezone": null,
       "observes_market_dst": true,
       "currency": "EUR",
       "peak_block": "European peakload (08:00-20:00 CET, Mon-Fri)",
@@ -219,23 +53,23 @@
         "price": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 42524,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 10:30:00+00:00"
+          "rows": 42855,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 14:00:00+00:00"
         },
         "load": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 35888,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 08:45:00+00:00"
+          "rows": 36214,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 11:45:00+00:00"
         },
         "generation": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 366339,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 08:45:00+00:00"
+          "rows": 400197,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 11:45:00+00:00"
         }
       }
     },
@@ -246,7 +80,6 @@
       "region": "Europe",
       "operator": "Red Electrica",
       "timezone": "Europe/Madrid",
-      "civil_timezone": null,
       "observes_market_dst": true,
       "currency": "EUR",
       "peak_block": "European peakload (08:00-20:00 CET, Mon-Fri)",
@@ -256,92 +89,52 @@
         "price": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 42524,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 10:30:00+00:00"
+          "rows": 42855,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 14:00:00+00:00"
         },
         "load": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 69916,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 09:00:00+00:00"
+          "rows": 71141,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 13:15:00+00:00"
         },
         "generation": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 832133,
-          "first": "2024-09-13 00:00:00+00:00",
-          "last": "2026-09-13 09:00:00+00:00"
+          "rows": 877365,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 13:15:00+00:00"
         }
       }
     },
     {
-      "code": "JP-TOKYO",
-      "name": "Japan - Tokyo area",
-      "country": "JP",
-      "region": "Asia",
-      "operator": "Japan Electric Power Exchange",
-      "timezone": "Asia/Tokyo",
-      "civil_timezone": null,
-      "observes_market_dst": false,
-      "currency": "JPY",
-      "peak_block": "Analytical daytime (08:00-20:00 JST, Mon-Fri)",
-      "peak_note": "Analytical daytime comparison window, not a JEPX traded peakload product; holidays included.",
-      "notes": "Tokyo area day-ahead half-hourly spot price. JPY/kWh is converted to JPY/MWh. Traded volume is not system demand.",
-      "datasets": {
-        "price": {
-          "status": "ok",
-          "source": "jepx",
-          "rows": 35072,
-          "first": "2024-09-12 19:00:00+00:00",
-          "last": "2026-09-13 10:30:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "BR-SECO",
-      "name": "Brazil - Southeast/Central-West",
+      "code": "BR-SIN",
+      "name": "Brazil (SIN)",
       "country": "BR",
       "region": "South America",
-      "operator": "CCEE",
+      "operator": "Operador Nacional do Sistema Eletrico",
       "timezone": "America/Sao_Paulo",
-      "civil_timezone": null,
       "observes_market_dst": false,
       "currency": "BRL",
       "peak_block": "Brazilian ponta (18:00-21:00, Mon-Fri)",
       "peak_note": "Brazil has settled a genuinely hourly PLD since January 2021, so it has no traded peak block. The ponta window is a distribution-tariff construct whose exact hours each distributor sets locally; 18:00-21:00 is the common case and is used here only to make Brazil comparable with other markets. Do not read it as a wholesale product.",
-      "notes": "Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
+      "notes": "A continent-scale hydro-dominated system operated as a single optimised cascade, where price is a model output rather than an auction clearing. Reservoir storage substitutes for the fuel-cost stack that sets price elsewhere, so scarcity shows up as a stored-energy problem first.",
       "datasets": {
-        "price": {
+        "load": {
           "status": "ok",
-          "source": "ccee",
-          "rows": 23661,
-          "first": "2024-01-01 03:00:00+00:00",
-          "last": "2026-09-12 23:00:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "BR-NE",
-      "name": "Brazil - Northeast",
-      "country": "BR",
-      "region": "South America",
-      "operator": "CCEE",
-      "timezone": "America/Sao_Paulo",
-      "civil_timezone": null,
-      "observes_market_dst": false,
-      "currency": "BRL",
-      "peak_block": "Brazilian ponta (18:00-21:00, Mon-Fri)",
-      "peak_note": "Brazil has settled a genuinely hourly PLD since January 2021, so it has no traded peak block. The ponta window is a distribution-tariff construct whose exact hours each distributor sets locally; 18:00-21:00 is the common case and is used here only to make Brazil comparable with other markets. Do not read it as a wholesale product.",
-      "notes": "Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
-      "datasets": {
-        "price": {
+          "source": "ons",
+          "rows": 35645,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-13 14:00:00+00:00"
+        },
+        "generation": {
           "status": "ok",
-          "source": "ccee",
-          "rows": 23661,
-          "first": "2024-01-01 03:00:00+00:00",
-          "last": "2026-09-12 23:00:00+00:00"
+          "source": "ons",
+          "rows": 71052,
+          "first": "2024-09-01 00:00:00+00:00",
+          "last": "2026-09-11 02:00:00+00:00"
         }
       }
     }

@@ -203,8 +203,8 @@ def _ingest_one(
     """Fetch one target in chunks, writing each chunk before fetching the next.
 
     The chunk is the smaller of the caller's request and whatever the source
-    declares it can serve, because those limits are real: OpenElectricity
-    returns a 400 above 32 days and Energy-Charts times out on a long one.
+    declares it can serve, because those limits are real: Energy-Charts times
+    out on a long window.
     """
     cap = getattr(source, "max_window_days", None)
     effective = min(chunk_days, cap) if cap else chunk_days

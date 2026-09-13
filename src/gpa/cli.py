@@ -252,9 +252,9 @@ def freshness(
     failure. A run that fetched nothing still exits zero if no adapter raised,
     which is exactly the case this catches.
 
-    Manually refreshed series, currently the CCEE PLD zones, report but never
-    fail the run: nobody can fix those from a cron job, and failing nightly
-    would train people to ignore the failure.
+    A series declared manual reports but never fails the run: nobody can fix
+    it from a cron job, and failing nightly would train people to ignore the
+    failure. No active series is manual today.
     """
     from gpa import freshness as freshness_module
 
@@ -293,6 +293,18 @@ def freshness(
         typer.echo(f"  {report.zone} {report.dataset}: {report.rule.reason}")
 
     if strict:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def audit() -> None:
+    """Check interval integrity and report internal missing time for each fuel."""
+    from gpa import quality
+
+    result = quality.report()
+    with pl.Config(tbl_rows=-1, tbl_width_chars=160):
+        typer.echo(result)
+    if result.filter(pl.col("invalid") > 0).height:
         raise typer.Exit(code=1)
 
 

@@ -1,16 +1,24 @@
 name: Deploy
 
-# Bot pushes do not trigger another push workflow. A successful Ingest run
-# explicitly triggers deployment of the latest committed main branch.
+# Publishes one exact commit. It is never triggered by a push on its own:
+#
+# - CI calls it after lint, types, tests, the export check, the site build and
+#   the browser smoke test have all passed for the pushed commit;
+# - Ingest calls it with the data commit that run created, so new observations
+#   reach the site even when a later freshness check reports a stale feed;
+# - a manual dispatch deploys the ref chosen in the UI.
+#
+# Checking out the given SHA rather than moving `main` is what makes a green
+# deployment evidence that this revision, and not a later one, was validated.
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit SHA to publish"
+        required: true
+        type: string
   workflow_dispatch:
-  workflow_run:
-    workflows: [Ingest]
-    types: [completed]
-    branches: [main]
 
 permissions:
   contents: read
@@ -19,16 +27,15 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.ref || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -43,8 +50,10 @@ jobs:
       - run: pip install -e .
       - run: npm ci
 
-      - name: Rebuild site tables from the committed store
-        run: gpa export
+      - name: Refuse stale site tables
+        # The committed tables are what CI or Ingest validated. Rebuilding them
+        # here would publish something nobody checked.
+        run: gpa export --check
 
       - uses: actions/configure-pages@v5
         id: pages

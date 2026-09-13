@@ -186,15 +186,18 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
         .agg(pl.col("run_hours").max().alias("max_run_hours"))
     )
 
-    negative_price = pl.col("price").filter(pl.col("_neg"))
-
     summary = prepared.group_by("local_month").agg(
         pl.len().alias("n_intervals"),
         pl.col("_neg").sum().cast(pl.UInt32).alias("n_negative"),
         (_INTERVAL_HOURS.filter(pl.col("_neg"))).sum().alias("negative_hours"),
         _INTERVAL_HOURS.sum().alias("observed_hours"),
         pl.col("price").min().alias("min_price"),
-        negative_price.mean().alias("mean_negative"),
+        (
+            (pl.col("price") * _INTERVAL_HOURS).filter(pl.col("_neg")).sum()
+            / _INTERVAL_HOURS.filter(pl.col("_neg")).sum()
+        )
+        .fill_nan(None)
+        .alias("mean_negative"),
     )
 
     return (
@@ -322,7 +325,9 @@ def realised_volatility(
     daily = (
         attach_local_time(frame, zone)
         .group_by("local_date")
-        .agg(pl.col("price").mean().alias("daily_price"))
+        .agg(
+            ((pl.col("price") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias("daily_price")
+        )
         .sort("local_date")
     )
     if daily.height < 2:
@@ -330,6 +335,9 @@ def realised_volatility(
 
     scale = DAYS_PER_YEAR**0.5 if annualise else 1.0
 
+    # Insert absent calendar dates as nulls in this derived table only. No
+    # provider observation is filled, and rolling windows cannot bridge a gap.
+    daily = daily.upsample(time_column="local_date", every="1d")
     return daily.with_columns(pl.col("daily_price").diff().alias("daily_change")).with_columns(
         (pl.col("daily_change").rolling_std(window_size=window, min_samples=window) * scale).alias(
             "volatility"
@@ -398,26 +406,48 @@ def capture_rate(
     if fuel_gen.is_empty():
         return empty
 
-    # Both sides are reduced to the market-local hour before joining, so a
-    # 5-minute price series and an hourly generation series still align.
-    price_hourly = (
-        attach_local_time(prices, zone)
-        .group_by(["local_date", "local_hour"])
-        .agg(pl.col("price").mean().alias("price"))
+    # Integrate intersections of the actual UTC intervals. Values describe
+    # average power/price over each published interval; no subinterval shape
+    # is invented, and missing intervals never get forward-filled past the end.
+    p = prices.select(
+        "ts_utc",
+        "price",
+        (pl.col("ts_utc") + pl.duration(minutes=pl.col("resolution_min"))).alias("_price_end"),
+    ).sort("ts_utc")
+    g = fuel_gen.select(
+        "ts_utc",
+        "gen_mw",
+        (pl.col("ts_utc") + pl.duration(minutes=pl.col("resolution_min"))).alias("_gen_end"),
+    ).sort("ts_utc")
+    boundaries = (
+        pl.concat(
+            [
+                p.select("ts_utc"),
+                p.select(pl.col("_price_end").alias("ts_utc")),
+                g.select("ts_utc"),
+                g.select(pl.col("_gen_end").alias("ts_utc")),
+            ]
+        )
+        .unique()
+        .sort("ts_utc")
     )
-    gen_hourly = (
-        attach_local_time(fuel_gen, zone)
-        .group_by(["local_date", "local_hour"])
-        .agg((pl.col("gen_mw") * _INTERVAL_HOURS).sum().alias("energy_mwh"))
+    joined = (
+        boundaries.with_columns(pl.col("ts_utc").shift(-1).alias("_end"))
+        .join_asof(p, on="ts_utc")
+        .join_asof(g, on="ts_utc")
+        .filter((pl.col("_end") <= pl.col("_price_end")) & (pl.col("_end") <= pl.col("_gen_end")))
+        .with_columns(
+            ((pl.col("_end") - pl.col("ts_utc")).dt.total_seconds() / 3600.0).alias("_hours")
+        )
+        .with_columns((pl.col("gen_mw") * pl.col("_hours")).alias("energy_mwh"))
     )
-
-    joined = price_hourly.join(gen_hourly, on=["local_date", "local_hour"], how="inner")
     if joined.is_empty():
         return empty
 
     fmt = formats[period]
     return (
-        joined.with_columns(
+        attach_local_time(joined, zone)
+        .with_columns(
             pl.lit("all").alias("period")
             if fmt is None
             else pl.col("local_date").dt.strftime(fmt).alias("period")
@@ -426,7 +456,9 @@ def capture_rate(
         .agg(
             (pl.col("price") * pl.col("energy_mwh")).sum().alias("_weighted"),
             pl.col("energy_mwh").sum().alias("energy_mwh"),
-            pl.col("price").mean().alias("baseload_price"),
+            ((pl.col("price") * pl.col("_hours")).sum() / pl.col("_hours").sum()).alias(
+                "baseload_price"
+            ),
         )
         .with_columns(
             pl.when(pl.col("energy_mwh") > 0)
