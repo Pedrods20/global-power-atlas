@@ -2,8 +2,8 @@
 
 Steps 1-6 of the original delivery are complete and recorded in
 [`STATE.md`](STATE.md). The site is live at
-<https://pedrods20.github.io/global-power-atlas/>, currently showing the
-older 11-zone build until this increment is committed, pushed and deployed.
+<https://pedrods20.github.io/global-power-atlas/>, serving the four-zone
+rebuild described below since it deployed successfully on 2026-09-13.
 The repository now targets **4 zones** (Germany-Luxembourg, France, Spain,
 Brazil's national system) from **2 credential-free sources** (Energy-Charts,
 ONS) — see "Scope reduction, 2026-09-13" below for why.
