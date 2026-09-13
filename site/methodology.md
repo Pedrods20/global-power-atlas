@@ -18,13 +18,14 @@ Every series comes from the system or market operator, or from a named redistrib
 |---|---|---|---|---|
 | ERCOT | load, generation | US Energy Information Administration, API v2 | free key | US Government public domain |
 | DE-LU | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
-| BR-SIN | load, generation | ONS open data, hourly subsystem balance | none | CC BY 4.0 |
+| BR-SIN | generation | ONS open data, hourly subsystem balance | none | CC BY 4.0 |
+| BR-SIN | load | ONS verified-load API, half-hourly | none | CC BY 4.0 |
 | AU-NSW1 | price, load | AEMO aggregated price and demand archive | none | AEMO terms of use |
 | AU-NSW1 | generation | OpenElectricity, The Superpower Institute | none | CC BY 4.0 |
 | PJM, CAISO | load, generation | US Energy Information Administration, API v2 | free key | US Government public domain |
 | FR, ES | price, load, generation | Energy-Charts, Fraunhofer ISE | none | CC BY 4.0 |
 | JP-TOKYO | day-ahead price | Japan Electric Power Exchange | none | provider terms |
-| BR-SECO, BR-S, BR-NE, BR-N | hourly PLD | CCEE open data | none; official local CSV fallback | open-data terms |
+| BR-SECO, BR-NE | hourly PLD | CCEE open data | none; official local CSV fallback | open-data terms |
 | European spread references | gas and coal: World Bank; EUA: EEX; FX: ECB | public downloads | none | provider-specific |
 
 Australia deliberately uses two providers. Price and demand come from AEMO's own archive rather than a redistributor; only the fuel split needs a third party, because that archive does not carry one.
@@ -156,12 +157,44 @@ The spread page uses monthly, historical references. German/Luxembourg all-hours
 
 Clean spark assumes 50% net efficiency and 0.20196 tCO₂/MWh thermal. Clean dark assumes 38% net efficiency, 0.34056 tCO₂/MWh thermal, and 6.978 MWh thermal per tonne of coal (6,000 kcal/kg). The outputs are screening indicators rather than traded forward spreads or realised margins. They omit local fuel basis, transport, variable operations, starts, outages and hedging.
 
+## Publication lag
+
+Providers do not publish at the same speed, and the difference is large enough
+to matter when reading a "latest" figure.
+
+Brazilian **generation** is the slowest series here. The ONS hourly subsystem
+balance is republished several times a day, but its contents trail real time by
+roughly two days. That is the provider's lag, not a collection failure, and no
+faster ONS source for generation by technology exists. Brazilian generation,
+fuel mix and renewable share should therefore be read as ending about two days
+before every other market on this site.
+
+Brazilian **load** does not share that lag. It comes from the ONS verified-load
+API instead, which carries the same two years of history at half-hourly
+resolution and stays within about an hour of real time.
+
+Two details of that API are worth recording, because both fail silently rather
+than loudly:
+
+- Its own national aggregate, `cod_areacarga=SIN`, answers with every value
+  zeroed. National load is summed from the four submarket areas instead, and a
+  timestamp is only kept when all four reported. Summing three of four would
+  understate national demand by roughly the missing area's share while looking
+  like an ordinary observation.
+- The Southeast area code is `SECO`. The `SE` code used by older ONS endpoints
+  now returns an empty list rather than an error, so a stale code silently drops
+  about a third of national demand.
+
+A value of exactly zero from that API means an interval has not been measured
+yet, not that an area drew no power, so those rows are dropped rather than
+stored as zero demand.
+
 ## Known limitations
 
 - **ERCOT has no price series.** EIA supplies balancing-authority demand and generation; prices require a separate market-operator feed.
 - **US solar excludes rooftop.** EIA's hourly fuel-type series covers utility-scale plant only, so a US solar share is not directly comparable against a market whose operator reports behind-the-meter output.
 - **Brazilian thermal is unresolved**, as described above.
-- **Zone boundaries differ.** US load and generation cover balancing authorities, not price hubs or settlement nodes. Germany is the DE-LU bidding zone, Australia is New South Wales, Japan is the Tokyo price area, and CCEE prices remain four separate submarkets. Nothing here measures nodal congestion.
+- **Zone boundaries differ.** US load and generation cover balancing authorities, not price hubs or settlement nodes. Germany is the DE-LU bidding zone, Australia is New South Wales, Japan is the Tokyo price area, and CCEE prices are two separate submarkets, Southeast/Central-West and Northeast, which are the two that dominate Brazilian price formation. South and North are published by CCEE but are deliberately not registered here. Nothing here measures nodal congestion.
 - **CCEE automated access can return HTTP 403.** The committed series came from the official `pld_horario_2026` CSV and the same parser accepts future official files through `GPA_CCEE_IMPORT_DIR`.
 - **Fuel references carry basis risk.** World Bank Europe gas and Australian coal are broad monthly benchmarks; they are not a German plant's delivered or hedged fuel price. EEX primary-auction EUA prices can differ from secondary-market executions.
 - **Revisions.** Operators restate published figures for days afterwards. The store upserts on the natural key, so re-running a window converges on the restatement rather than duplicating it, but a figure read today may differ slightly from the same figure read last week.

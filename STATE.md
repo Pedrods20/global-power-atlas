@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-Last updated: 2026-09-12 · Repository: `global-power-atlas` · Replaces:
+Last updated: 2026-09-13 · Repository: `global-power-atlas` · Replaces:
 `power-pulse-global`
 
 ## Current result
@@ -9,10 +9,11 @@ Global Power Atlas is a Python ETL and Observable Framework static site. It
 stores validated interval data as Parquet, computes market-aware aggregates,
 and publishes them without a backend or browser-visible credentials.
 
-- 13 registered zones across five continents.
-- 2,380,416 interval/fuel observations in 435 validated monthly partitions
-  before the final export.
-- Price: DE-LU, AU-NSW1, FR, ES, JP-TOKYO and four separate CCEE submarkets.
+- 11 registered zones across five continents.
+- 3,584,484 interval/fuel observations in 591 validated monthly partitions.
+- Price: DE-LU, AU-NSW1, FR, ES, JP-TOKYO and two CCEE submarkets
+  (Southeast/Central-West and Northeast). South and North were dropped by
+  decision on 2026-09-12.
 - Load and generation: DE-LU, AU-NSW1, BR-SIN, ERCOT, PJM, CAISO, FR and ES,
   subject to each provider's reported categories.
 - 24 aligned months of World Bank fuel, EEX EUA and ECB FX references.
@@ -52,6 +53,23 @@ what is still missing.
   run `34725613889` completed successfully.
 - The public site at <https://pedrods20.github.io/global-power-atlas/> passed the
   six-route desktop/mobile browser smoke against the hosted build.
+
+## Completed on 2026-09-13
+
+- France and Spain were backfilled from 4 to 25 monthly partitions each, so
+  every Energy-Charts zone now carries the same two years.
+- CCEE 2024 and 2025 were imported from the official CSVs: 23,661 contiguous
+  hourly observations per submarket from 2024-01-01, no gaps or duplicates.
+- The Brazilian South and North submarkets were removed from the registry and
+  their partitions deleted, at the user's request.
+- Brazilian load was moved off the balance file and onto the ONS verified-load
+  API. The lag fell from 46 hours to under one hour. The series was rebuilt at
+  half-hourly resolution: 35,040 observations over exactly 730 days.
+- Brazilian generation keeps its roughly two-day lag, which is the provider's
+  and has no faster ONS source. It is now documented under "Publication lag" in
+  the methodology instead of looking like a collection failure.
+- Six routes pass the browser smoke at 1440 px and 390 px with no JavaScript
+  errors and no horizontal overflow.
 
 ## Architecture
 
@@ -95,6 +113,12 @@ Important paths:
 
 - EIA requires `EIA_API_KEY`; the key is in ignored local configuration and
   GitHub Actions secrets.
+- The ONS verified-load API exposes a `SIN` aggregate that answers with every
+  value zeroed, so national load is summed from its four submarket areas and a
+  timestamp is only kept when all four reported. Its Southeast code is `SECO`;
+  the older `SE` returns an empty list rather than an error.
+- The ONS hourly balance trails real time by about two days. No faster ONS
+  source for generation by technology exists.
 - CCEE returned HTTP 403 to automated requests on this workstation. The
   official file is under `data/raw/ccee/`, and `GPA_CCEE_IMPORT_DIR` in the
   local `.env` enables its parser. Raw downloads are ignored; curated output

@@ -2,41 +2,52 @@
 
 Steps 1-6 of the original delivery are complete and recorded in
 [`STATE.md`](STATE.md). The site is live at
-<https://pedrods20.github.io/global-power-atlas/> with 13 zones, five
-continents and 2,380,416 stored observations.
+<https://pedrods20.github.io/global-power-atlas/> with 11 zones across five
+continents.
 
-This file now tracks **what is still missing**. Items are ordered by how much
-they affect the credibility of the published work, not by effort. Nothing here
-is started.
+This file tracks **what is still missing**. Items are ordered by how much they
+affect the credibility of the published work, not by effort.
+
+The P1 block was cleared in the session of 2026-09-12; see
+"Recently completed" at the foot of this file for what changed and what it
+revealed.
 
 ---
 
 ## P1 - Coverage gaps visible on the published site today
 
-These are the gaps a reader notices first, because they make comparison charts
-show truncated series next to complete ones.
+All three are done. They are kept here with their outcomes because the third
+one changed where Brazilian load comes from.
 
-- [ ] **Backfill France and Spain to two years.** Both hold 4 monthly
-  partitions from 2026-06-14, against 25 for every other Energy-Charts zone.
-  Every cross-market chart currently shows two stub series.
-  `gpa backfill -z FR -z ES --years 2 --chunk-days 60`. Energy-Charts
-  rate-limits long backfills, so expect 429s; the HTTP layer honours
-  `Retry-After` but the run is slow. **Done when** both zones report 25
-  partitions in `gpa stats` and the price/demand charts show full history.
+- [x] **Backfill France and Spain to two years.** Both now hold 25 monthly
+  partitions instead of 4, matching every other Energy-Charts zone. France
+  carries 42,473 price, 35,844 load and 365,899 generation observations.
 
-- [ ] **Backfill CCEE PLD for 2024 and 2025.** All four submarkets hold only
-  2026 (9 partitions from 2026-01-01). PLD is the headline Brazilian price and
-  it is the shortest series on the site. Requires the official
-  `pld_horario_2024.csv` and `pld_horario_2025.csv` placed under
-  `data/raw/ccee/`, then re-run the import with `GPA_CCEE_IMPORT_DIR` set.
-  **Done when** each of BR-SECO, BR-S, BR-NE and BR-N covers the same window as
-  DE-LU, with no gaps, duplicates or nulls.
+- [x] **Backfill CCEE PLD for 2024 and 2025.** Southeast/Central-West and
+  Northeast now hold 23,661 contiguous hourly observations each, spanning
+  2024-01-01 to date, with no gaps, duplicates or nulls. The official CSVs live
+  under `data/raw/ccee/` and are read through `GPA_CCEE_IMPORT_DIR`; the
+  provider still refuses automated download.
 
-- [ ] **Diagnose the BR-SIN freshness lag.** ONS load and generation sit at
-  roughly 46 hours old while every other zone is between 5 and 21 hours. Decide
-  whether this is genuine ONS publication lag or a silent adapter failure, and
-  record the answer in the methodology. **Done when** the cause is stated in
-  writing and, if it is an adapter problem, fixed with a regression test.
+- [x] **Diagnose the BR-SIN freshness lag.** It was both a provider lag and a
+  correctable sourcing choice, so the answer is split.
+
+  *Generation* is genuine ONS lag. The hourly subsystem balance is republished
+  several times a day, but its contents trail real time by about two days, and
+  no faster ONS source for generation by technology exists. Documented under
+  "Publication lag" in the methodology rather than treated as a defect.
+
+  *Load* was correctable and is now fixed. It comes from the ONS verified-load
+  API, which carries the same two years at half-hourly resolution and stays
+  within about an hour of real time. The lag fell from 46 hours to 0.4 hours,
+  and the series was rebuilt from scratch because the resolution changed from
+  60 to 30 minutes: 35,040 observations, exactly 730 days at 48 per day.
+
+  Two traps in that API are now covered by named tests. Its own `SIN` aggregate
+  answers with every value zeroed, so national load is summed from the four
+  submarket areas and a timestamp is only kept when all four reported. And the
+  Southeast area code is `SECO`; the older `SE` returns an empty list rather
+  than an error, which would silently drop about a third of national demand.
 
 ## P2 - Analytical asymmetries
 
@@ -104,6 +115,14 @@ stored.
   error metrics would use it.
 
 ---
+
+## Scope decisions
+
+- **Brazilian South and North submarkets are not registered.** CCEE publishes
+  PLD for all four, but only Southeast/Central-West and Northeast are carried
+  here. They are the two that dominate Brazilian price formation, and the other
+  two added two more series to every chart without changing the reading. This
+  was the user's call on 2026-09-12; their curated partitions were deleted.
 
 ## Constraints that must survive any future work
 

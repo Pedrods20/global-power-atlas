@@ -27,9 +27,11 @@ The point of the project is not that it draws charts. It is that the numbers und
 | `FR` | France | RTE | Energy-Charts | no |
 | `ES` | Spain | Red Eléctrica | Energy-Charts | no |
 | `JP-TOKYO` | Japan, Tokyo area | JEPX | JEPX | no |
-| `BR-SECO`, `BR-S`, `BR-NE`, `BR-N` | Brazilian PLD submarkets | CCEE | CCEE open data | local official CSV fallback |
+| `BR-SECO`, `BR-NE` | Brazilian PLD submarkets | CCEE | CCEE open data | local official CSV fallback |
 
 Coverage is dataset-specific. The three US balancing authorities carry hourly demand and generation from EIA, while US wholesale price is a separate integration. Brazilian PLD remains separated by CCEE submarket and is never presented as one national price.
+
+**Providers do not publish at the same speed.** Most zones here sit within a few hours of real time. Brazilian generation is the exception: the ONS hourly balance trails real time by about two days, and no faster ONS source for generation by technology exists. Brazilian generation, fuel mix and renewable share therefore end about two days before every other market on the site. Brazilian load does not share that lag, because it comes from the ONS verified-load API instead and stays within about an hour. The [methodology page](site/methodology.md) sets out both, along with two ways that API fails silently if read carelessly.
 
 ## Analytical questions
 

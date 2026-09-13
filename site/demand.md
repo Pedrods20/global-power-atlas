@@ -26,9 +26,7 @@ const zoneColor = new Map([
   ["ES", "#88CCEE"],
   ["JP-TOKYO", "#AA4499"],
   ["BR-SECO", "#117733"],
-  ["BR-S", "#44AA99"],
   ["BR-NE", "#999933"],
-  ["BR-N", "#882255"],
 ]);
 const zoneOrder = [...zoneColor.keys()].filter((z) => load.some((d) => d.zone === z));
 const colorScale = {

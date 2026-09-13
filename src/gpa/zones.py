@@ -366,11 +366,13 @@ ZONES += tuple(
         source_keys={"ccee_submarket": submarket},
         notes="Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
     )
+    # Only the two submarkets that carry the country's load and price formation.
+    # South and North are published by CCEE but are deliberately not registered:
+    # they add two more series to every chart without changing the reading, and
+    # a narrower set that is fully explained beats a wider one that is not.
     for code, name, submarket in (
         ("BR-SECO", "Brazil - Southeast/Central-West", "SUDESTE"),
-        ("BR-S", "Brazil - South", "SUL"),
         ("BR-NE", "Brazil - Northeast", "NORDESTE"),
-        ("BR-N", "Brazil - North", "NORTE"),
     )
 )
 

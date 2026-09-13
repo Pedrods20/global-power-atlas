@@ -19,7 +19,7 @@ from gpa.sources import REGISTRY, get_source
 from gpa.sources.aemo import NEM_MARKET_TIMEZONE, _parse_archive
 from gpa.sources.base import infer_resolution_minutes
 from gpa.sources.energy_charts import DERIVED_SERIES, FUEL_MAP, LOAD_SERIES
-from gpa.sources.ons import _parse_balance
+from gpa.sources.ons import LOAD_AREAS, _aggregate_load_areas, _parse_balance, _parse_load_api
 from gpa.sources.openelectricity import IGNORED_FUELTECHS, _collect
 
 # --- Registry --------------------------------------------------------------
@@ -129,6 +129,96 @@ def test_ons_rejects_a_file_missing_expected_columns() -> None:
 
     with pytest.raises(UpstreamError, match="missing expected columns"):
         _parse_balance("id_subsistema;din_instante\nSIN;2026-01-01 00:00:00\n", "SIN")
+
+
+# --- ONS verified-load API -------------------------------------------------
+
+
+def _load_api_row(area: str, stamp: str, value: float) -> dict[str, object]:
+    return {
+        "cod_areacarga": area,
+        "din_referenciautc": stamp,
+        "dat_referencia": stamp[:10],
+        "val_cargaglobal": value,
+    }
+
+
+ONS_LOAD_STAMPS = (
+    "2026-09-12T00:00:00.000Z",
+    "2026-09-12T00:30:00.000Z",
+)
+
+
+def test_ons_load_api_parses_utc_stamps_and_values() -> None:
+    payload = [_load_api_row("SECO", ONS_LOAD_STAMPS[0], 49411.0)]
+    parsed = _parse_load_api(payload, "SECO")
+
+    assert parsed.height == 1
+    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 12, 0, 0, tzinfo=dt.UTC)
+    assert parsed["load_mw"][0] == pytest.approx(49411.0)
+    assert parsed["area"][0] == "SECO"
+
+
+def test_ons_load_api_treats_exact_zero_as_unmeasured() -> None:
+    """The API returns future-dated rows with every value zeroed.
+
+    Storing those as real observations would put a zero-demand reading into the
+    series, which is worse than a gap because it looks measured.
+    """
+    payload = [
+        _load_api_row("SECO", ONS_LOAD_STAMPS[0], 49411.0),
+        _load_api_row("SECO", ONS_LOAD_STAMPS[1], 0.0),
+    ]
+    parsed = _parse_load_api(payload, "SECO")
+
+    assert parsed.height == 1
+    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 12, 0, 0, tzinfo=dt.UTC)
+
+
+def test_ons_national_load_requires_all_four_areas() -> None:
+    """Summing three of four areas would understate national demand silently.
+
+    The first timestamp has all four submarkets and must survive. The second is
+    missing the North and must be dropped rather than reported about 10 GW low.
+    """
+    rows = [
+        _load_api_row(area, ONS_LOAD_STAMPS[0], value)
+        for area, value in (("SECO", 49411.0), ("S", 14140.0), ("NE", 15766.0), ("N", 9930.0))
+    ]
+    rows += [
+        _load_api_row(area, ONS_LOAD_STAMPS[1], value)
+        for area, value in (("SECO", 49000.0), ("S", 14000.0), ("NE", 15000.0))
+    ]
+
+    frame = pl.concat([_parse_load_api([r], r["cod_areacarga"]) for r in rows], how="vertical")
+    national = _aggregate_load_areas(frame)
+
+    assert national.height == 1
+    assert national["ts_utc"][0] == dt.datetime(2026, 9, 12, 0, 0, tzinfo=dt.UTC)
+    assert national["load_mw"][0] == pytest.approx(49411.0 + 14140.0 + 15766.0 + 9930.0)
+
+
+def test_ons_load_areas_use_the_current_southeast_code() -> None:
+    """The Southeast is SECO on this endpoint.
+
+    The older SE code now returns an empty list instead of an error, so a stale
+    code would drop a third of national demand without failing anything.
+    """
+    assert "SECO" in LOAD_AREAS
+    assert "SE" not in LOAD_AREAS
+    assert len(LOAD_AREAS) == 4
+
+
+def test_ons_load_api_rejects_a_response_missing_its_columns() -> None:
+    from gpa.sources.base import UpstreamError
+
+    with pytest.raises(UpstreamError, match="missing"):
+        _parse_load_api([{"cod_areacarga": "SECO"}], "SECO")
+
+
+def test_ons_load_api_tolerates_an_empty_response() -> None:
+    assert _parse_load_api([], "SECO").is_empty()
+    assert _aggregate_load_areas(_parse_load_api([], "SECO")).is_empty()
 
 
 # --- AEMO ------------------------------------------------------------------

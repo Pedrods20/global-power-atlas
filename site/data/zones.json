@@ -1,5 +1,5 @@
 {
-  "data_as_of": "2026-09-12T23:00:00+00:00",
+  "data_as_of": "2026-09-12T23:30:00+00:00",
   "zones": [
     {
       "code": "ERCOT",
@@ -85,9 +85,9 @@
         "load": {
           "status": "ok",
           "source": "ons",
-          "rows": 17482,
-          "first": "2024-09-12 17:00:00+00:00",
-          "last": "2026-09-11 02:00:00+00:00"
+          "rows": 35040,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 23:30:00+00:00"
         },
         "generation": {
           "status": "ok",
@@ -212,23 +212,23 @@
         "price": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 8640,
-          "first": "2026-06-14 18:45:00+00:00",
-          "last": "2026-09-12 18:30:00+00:00"
+          "rows": 42473,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 21:45:00+00:00"
         },
         "load": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 8633,
-          "first": "2026-06-14 18:45:00+00:00",
-          "last": "2026-09-12 16:45:00+00:00"
+          "rows": 35844,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 21:45:00+00:00"
         },
         "generation": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 86330,
-          "first": "2026-06-14 18:45:00+00:00",
-          "last": "2026-09-12 16:45:00+00:00"
+          "rows": 365899,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 21:45:00+00:00"
         }
       }
     },
@@ -249,23 +249,23 @@
         "price": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 8640,
-          "first": "2026-06-14 18:45:00+00:00",
-          "last": "2026-09-12 18:30:00+00:00"
+          "rows": 42473,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 21:45:00+00:00"
         },
         "load": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 8634,
-          "first": "2026-06-14 18:45:00+00:00",
-          "last": "2026-09-12 17:15:00+00:00"
+          "rows": 69871,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 21:45:00+00:00"
         },
         "generation": {
           "status": "ok",
           "source": "energy_charts",
-          "rows": 103620,
-          "first": "2026-06-14 18:45:00+00:00",
-          "last": "2026-09-12 17:15:00+00:00"
+          "rows": 831593,
+          "first": "2024-09-13 00:00:00+00:00",
+          "last": "2026-09-12 21:45:00+00:00"
         }
       }
     },
@@ -309,31 +309,8 @@
         "price": {
           "status": "ok",
           "source": "ccee",
-          "rows": 6117,
-          "first": "2026-01-01 03:00:00+00:00",
-          "last": "2026-09-12 23:00:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "BR-S",
-      "name": "Brazil - South",
-      "country": "BR",
-      "region": "South America",
-      "operator": "CCEE",
-      "timezone": "America/Sao_Paulo",
-      "civil_timezone": null,
-      "observes_market_dst": false,
-      "currency": "BRL",
-      "peak_block": "Brazilian ponta (18:00-21:00, Mon-Fri)",
-      "peak_note": "Brazil has settled a genuinely hourly PLD since January 2021, so it has no traded peak block. The ponta window is a distribution-tariff construct whose exact hours each distributor sets locally; 18:00-21:00 is the common case and is used here only to make Brazil comparable with other markets. Do not read it as a wholesale product.",
-      "notes": "Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
-      "datasets": {
-        "price": {
-          "status": "ok",
-          "source": "ccee",
-          "rows": 6117,
-          "first": "2026-01-01 03:00:00+00:00",
+          "rows": 23661,
+          "first": "2024-01-01 03:00:00+00:00",
           "last": "2026-09-12 23:00:00+00:00"
         }
       }
@@ -355,31 +332,8 @@
         "price": {
           "status": "ok",
           "source": "ccee",
-          "rows": 6117,
-          "first": "2026-01-01 03:00:00+00:00",
-          "last": "2026-09-12 23:00:00+00:00"
-        }
-      }
-    },
-    {
-      "code": "BR-N",
-      "name": "Brazil - North",
-      "country": "BR",
-      "region": "South America",
-      "operator": "CCEE",
-      "timezone": "America/Sao_Paulo",
-      "civil_timezone": null,
-      "observes_market_dst": false,
-      "currency": "BRL",
-      "peak_block": "Brazilian ponta (18:00-21:00, Mon-Fri)",
-      "peak_note": "Brazil has settled a genuinely hourly PLD since January 2021, so it has no traded peak block. The ponta window is a distribution-tariff construct whose exact hours each distributor sets locally; 18:00-21:00 is the common case and is used here only to make Brazil comparable with other markets. Do not read it as a wholesale product.",
-      "notes": "Hourly PLD for this submarket only. Compare national demand separately under BR-SIN. Automated access may require provider-side clearance.",
-      "datasets": {
-        "price": {
-          "status": "ok",
-          "source": "ccee",
-          "rows": 6117,
-          "first": "2026-01-01 03:00:00+00:00",
+          "rows": 23661,
+          "first": "2024-01-01 03:00:00+00:00",
           "last": "2026-09-12 23:00:00+00:00"
         }
       }

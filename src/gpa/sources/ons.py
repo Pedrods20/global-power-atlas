@@ -1,11 +1,20 @@
 """ONS adapter for the Brazilian National Interconnected System.
 
-ONS publishes an hourly energy balance per subsystem as one semicolon-delimited
-CSV per calendar year, on a public S3 bucket with no credentials. A single file
-carries both generation by technology and verified load, which is why Brazil
-needs only one request per year rather than one per dataset.
+Brazil is served by two ONS endpoints on purpose, because they do not carry the
+same publication lag.
 
-Three Brazil-specific points are handled here:
+Generation comes from the hourly energy balance, one semicolon-delimited CSV per
+calendar year on a public S3 bucket. That file is republished several times a
+day but its contents trail real time by roughly two days, and no faster ONS
+source for generation by technology exists. The lag is the provider's, not this
+adapter's, and it is documented on the methodology page rather than hidden.
+
+Load comes from the verified-load API instead, which carries the same two years
+of history at half-hourly resolution but stays within about an hour of real
+time. Using the balance file for load as well would throw away two days of
+demand for no reason.
+
+Four Brazil-specific points are handled here:
 
 Timestamps are Brasilia time, not UTC.
     ``din_instante`` is local. Brazil abolished daylight saving in 2019, so
@@ -22,7 +31,17 @@ The file contains both subsystems and their total.
 Missing values are not zero.
     A blank generation field means the measurement is absent. Parsing it as zero
     understates the technology's share, which is the bug the previous
-    implementation of this project shipped.
+    implementation of this project shipped. The load API applies the same rule:
+    it returns rows with ``val_cargaglobal`` of exactly zero for intervals it has
+    not yet measured, and those are dropped rather than recorded as no demand.
+
+The load API's own national aggregate is unusable.
+    Requesting ``cod_areacarga=SIN`` returns timestamps with every value zeroed.
+    National load is therefore summed from the four submarket areas, and a
+    timestamp is only emitted when all four reported, because summing three
+    would understate national demand without any sign that it had happened.
+    Note the Southeast area code is ``SECO``; the older ``SE`` now returns an
+    empty list rather than an error.
 """
 
 from __future__ import annotations
@@ -34,10 +53,17 @@ from typing import Final
 import polars as pl
 
 from gpa.schema import UTC_DATETIME, empty_frame
-from gpa.sources.base import UpstreamError, fetch_text, http_client, infer_resolution_minutes
+from gpa.sources.base import (
+    SourceError,
+    UpstreamError,
+    fetch_json,
+    fetch_text,
+    http_client,
+    infer_resolution_minutes,
+)
 from gpa.zones import Zone
 
-__all__ = ["FUEL_COLUMNS", "SUBSYSTEMS", "OnsSource"]
+__all__ = ["FUEL_COLUMNS", "LOAD_AREAS", "SUBSYSTEMS", "OnsSource"]
 
 _BASE = "https://ons-aws-prod-opendata.s3.amazonaws.com/dataset"
 _BALANCE = f"{_BASE}/balanco_energia_subsistema_ho/BALANCO_ENERGIA_SUBSISTEMA_{{year}}.csv"
@@ -63,6 +89,21 @@ the thermal block is unresolved, and silently calling it gas would hide that.
 """
 
 _LOAD_COLUMN: Final = "val_carga"
+
+_LOAD_API: Final = "https://apicarga.ons.org.br/prd/cargaverificada"
+
+LOAD_AREAS: Final[tuple[str, ...]] = ("SECO", "S", "NE", "N")
+"""Submarket area codes of the verified-load API, which together make up the SIN.
+
+The API exposes ``SIN`` too, but it answers with every value zeroed, so national
+load has to be summed from these four. The Southeast is ``SECO`` here; the
+``SE`` code the older ONS endpoints used now returns an empty list rather than
+an error, which is the quietest possible way for a feed to break.
+"""
+
+_LOAD_API_CHUNK_DAYS: Final = 30
+"""Days requested per call. The API answers a longer span, but one bad request
+in a two-year backfill is cheaper to retry at this size."""
 
 
 class OnsSource:
@@ -90,6 +131,14 @@ class OnsSource:
                 f"zone {zone.code} has ons_subsystem={subsystem!r}; "
                 f"expected one of {sorted(SUBSYSTEMS)}"
             )
+
+        if dataset == "load" and subsystem == "SIN":
+            # The balance file trails real time by about two days. The load API
+            # carries the same history within roughly an hour of now, so it is
+            # preferred, and the balance file is the fallback if it fails.
+            api = self._fetch_load_api(zone, start, end)
+            if not api.is_empty():
+                return api
 
         frames: list[pl.DataFrame] = []
         with http_client() as client:
@@ -145,6 +194,120 @@ class OnsSource:
             .select("zone", "ts_utc", "resolution_min", "fuel", "gen_mw", "source")
             .sort(["ts_utc", "fuel"])
         )
+
+    def _fetch_load_api(
+        self,
+        zone: Zone,
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> pl.DataFrame:
+        """National load summed from the four submarket areas of the load API.
+
+        Returns an empty frame rather than raising when the API is unreachable
+        or answers with nothing usable, so the caller falls back to the balance
+        file instead of failing the whole ingest.
+        """
+        collected: list[pl.DataFrame] = []
+        try:
+            with http_client() as client:
+                cursor = start
+                step = dt.timedelta(days=_LOAD_API_CHUNK_DAYS)
+                while cursor < end:
+                    stop = min(cursor + step, end)
+                    for area in LOAD_AREAS:
+                        payload = fetch_json(
+                            _LOAD_API,
+                            client=client,
+                            params={
+                                "dat_inicio": cursor.astimezone(dt.UTC).date().isoformat(),
+                                "dat_fim": stop.astimezone(dt.UTC).date().isoformat(),
+                                "cod_areacarga": area,
+                            },
+                        )
+                        parsed = _parse_load_api(payload, area)
+                        if not parsed.is_empty():
+                            collected.append(parsed)
+                    cursor = stop
+        except SourceError:
+            return empty_frame("load")
+
+        if not collected:
+            return empty_frame("load")
+
+        national = _aggregate_load_areas(pl.concat(collected, how="vertical"))
+        national = national.filter((pl.col("ts_utc") >= start) & (pl.col("ts_utc") < end))
+        if national.is_empty():
+            return empty_frame("load")
+
+        resolution = infer_resolution_minutes(national["ts_utc"], default=30)
+        return (
+            national.with_columns(
+                pl.lit(zone.code).alias("zone"),
+                pl.lit(resolution).cast(pl.Int16).alias("resolution_min"),
+                pl.lit(self.name).alias("source"),
+            )
+            .select("zone", "ts_utc", "resolution_min", "load_mw", "source")
+            .sort("ts_utc")
+        )
+
+
+def _parse_load_api(payload: object, area: str) -> pl.DataFrame:
+    """Turn one area's load-API response into ``ts_utc``/``area``/``load_mw`` rows.
+
+    Exposed for tests, which run it against a recorded fixture.
+    """
+    if not isinstance(payload, list) or not payload:
+        return pl.DataFrame(
+            schema={"ts_utc": UTC_DATETIME, "area": pl.String, "load_mw": pl.Float64}
+        )
+
+    frame = pl.DataFrame(payload, infer_schema_length=None)
+    for column in ("din_referenciautc", "val_cargaglobal"):
+        if column not in frame.columns:
+            raise UpstreamError(
+                f"ONS load API response is missing {column!r}. Columns present: {frame.columns}"
+            )
+
+    return (
+        frame.select(
+            pl.col("din_referenciautc")
+            .cast(pl.String)
+            .str.to_datetime(format="%Y-%m-%dT%H:%M:%S%.3fZ", strict=False)
+            .dt.replace_time_zone("UTC")
+            .cast(UTC_DATETIME)
+            .alias("ts_utc"),
+            pl.lit(area).alias("area"),
+            pl.col("val_cargaglobal").cast(pl.Float64, strict=False).alias("load_mw"),
+        )
+        .drop_nulls(["ts_utc", "load_mw"])
+        # A value of exactly zero means the interval has not been measured yet,
+        # not that the area drew no power. Keeping it would drag the national
+        # sum down and, worse, look like a real observation.
+        .filter(pl.col("load_mw") > 0)
+    )
+
+
+def _aggregate_load_areas(frame: pl.DataFrame) -> pl.DataFrame:
+    """Sum the submarket areas into national load, requiring all four.
+
+    A timestamp reported by only some areas is dropped. Summing three of four
+    would understate national demand by roughly the missing area's share while
+    looking like an ordinary observation, which is far worse than a gap.
+    """
+    if frame.is_empty():
+        return pl.DataFrame(schema={"ts_utc": UTC_DATETIME, "load_mw": pl.Float64})
+
+    return (
+        frame.unique(subset=["ts_utc", "area"], keep="last")
+        .group_by("ts_utc")
+        .agg(
+            pl.col("load_mw").sum().alias("load_mw"),
+            pl.col("area").n_unique().alias("_areas"),
+        )
+        .filter(pl.col("_areas") == len(LOAD_AREAS))
+        .drop("_areas")
+        .sort("ts_utc")
+    )
 
 
 def _parse_balance(raw: str, subsystem: str) -> pl.DataFrame:
