@@ -15,6 +15,33 @@ Continuation, 2026-09-13: validate the existing local Front C implementation,
 correct its interval diagnostics, and align the documentation with the actual
 benchmark. Publication and prospective evaluation remain open.
 
+Review after commit `083063a`: the existing local checks pass, but the
+[full review](docs/REVIEW-2026-09-13.md) found additional correctness gaps.
+The following repair priorities are proposed for the next scope discussion;
+the historical completed items below do not establish that these cases work.
+
+## Review priorities — before further model expansion
+
+- [ ] **Repair Energy-Charts resolution transitions.** One inferred duration
+  per request mislabels hourly prices in mixed windows. Local September 2025
+  counts: 557 suspicious rows for DE-LU, 550 each for FR and ES. Verify with
+  official history, repair the adapter, re-fetch affected windows and regenerate.
+- [ ] **Finish duration-aware metrics and capture alignment.** Load factor and
+  duration curves count rows; volatility averages rows and bridges missing days;
+  capture rates combine repeated autumn clock hours. Add independently computed
+  counterexamples and refresh the figures after correcting them.
+- [ ] **Persist valid partial ingestion and deploy a validated revision.** A
+  failed ingest/export step currently skips commit; a post-commit freshness
+  failure blocks deployment. Push deploy is independent of CI. Define and test
+  the failure policy, and add automated browser smoke.
+- [ ] **Check source semantics and time coverage.** Flag unknown generation
+  categories, select one load definition instead of summing alternatives, and
+  report gaps/resolution inconsistencies beyond dataset-level freshness.
+- [ ] **Version experiment inputs and separate future prediction rows.** The
+  cutoff date does not freeze revised history, and fitted models currently
+  require target prices to select prediction rows. Retain experiment snapshots
+  and implement issuance without target labels before prospective evaluation.
+
 ---
 
 ## P1 - Coverage gaps visible on the published site today
@@ -201,7 +228,7 @@ California is done. ERCOT and PJM are blocked on access, not on code.
 ## Front C - Short-term price forecasting (retrospective validation complete locally)
 
 `src/gpa/forecast/`, CLI/export integration, the page and exported tables are
-validated locally and remain uncommitted. Existing work includes three naive
+tested locally and committed as `083063a`. Existing work includes three naive
 baselines, per-hour ridge, a fixed pooled LightGBM challenger and optional local
 MLflow tracking. Local acceptance and publication are tracked separately below.
 
@@ -236,9 +263,11 @@ anything, rather than being assumed to.
   mean width have hand-calculated test cases; coverage is computed before
   chart values are rounded. Incomplete intervals do not enter coverage/width.
   Local MLflow runs record these diagnostics alongside inputs and source.
-- [ ] **Publish the validated increment.** Commit the complete forecasting
-  implementation and regenerated `site/data`; verify CI, deploy and the hosted
-  desktop/mobile smoke before claiming it is live.
+- [x] **Commit the local increment.** Forecasting implementation, tests and
+  regenerated `site/data` are in `083063a`.
+- [ ] **Publish after resolving review findings.** Integrate the remote ingest
+  (`92a4d83` at review), regenerate derived files, and verify CI, deploy and the
+  hosted desktop/mobile smoke before claiming forecasting is live.
 - [ ] **Record a prospective evaluation.** Issue and retain forecasts before
   prices become known, preserve input vintages and evaluate the separate period.
   The historical benchmark is capped at 2026-09-12; extending that cap is not
@@ -262,13 +291,14 @@ than asserted.
 
 ## P4 - Other depth a senior reader would look for
 
-None of these exist yet. Each is a self-contained increment on data already
-stored.
+These remain unpublished analytical extensions. Residual load already has a
+forecasting helper; the other items still need implementation.
 
 - [ ] **Residual (net) load and its duration curve.** Demand minus wind and
   solar is the series that actually sizes flexibility and drives the duck
   curve. Every input is already in the store; no new source is needed. This is
-  also a strong feature for Front C.
+  already used as a lagged feature for Front C; publication as a market metric
+  and duration curve is still pending.
 
 - [ ] **Ramp analysis.** Hourly and sub-hourly ramp rates, and the annual
   worst-case ramp, which is what dimensions flexible capacity. Australia's

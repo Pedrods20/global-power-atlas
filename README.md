@@ -26,6 +26,11 @@ A reproducible pipeline that collects hourly load, generation by fuel, and clear
 
 The point of the project is not that it draws charts. It is that the numbers underneath the charts are defensible. Wholesale power data is full of traps that generic time-series tooling walks straight into, and the [methodology page](site/methodology.md) documents the conventions and limitations.
 
+**Review, 2026-09-13:** a [repository-wide audit](docs/REVIEW-2026-09-13.md)
+found unresolved resolution-transition, duration-weighting and capture-alignment
+defects, plus workflow failure-path gaps. Existing checks pass, but these findings
+qualify the analytical claims below and take priority over expanding the models.
+
 ![Dashboard preview](docs/screenshots/dashboard-1440.png)
 
 ## Coverage
@@ -253,10 +258,10 @@ scheduler, metadata database and webserver would buy nothing this pipeline needs
 and would cost the property that anyone can clone this repository and reproduce
 the whole thing with no infrastructure.
 
-The local forecasting work is still uncommitted and has not been verified on
-the hosted site. The remaining Front C work is publication and a separately
-recorded prospective evaluation; the retrospective scores do not establish
-future performance. Orchestration remains on GitHub Actions.
+The forecasting work is committed locally as `083063a` and has not been verified
+on the hosted site. Data/metric corrections from the review, reliable publication
+and a separately recorded prospective evaluation remain open; the retrospective
+scores do not establish future performance. Orchestration remains on GitHub Actions.
 
 ## License
 

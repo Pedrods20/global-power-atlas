@@ -5,6 +5,28 @@ Last recorded delivery: 2026-09-13 (P3, freshness alerting) · Repository: `glob
 
 Working-tree review: 2026-09-13 (local forecasting acceptance and interval diagnostics).
 
+## Latest review after commit
+
+All implementation changes were committed as `083063a` at the user's request.
+The subsequent [full review](docs/REVIEW-2026-09-13.md) found unresolved data,
+metric and workflow defects despite passing existing checks. Treat its findings
+and the new review priorities in `TODO.md` as the current handoff, ahead of older
+claims that domain rules are completely enforced. No fixes to those new findings
+were attempted during the review.
+
+The remote scheduled ingestion advanced `main` to `92a4d83` and deployed
+successfully, with 3,604,404 observations. The local implementation snapshot
+still contains 3,602,004. The branches diverge; remote data must be integrated
+and derived exports regenerated before publication. No push was performed.
+
+Main findings: window-wide resolution inference mislabels part of September
+2025 European price history; some duration metrics still count rows; capture
+rates merge repeated autumn delivery hours; explicit upstream failures can
+prevent persistence of other successful targets; deploy is not gated on CI.
+The forecast API requires target values to choose prediction rows, and a capped
+benchmark still changes when revised inputs arrive. Details, reproductions and
+the proposed next sequence are in the review.
+
 ## Current result
 
 Global Power Atlas is a Python ETL and Observable Framework static site. It
@@ -43,7 +65,8 @@ what is still missing.
 - Forecasting code, CLI/export integration, page and exported tables were
   already present as uncommitted work, including a fixed LightGBM challenger
   and optional local MLflow tracking. The continuation requested on 2026-09-13
-  validates that existing increment; publication remains pending.
+  exercised the existing acceptance tests; it was subsequently committed as
+  `083063a`. Publication and the new review findings remain pending.
 - Interval coverage and mean width now come from full-precision Python scoring,
   including MLflow metrics. The browser previously calculated coverage from
   rounded chart values, which could change inclusion at an interval boundary.
@@ -307,6 +330,9 @@ old `power-pulse-global` directory.
 Sprint 1 and P3 are complete. Front C is retrospectively validated locally;
 preserve its existing implementation and distinguish local validation from
 publication and prospective acceptance. Remaining Front C TODOs track both.
+The later full review reopens specific data/metric and operational guarantees;
+read `docs/REVIEW-2026-09-13.md` before treating these historical milestones as
+evidence that all failure paths or interval conventions are covered.
 
 Two scope decisions are settled and should not be reopened without the user:
 
