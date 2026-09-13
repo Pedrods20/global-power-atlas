@@ -210,6 +210,28 @@ only column is the XML declaration.
 returns an HTML paragraph asking for a five-second pause, not a 429, so a
 generic retry layer cannot see it. Requests here are paced at six seconds.
 
+## Freshness rules
+
+Every series carries a limit on how stale it may get, declared per zone and
+dataset rather than as one global threshold, because the providers publish at
+genuinely different speeds and those differences are legitimate.
+
+| Series | Limit | Why |
+|---|---|---|
+| Default | 36 hours | Most feeds land within twelve hours; this absorbs one missed run plus a provider's own delay. |
+| BR-SIN generation | 96 hours | The ONS hourly balance trails real time by about two days. |
+| ERCOT, PJM, CAISO generation | 48 hours | EIA-930 restates hourly generation and lands roughly a day behind. |
+| BR-SECO, BR-NE price | 30 days | CCEE blocks automated download, so PLD is refreshed by hand. |
+
+The scheduled run checks these after it commits, so a stale feed raises an
+alarm without discarding a day of good observations from every other market.
+A breach opens an issue on the repository rather than only turning a badge red.
+
+The two CCEE zones report but never fail the run. Nobody can refresh them from
+a cron job, and failing nightly for something the job cannot fix would train
+everyone to ignore the failure. Their age is shown on the front page instead,
+which is the honest way to handle a feed that drifts by design.
+
 ## Known limitations
 
 - **ERCOT and PJM have no price series.** EIA supplies balancing-authority demand and generation but publishes no price at all. ERCOT returns HTTP 403 to automated clients on every host it publishes on, and PJM's Data Miner requires a registered subscription key. California is the exception: CAISO OASIS is open, so it is the one large US market with a price here.

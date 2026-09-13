@@ -81,6 +81,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "generation_mix": _generation_mix(),
         "carbon_intensity": _carbon_intensity(),
         "capture_rates": _capture_rates(),
+        "freshness": _freshness(),
         "europe_spreads": _europe_spreads(),
     }
 
@@ -313,6 +314,25 @@ def _europe_spreads() -> pl.DataFrame:
         return pl.DataFrame()
     monthly_power = price_metrics.block_prices(prices, get_zone("DE-LU"), period="month")
     return benchmarks.calculate_spreads(pl.read_parquet(path), monthly_power)
+
+
+def _freshness() -> pl.DataFrame:
+    """The last observed instant and freshness limit for each declared series.
+
+    Publishes the instant rather than a measured age, so the export stays
+    deterministic and the reader's browser computes the age at the moment they
+    look. A baked-in age would be wrong within the hour and would make
+    ``gpa export --check`` fail on every run.
+
+    Published so a reader can see the age of what they are looking at instead
+    of assuming every series is equally current. That matters most for the two
+    CCEE zones, which are refreshed by hand because the provider blocks
+    automated clients, and for Brazilian generation, which trails real time by
+    about two days for reasons that belong to ONS rather than to this project.
+    """
+    from gpa import freshness as freshness_module
+
+    return freshness_module.to_frame(freshness_module.check())
 
 
 # --- Overview --------------------------------------------------------------

@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-Last updated: 2026-09-13 (P2, CAISO price) · Repository: `global-power-atlas` · Replaces:
+Last updated: 2026-09-13 (P3, freshness alerting) · Repository: `global-power-atlas` · Replaces:
 `power-pulse-global`
 
 ## Current result
@@ -169,6 +169,34 @@ What the series shows: the NERC on-peak block has cleared below off-peak at
 SP15 for three consecutive years, 12.04 percent of day-ahead hours are
 negative, and solar captures 0.603 of the time-weighted average price against
 0.971 for wind.
+
+## P3 outcome, 2026-09-13
+
+Operations closed. The pipeline can no longer stall in silence.
+
+`gpa freshness` measures every declared series against a rule declared per zone
+and dataset, and the scheduled workflow fails on a breach and opens an issue
+labelled `ingest-failure` carrying the log link. Repeated failures comment on
+the open issue rather than filing one nightly.
+
+Two ordering decisions matter and are easy to get backwards:
+
+- The check runs **after** the commit. Whatever was fetched successfully should
+  be persisted even when one feed is quiet; running it first would let a single
+  stale provider discard a day of good observations from every other market.
+- The issue step runs **last**, so a failure in any earlier step reaches it,
+  including the commit and push themselves.
+
+Rules are per series because the providers differ legitimately: 96 hours for
+Brazilian generation, since ONS trails by two days; 48 for US generation, since
+EIA restates on a day's delay; 36 by default. Every rule carries its reason and
+a test asserts none is left unexplained.
+
+The two CCEE zones are declared manual: they report staleness but never fail
+the run, because nobody can refresh them from a cron job and a nightly failure
+nobody can act on trains people to ignore the alarm. Their age is published on
+the front page instead, next to every other series measured against its own
+limit.
 
 ## Architecture
 

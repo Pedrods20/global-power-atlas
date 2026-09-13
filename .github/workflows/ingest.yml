@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   # Never let two ingests write the store at once; a queued run would commit on
@@ -68,6 +69,10 @@ jobs:
       - name: Report coverage
         run: gpa stats
 
+      # Committing comes before the freshness check on purpose. Whatever was
+      # fetched successfully should be persisted even when one feed has gone
+      # quiet; otherwise a single stale provider would discard a whole day of
+      # good observations from every other market.
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
@@ -82,3 +87,53 @@ jobs:
           # fetching. Rebasing keeps the data history linear.
           git pull --rebase --autostash origin main
           git push
+
+      - name: Check freshness
+        # A run that fetched nothing still exits zero if no adapter raised, so
+        # without this a provider could go dark for a week while the site kept
+        # serving last week's numbers as current. Rules are per zone and
+        # dataset because providers publish at genuinely different speeds; see
+        # src/gpa/freshness.py for each threshold and the reason behind it.
+        run: gpa freshness
+
+      - name: Open an issue when the run fails
+        # Last, so that a failure in any earlier step reaches it, including the
+        # commit and push. The badge alone is easy to miss; an issue is
+        # visible, assignable and carries the log link. Repeated failures
+        # comment on the open issue rather than filing a new one every night.
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              'The scheduled ingest did not complete.',
+              '',
+              `Run: ${run}`,
+              '',
+              'A freshness failure means a provider stopped publishing rather than',
+              'that the code broke. The rule that fired names the zone, the dataset',
+              'and the reason its limit is what it is.',
+            ].join('\n');
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'ingest-failure',
+            });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open.data[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Ingest failed on ${new Date().toISOString().slice(0, 10)}`,
+                body,
+                labels: ['ingest-failure'],
+              });
+            }

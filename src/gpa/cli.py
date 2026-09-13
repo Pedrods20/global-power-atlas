@@ -235,6 +235,65 @@ def stats() -> None:
 
 
 @app.command()
+def freshness(
+    strict: Annotated[
+        bool,
+        typer.Option(
+            "--strict/--no-strict", help="Exit non-zero when a scheduled series is stale."
+        ),
+    ] = True,
+) -> None:
+    """Report how stale each series is against its declared rule.
+
+    The scheduled workflow runs this so that a silent stall becomes a visible
+    failure. A run that fetched nothing still exits zero if no adapter raised,
+    which is exactly the case this catches.
+
+    Manually refreshed series, currently the CCEE PLD zones, report but never
+    fail the run: nobody can fix those from a cron job, and failing nightly
+    would train people to ignore the failure.
+    """
+    from gpa import freshness as freshness_module
+
+    reports = freshness_module.check()
+    if not reports:
+        typer.secho("No zones declare a source.", fg=typer.colors.YELLOW)
+        return
+
+    for report in reports:
+        colour = None
+        if report.blocking:
+            colour = typer.colors.RED
+        elif report.stale or report.missing:
+            colour = typer.colors.YELLOW
+        typer.secho(str(report), fg=colour)
+
+    blocking = [r for r in reports if r.blocking]
+    reminders = [r for r in reports if (r.stale or r.missing) and not r.blocking]
+
+    typer.echo("")
+    if reminders:
+        typer.secho(
+            f"{len(reminders)} manually refreshed series need attention:", fg=typer.colors.YELLOW
+        )
+        for report in reminders:
+            typer.echo(f"  {report.zone} {report.dataset}: {report.rule.reason}")
+
+    if not blocking:
+        typer.secho(
+            f"All {len(reports)} series are within their freshness rules.", fg=typer.colors.GREEN
+        )
+        return
+
+    typer.secho(f"{len(blocking)} series are stale:", fg=typer.colors.RED)
+    for report in blocking:
+        typer.echo(f"  {report.zone} {report.dataset}: {report.rule.reason}")
+
+    if strict:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def export(
     output: Annotated[
         str | None, typer.Option("--output", "-o", help="Destination directory.")

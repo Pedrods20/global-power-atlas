@@ -163,19 +163,31 @@ California is done. ERCOT and PJM are blocked on access, not on code.
 
 ## P3 - Operations
 
-- [ ] **Resolve or formalise the CCEE refresh.** CCEE returns HTTP 403 to
-  automated clients, so its four zones are excluded from the daily cron and
-  drift silently between manual imports. Either find a supported access path,
-  or add an explicit staleness banner on the site so a reader can see when PLD
-  was last refreshed.
+- [x] **Alert on ingestion failure.** A run that fetched nothing used to exit
+  zero as long as no adapter raised, so a provider could go dark for a week
+  while the site served stale numbers as current. `gpa freshness` now measures
+  every declared series against a per-series rule and the scheduled workflow
+  fails on a breach, opening an issue labelled `ingest-failure` with the log
+  link. Repeated failures comment on the open issue instead of filing a new one
+  each night.
 
-- [ ] **Alert on ingestion failure.** The daily workflow can fail, or a single
-  zone can go stale, with nothing surfacing it. Add a failure notification, or
-  a freshness check that fails the run when any scheduled zone exceeds an
-  agreed age.
+  The check runs *after* the commit, deliberately: whatever was fetched
+  successfully should be persisted even when one feed is quiet, rather than a
+  single stale provider discarding a whole day from every other market.
 
-- [x] **Add CI and deploy badges to the README.** The workflows pass but a
-  reader cannot see that without opening the Actions tab.
+  Rules are per zone and dataset because the providers differ legitimately.
+  Brazilian generation is allowed 96 hours because ONS trails by two days; US
+  generation 48 because EIA restates on a day's delay; everything else 36. Each
+  rule carries its reason, and a test asserts none is left unexplained.
+
+- [x] **Formalise the CCEE refresh.** The two PLD zones are declared manual and
+  allowed 30 days. They report staleness but never fail the run, since nobody
+  can fix them from a cron job and nightly failures would train people to
+  ignore the alarm. Their age is now visible on the front page, alongside every
+  other series measured against its own limit, so a reader sees the drift
+  rather than trusting a stale number.
+
+- [x] **Add CI and deploy badges to the README.**
 
 ## Front C - Short-term price forecasting (next after Sprint 1)
 

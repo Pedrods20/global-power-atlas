@@ -5,6 +5,7 @@ toc: false
 
 ```js
 const zones = await FileAttachment("data/zones.json").json();
+const freshnessTable = await FileAttachment("data/freshness.parquet").parquet();
 const dailyPrices = await FileAttachment("data/daily_prices.parquet").parquet();
 const dailyLoad = await FileAttachment("data/daily_load.parquet").parquet();
 const mix = await FileAttachment("data/generation_mix.parquet").parquet();
@@ -14,6 +15,14 @@ const prices = [...dailyPrices];
 const load = [...dailyLoad];
 const mixRows = [...mix];
 const negativeRows = [...negatives];
+// Age is computed here, not baked into the export, so it is right at the
+// moment the page is opened rather than at the moment it was built.
+const freshnessRows = [...freshnessTable].map((d) => {
+  const lag = d.last_ts_utc
+    ? Math.max(0, (Date.now() - new Date(d.last_ts_utc)) / 3600000)
+    : null;
+  return { ...d, lag_hours: lag, stale: lag === null || lag > d.max_lag_hours };
+});
 ```
 
 ```js
@@ -59,6 +68,62 @@ const fuelOrder = Object.keys(fuelColor);
 Wholesale electricity is not one market. It is dozens of them, each with its own trading day, settlement interval and definition of a peak hour. This site normalises selected markets onto one model while retaining their currencies, time zones and source boundaries.
 
 Every number here is computed in the market's own local time, over the interval duration the operator actually published, with negative prices left in. The [methodology](./methodology) says exactly how, and what each figure does not mean.
+
+## Data freshness
+
+```js
+const stale = freshnessRows.filter((d) => d.stale);
+const manualStale = stale.filter((d) => d.manual);
+const scheduledStale = stale.filter((d) => !d.manual);
+const worst = d3.max(freshnessRows, (d) => d.lag_hours ?? 0);
+```
+
+```js
+html`<div class="freshness ${stale.length ? "freshness-warn" : "freshness-ok"}">
+  ${stale.length === 0
+    ? html`<strong>All ${freshnessRows.length} series are current.</strong>
+        The oldest is ${Math.round(worst)} hours behind real time, which is inside
+        the limit set for its provider.`
+    : html`<strong>${stale.length} of ${freshnessRows.length} series are past their limit.</strong>
+        ${scheduledStale.length
+          ? `${scheduledStale.length} on the scheduled feed: ${scheduledStale.map((d) => d.zone + " " + d.dataset).join(", ")}. `
+          : ""}
+        ${manualStale.length
+          ? `${manualStale.length} refreshed by hand: ${manualStale.map((d) => d.zone + " " + d.dataset).join(", ")}.`
+          : ""}`}
+</div>`
+```
+
+Providers do not publish at the same speed, so each series carries its own
+limit rather than one global threshold. Brazilian generation is allowed four
+days because the ONS hourly balance trails real time by about two. The two CCEE
+price zones are allowed a month because the provider refuses automated clients
+and they are imported by hand. The [methodology](./methodology) sets out each
+limit and the reason behind it.
+
+```js
+Plot.plot({
+  title: "Age against each series' own freshness limit",
+  subtitle: "Past the dashed line is a series older than its provider's expected lag allows.",
+  width,
+  height: 420,
+  marginLeft: 160,
+  x: { label: "% of the series' limit", grid: true },
+  y: { label: null },
+  color: { domain: [false, true], range: ["#0072B2", "#D55E00"], legend: false },
+  marks: [
+    Plot.barX(freshnessRows.filter((d) => d.lag_hours != null), {
+      x: (d) => (d.lag_hours / d.max_lag_hours) * 100,
+      y: (d) => d.zone + " " + d.dataset,
+      fill: "stale",
+      sort: { y: "x", reverse: true },
+      tip: true,
+    }),
+    Plot.ruleX([100], { stroke: "currentColor", strokeDasharray: "3,3" }),
+    Plot.ruleX([0]),
+  ],
+})
+```
 
 ## Market coverage
 
@@ -221,6 +286,16 @@ Plot.plot({
 Go deeper on [prices](./prices), [demand](./demand) or [supply](./supply). If you intend to reuse a number, read the [methodology](./methodology) first.
 
 <style>
+.freshness {
+  border-left: 3px solid var(--theme-foreground-focus);
+  padding: 0.6rem 1rem;
+  margin: 1rem 0 1.5rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.freshness-ok { border-left-color: #009E73; }
+.freshness-warn { border-left-color: #D55E00; }
+
 .hero {
   display: flex;
   flex-direction: column;
