@@ -73,9 +73,12 @@ rebuild" section. Summary:
   and a new browser-smoke step all pass on `main`; `ingest.yml` calls it with
   the commit it just made, independent of whether the subsequent freshness
   check passes (a quiet provider should not hold back a good day from every
-  other market). Not yet proven on the Linux runner — the next push to `main`
-  is the first real test of the reusable-workflow wiring; watch that Actions
-  run for `workflow_call` permission or trigger errors before trusting it.
+  other market). Proven on the Linux runner: pushing this increment took three
+  attempts to go green (`gpa export --check` failed twice first — see "Two
+  bugs the first deploy attempt found" below — before CI run `34785003344`
+  passed both jobs and successfully called `Deploy`, which built and published
+  the site). The reusable-workflow wiring itself worked on the first try; the
+  failures were pre-existing correctness gaps it exposed, not new problems.
 - [x] **Check source semantics and time coverage.** ~~Flag unknown generation
   categories, select one load definition instead of summing alternatives, and
   report gaps/resolution inconsistencies beyond dataset-level freshness.~~
@@ -112,6 +115,42 @@ rebuild" section. Summary:
   to the days nearest the equinox, or a per-day rather than per-month
   centroid) before either dismissing it or treating ES generation timestamps
   as suspect.
+
+### Two bugs the first deploy attempt found
+
+Pushing the rebuild (commit `bdbfb9d`) was the first time `gpa export --check`
+ever ran comparing a Windows-generated commit against a Linux recompute; every
+previous commit's `site/data` had been generated and checked on the same
+platform (a scheduled Linux Actions run). That exposed two real bugs in
+`check_exports`/`gpa export --check` itself, both now fixed and covered by
+named tests:
+
+- [x] **JSON export comparison was exact, not tolerant.** `forecast.json`
+  differed from Linux's recompute in `best_mae`'s last few significant digits
+  — a fitted model's floating-point output is not bit-reproducible across
+  platforms even with a fixed seed. Parquet tables already tolerated this
+  through `assert_frame_equal`'s default tolerance; JSON used `!=`. Fixed by
+  `_json_values_close` in `src/gpa/export.py`
+  (`test_export_check_tolerates_cross_platform_float_noise_not_real_change`).
+- [x] **`input_sha256` hashed raw floats, defeating that same tolerance.** A
+  hash is designed to amplify any difference, so once the JSON comparison
+  became tolerant, the *hash field itself* still failed: `forecast.json`'s
+  `input_sha256` is a SHA-256 of the duration-weighted panel, and a
+  duration-weighted mean is a parallel reduction whose summation order (and
+  so its last bit) can differ by machine core count. Fixed by
+  `gpa.forecast.backtest.stable_hash`, which rounds float columns to 6
+  decimal places before hashing, used both where `input_sha256` is first
+  computed and where `forecast.snapshot.read()` re-verifies a saved
+  experiment's fingerprint
+  (`test_stable_hash_absorbs_last_bit_noise_but_catches_a_real_change`).
+
+Both bugs were latent since `gpa export --check` and the forecasting module
+were built; the scope-reduction rebuild's cross-platform deploy is what
+finally exercised the path that could reveal them. Worth remembering: **any**
+future commit that regenerates `site/data` on Windows and pushes it should
+expect `gpa export --check` to be the first real cross-platform test of that
+data — run it against a Linux runner (or a WSL/container Python) before
+trusting a clean local `gpa export --check` as sufficient.
 
 ## Removed for lack of independent verification, 2026-09-13
 
@@ -373,12 +412,16 @@ anything, rather than being assumed to.
   Local MLflow runs record these diagnostics alongside inputs and source.
 - [x] **Commit the local increment.** Forecasting implementation, tests and
   regenerated `site/data` are in `083063a`.
-- [ ] **Publish after resolving review findings.** The data/metric/deploy
-  findings are resolved as of 2026-09-13 (see "Scope reduction and rebuild" in
-  `STATE.md`); the remaining step is committing, pushing, and verifying the
-  new CI→deploy and ingest→deploy wiring actually works on the Linux runner
-  (untested as of this writing — the reusable-workflow call is new), then the
-  hosted desktop/mobile smoke, before claiming forecasting is live.
+- [x] **Publish after resolving review findings.** Done 2026-09-13: pushed
+  as three commits (`bdbfb9d` rebuild, `987b075`/`e9a12d0`/`0c4d625` fixing
+  the two export-check bugs the first deploy attempt found — see above), CI
+  run `34785003344` passed both jobs and its called `Deploy` workflow built
+  and published successfully. The live site now serves the four-zone,
+  independently-audited build, including forecasting. Not yet done: a
+  post-deploy desktop/mobile browser smoke against the *hosted* URL (only the
+  local preview was smoke-tested pre-push) — worth a quick pass to confirm
+  the production build behaves the same as the local one before treating this
+  as fully closed.
 - [ ] **Record a prospective evaluation.** Issue and retain forecasts before
   prices become known, preserve input vintages and evaluate the separate period.
   The historical benchmark is capped at 2026-09-12; extending that cap is not

@@ -412,11 +412,14 @@ Remaining Front C TODOs track both. Read `docs/REVIEW-2026-09-13.md` for the
 full original review, and the "Scope reduction and rebuild" section above for
 what it triggered and what remains open from it.
 
-As of this session's end, the scope-reduction and rebuild work described above
-is complete in the working tree (`git status` will show the deleted adapters
-and zone data, the promoted partitions, the workflow changes and the doc
-updates) but **not yet committed**; check whether a later session or the user
-committed it before assuming it is still pending.
+The scope-reduction and rebuild work described above is committed and
+deployed: four commits (`bdbfb9d` the rebuild itself, then `987b075`,
+`e9a12d0`, `0c4d625` fixing two `gpa export --check` bugs the first live
+deploy attempt exposed — see "Two bugs the first deploy attempt found" in
+`TODO.md`), pushed to `main`. CI run `34785003344` passed both jobs and its
+called `Deploy` workflow published successfully; the live site now serves the
+four-zone build. The CI→deploy and ingest→deploy `workflow_call` wiring is
+proven on the Linux runner, not only asserted.
 
 Three scope decisions are settled and should not be reopened without the user:
 
@@ -446,10 +449,8 @@ npm run build
 > Work in `C:\Users\Pedro\Desktop\Python\global-power-atlas`. This is a Python
 > ETL and Observable Framework static site publishing wholesale electricity
 > market data for 4 zones (Germany-Luxembourg, France, Spain, Brazil's national
-> system), already live at
-> <https://pedrods20.github.io/global-power-atlas/> (the live site may still
-> show the older 11-zone build until this increment is committed and deployed
-> — check before assuming the two match).
+> system), live at <https://pedrods20.github.io/global-power-atlas/> since the
+> 2026-09-13 rebuild deployed successfully.
 >
 > Read `STATE.md` and `TODO.md` before touching anything, and read
 > `site/methodology.md` before touching any metric. The domain rules in
@@ -458,8 +459,10 @@ npm run build
 >
 > Set up with `python -m venv .venv` and
 > `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Baseline as of this
-> session: 259+ tests passing, ruff clean, mypy clean, coverage at 85 percent
-> against a 75 percent gate, `gpa validate` reporting 275 valid partitions, and
+> session: 235 tests passing (down from 259 before the rebuild — removing
+> ERCOT/CAISO/EIA-specific test files outweighed the new ones added), ruff and
+> `ruff format` clean, mypy clean, coverage at 85 percent against a 75 percent
+> gate, `gpa validate` reporting 275 valid partitions, `gpa audit` clean, and
 > `gpa export --check` clean. Recheck these before publishing.
 >
 > Sprint 1, P3 and the 2026-09-13 scope-reduction rebuild are complete. Follow
