@@ -2,7 +2,21 @@
 
 Supply, demand and price across wholesale electricity markets in five continents, rebuilt from primary and documented public sources and published as a static site.
 
+[![CI](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml)
+[![Ingest](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ingest.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ingest.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Live site:** [Open dashboard](https://pedrods20.github.io/global-power-atlas/) · **Methodology:** [`site/methodology.md`](site/methodology.md)
+
+| | |
+|---|---|
+| Zones | 11 across five continents |
+| Observations | 3,584,484 in 591 validated monthly partitions |
+| History | Two years, extended daily by a scheduled job |
+| Stack | Python, Polars, DuckDB, Parquet, Observable Framework |
+| Infrastructure | None. No backend, no database server, no browser-visible credential |
 
 ---
 
@@ -134,6 +148,31 @@ The US zones need a free [EIA API key](https://www.eia.gov/opendata/register.php
 | [ECB exchange rates](https://data.ecb.europa.eu/data/datasets/EXR) | European Central Bank | ECB data terms |
 
 Attribution for each series appears on the methodology page alongside the retrieval date.
+
+## Project status
+
+The data platform is built and running. What follows is analytical depth on top
+of it.
+
+| Front | State |
+|---|---|
+| Ingestion, validation, storage | Done. Seven adapters, 11 zones, daily scheduled refresh. |
+| Market metrics and published site | Done. Six pages, blocks, duration curves, negative prices, capture rates, carbon intensity, thermal spreads. |
+| Engineering quality bar | In progress. Typing and orchestration tests being brought up to the standard the domain code already meets. |
+| Short-term price forecasting | Next. Two years of validated hourly history is the substrate. |
+| Regulatory retrieval | Planned, after forecasting, so its contribution can be measured rather than assumed. |
+
+Known gaps are stated rather than hidden. The three US zones carry no wholesale
+price because EIA-930 does not publish one, so they have no duration curve,
+block spread or spark spread. Brazilian generation trails real time by about two
+days, which is the provider's lag. Everything here is hub or zonal, so nothing
+measures nodal congestion. The full list lives in [`TODO.md`](TODO.md) and the
+conventions behind every figure in [`site/methodology.md`](site/methodology.md).
+
+Orchestration deliberately stays on GitHub Actions rather than Airflow. A
+scheduler, metadata database and webserver would buy nothing this pipeline needs
+and would cost the property that anyone can clone this repository and reproduce
+the whole thing with no infrastructure.
 
 ## License
 

@@ -49,6 +49,94 @@ one changed where Brazilian load comes from.
   Southeast area code is `SECO`; the older `SE` returns an empty list rather
   than an error, which would silently drop about a third of national demand.
 
+## Sprint 1 (active) - Enforce the quality bar before the codebase triples
+
+Audited on 2026-09-13. The domain logic is well tested; the orchestration and
+the modules added during the expansion are not. Machine learning and a
+retrieval layer are next, and both will add a lot of code. Locking the bar now
+means each new front is born under the rule instead of inheriting the debt.
+
+Acceptance for the sprint as a whole: `mypy` passes with zero errors, `pytest`
+reports no module under 60 percent, CI enforces both, and `origin/main` is up
+to date.
+
+### S1.1 - Type the two expansion adapters
+
+`jepx.py` and `ccee.py` were written without type annotations while every
+other adapter has them. Their untyped `fetch` is also why
+`sources/__init__.py:39` fails the `Source` protocol check, so this one task
+clears 8 of the 17 errors.
+
+- [ ] Annotate every function in `src/gpa/sources/jepx.py` (lines 21, 35, 46).
+- [ ] Annotate every function in `src/gpa/sources/ccee.py` (lines 23, 31, 52, 65).
+- [ ] `fetch` must match the `Source` protocol in `sources/base.py` exactly:
+      `(self, zone: Zone, dataset: str, start: dt.datetime, end: dt.datetime) -> pl.DataFrame`.
+- [ ] Module-level parse helpers return `pl.DataFrame` and take `str` input,
+      matching `_parse_balance` in `ons.py` as the reference style.
+
+**Done when** `mypy` reports no error in `jepx.py`, `ccee.py` or
+`sources/__init__.py`.
+
+### S1.2 - Clear the remaining type errors
+
+- [ ] `benchmarks.py:18` - `openpyxl` ships no stubs. Add `types-openpyxl` to
+      the dev extra, or a targeted `# type: ignore[import-untyped]` with a
+      comment saying why. Do not weaken the global mypy settings.
+- [ ] `export.py:87` - `len()` on a value typed `object`. Narrow the type at
+      the source rather than casting at the call site.
+- [ ] `export.py:353` - `.isoformat()` on a polars union type. Guard the branch
+      so only date-like values reach it.
+
+**Done when** `mypy` exits clean across all 23 source files.
+
+### S1.3 - Test the orchestration
+
+`pipeline.py` and `cli.py` sit at 0 percent. `pipeline.py` is the entire
+resilience story of the daily cron: it decides what becomes `skipped`,
+`failed`, `written` or `empty`, and nothing has ever exercised it.
+
+- [ ] `tests/test_pipeline.py`, using a fake `Source` and a `tmp_path` store
+      via the `GPA_DATA_ROOT` environment variable, as `tests/test_store.py`
+      already does. Cover at minimum:
+  - a missing credential becomes `SKIPPED`, never `FAILED`, and never stops
+    the zones that follow it
+  - an adapter raising `UpstreamError` becomes `FAILED` while the other
+    targets still run to completion
+  - a schema violation becomes `FAILED` with the offending detail retained
+  - an adapter returning an empty frame becomes `EMPTY`, not `FAILED`
+  - `max_window_days` on a source caps the caller's `chunk_days`
+  - a naive `start` or `end` raises `ValueError`
+- [ ] `tests/test_cli.py` using `typer.testing.CliRunner`. Cover `zones`,
+      `stats`, `validate` and `export --check`, asserting exit code 0 on a
+      populated temporary store and a non-zero exit when validation fails.
+
+**Done when** `pipeline.py` and `cli.py` each report at least 60 percent, and
+no module in the coverage table is below 60 percent.
+
+### S1.4 - Make CI enforce what pyproject declares
+
+`[tool.mypy]` sets `strict = true` and the CI never runs it. A standard that is
+not enforced is a standard that drifts, which is exactly what happened.
+
+- [ ] Add `mypy` to the `python` job in `.github/workflows/ci.yml`, after the
+      format check.
+- [ ] Add `pytest --cov=gpa --cov-fail-under=60`.
+- [ ] Keep both non-negotiable: do not add `continue-on-error`.
+
+**Done when** CI fails on a deliberately introduced type error and on a
+deliberately removed test.
+
+### S1.5 - Publish
+
+- [ ] `git push`. Two commits are unpushed, so the live site does not yet show
+      the France and Spain backfills, the CCEE history or the Brazilian load
+      fix.
+- [ ] Confirm the CI and Pages runs both succeed, and that the hosted site
+      reflects the new coverage.
+
+**Done when** `git status -sb` shows no divergence from `origin/main` and the
+public site shows France and Spain with full history.
+
 ## P2 - Analytical asymmetries
 
 The three largest US markets carry no price, which removes the metrics that
@@ -85,17 +173,61 @@ matter most in exactly the systems where gas sets the margin.
   a freshness check that fails the run when any scheduled zone exceeds an
   agreed age.
 
-- [ ] **Add CI and deploy badges to the README.** The workflows pass but a
+- [x] **Add CI and deploy badges to the README.** The workflows pass but a
   reader cannot see that without opening the Actions tab.
 
-## P4 - Depth a senior reader would look for next
+## Front C - Short-term price forecasting (next after Sprint 1)
+
+Two years of validated hourly history exist, which is the substrate the
+previous architecture could never provide. This is the front that turns a
+well-built data platform into evidence of analytical capability.
+
+Sequenced before the retrieval layer on purpose: the evaluation harness built
+here is what will later decide whether regulatory signals actually improve
+anything, rather than being assumed to.
+
+- [ ] **Naive baselines first, and publish them.** Previous day, previous week
+  same hour, and a seasonal-naive variant. Every later model is judged against
+  these. A forecast that cannot beat "same hour last week" is not a forecast.
+- [ ] **Walk-forward backtest, never a random split.** Time-series data leaks
+  through a shuffled split. Expanding or rolling origin, refit at each step,
+  and no feature that would not have been known at prediction time.
+- [ ] **Report the error metrics that suit power prices.** MAE and RMSE plus a
+  pinball loss if any quantile output is produced. Report them by block and by
+  regime separately: aggregate error hides the fact that the interesting hours
+  are the scarce and the negative ones.
+- [ ] **State the target precisely.** Day-ahead hourly price for one zone to
+  start, most likely DE-LU given its depth and clean history. Say which
+  information set is available at forecast time.
+- [ ] **Publish failure honestly.** If the model loses to a naive baseline in
+  some regime, the site says so. A backtest that only shows wins is not a
+  backtest.
+
+## Front B - Regulatory retrieval (after Front C)
+
+Indexing normative and market documents from ANEEL, ONS and CCEE to extract
+signals no price series carries. Genuinely differentiated; almost no portfolio
+has it.
+
+Deliberately sequenced after forecasting so its value can be measured rather
+than asserted.
+
+- [ ] **Define the question it answers before building it.** A retrieval layer
+  that produces plausible prose but no measurable feature is decoration.
+- [ ] **Cite sources with document and date.** An answer without provenance is
+  unusable in this domain.
+- [ ] **Measure it against the Front C baseline.** Ship it only if the
+  regulatory features move a backtested error metric.
+
+## P4 - Other depth a senior reader would look for
 
 None of these exist yet. Each is a self-contained increment on data already
 stored.
 
 - [ ] **Residual (net) load and its duration curve.** Demand minus wind and
   solar is the series that actually sizes flexibility and drives the duck
-  curve. Every input is already in the store; no new source is needed.
+  curve. Every input is already in the store; no new source is needed. This is
+  also a strong feature for Front C.
 
 - [ ] **Ramp analysis.** Hourly and sub-hourly ramp rates, and the annual
   worst-case ramp, which is what dimensions flexible capacity. Australia's
@@ -109,14 +241,20 @@ stored.
   so congestion and basis are invisible. Documented as a limitation today;
   CAISO OASIS LMP would be the natural first step.
 
-- [ ] **Forecasting and backtesting.** Two years of validated history now
-  exists, which is the substrate the previous architecture could never provide.
-  A day-ahead price or load baseline with an honest walk-forward backtest and
-  error metrics would use it.
-
 ---
 
 ## Scope decisions
+
+- **No Airflow.** Orchestration stays on GitHub Actions cron. Airflow needs a
+  scheduler, a metadata database and a webserver, none of which fit the free
+  Actions runner, and adopting it would cost the property that anyone can clone
+  this repository and reproduce the whole pipeline with no infrastructure. That
+  reproducibility is the strongest thing the project has. Decided 2026-09-13.
+- **Machine learning before retrieval.** Two years of validated hourly history
+  already exist, so a day-ahead baseline with an honest walk-forward backtest
+  can be built now and will establish the evaluation harness. A regulatory
+  retrieval layer comes afterwards and is judged by whether it measurably
+  improves that baseline. Decided 2026-09-13.
 
 - **Brazilian South and North submarkets are not registered.** CCEE publishes
   PLD for all four, but only Southeast/Central-West and Northeast are carried

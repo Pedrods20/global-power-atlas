@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-Last updated: 2026-09-13 · Repository: `global-power-atlas` · Replaces:
+Last updated: 2026-09-13 (audit) · Repository: `global-power-atlas` · Replaces:
 `power-pulse-global`
 
 ## Current result
@@ -71,6 +71,41 @@ what is still missing.
 - Six routes pass the browser smoke at 1440 px and 390 px with no JavaScript
   errors and no horizontal overflow.
 
+## Quality audit, 2026-09-13
+
+Verdict: **approved with reservations.** Measured, not asserted.
+
+What holds up. The domain rigour is real and enforced by named tests: 23-hour
+and 25-hour local days, NEM market time separate from civil time, NERC blocks
+that include Saturday and do not shift a Saturday holiday, negative prices kept
+with arithmetic differences instead of log returns, annualisation on 365, power
+integrated over each interval's real duration. The 95 percent carbon-coverage
+guard that refuses to publish a Brazilian intensity is the most mature decision
+in the repository: it prefers silence to a biased number.
+
+Three reservations, each with evidence.
+
+1. **A declared standard that nothing enforces.** `pyproject.toml` sets mypy to
+   `strict`; CI never runs it. `mypy` reports 17 errors across 5 files. The
+   original modules are typed and the expansion modules are not, so the standard
+   drifted silently. `jepx.py` and `ccee.py` have unannotated functions, which
+   is also why `sources/__init__.py:39` fails the `Source` protocol check.
+
+2. **The orchestration has never been exercised.** Coverage is 53 percent, and
+   the distribution is the point: `calendar.py` 98, `store.py` 96, `metrics/`
+   84-97, but `export.py` 28, and `pipeline.py` and `cli.py` at 0.
+   `pipeline.py` decides what becomes skipped, failed, written or empty, which
+   is the entire resilience story of the daily cron, and no test has ever run
+   it.
+
+3. **The public site trails the repository.** Two commits are unpushed, so the
+   France and Spain backfills, the CCEE history and the Brazilian load fix are
+   not live.
+
+None of the three breaks anything today. All three were scheduled into Sprint 1
+rather than deferred, because machine learning and a retrieval layer are next
+and both will add a great deal of code.
+
 ## Architecture
 
 ```
@@ -133,8 +168,22 @@ Important paths:
 ## Resume instructions
 
 Work from `C:\Users\Pedro\Desktop\Python\global-power-atlas`. Read
-`TODO.md` first and continue from its first unchecked action. Do not use the
+`TODO.md` first and work Sprint 1 in order, S1.1 through S1.5. Do not use the
 old `power-pulse-global` directory.
+
+Sprint 1 closes the three audit reservations above. It is deliberately
+unglamorous: typing, tests for the orchestration, and making CI enforce what
+`pyproject.toml` already declares. It comes before the new fronts so that those
+are born under the rule instead of inheriting the debt.
+
+Two scope decisions are settled and should not be reopened without the user:
+
+- **No Airflow.** Orchestration stays on GitHub Actions. Airflow would need a
+  scheduler, a metadata database and a webserver, none of which fit the free
+  runner, and it would cost the property that anyone can clone this repository
+  and reproduce the pipeline with no infrastructure.
+- **Forecasting before retrieval.** The evaluation harness built for Front C is
+  what will later decide whether regulatory signals improve anything.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
@@ -145,11 +194,42 @@ old `power-pulse-global` directory.
 npm run build
 ```
 
+### Prompt for the next AI
+
+> Work in `C:\Users\Pedro\Desktop\Python\global-power-atlas`. This is a Python ETL and
+> Observable Framework static site publishing wholesale electricity market
+> data for 11 zones across five continents, already live at
+> <https://pedrods20.github.io/global-power-atlas/>.
+>
+> Read `STATE.md` and `TODO.md` before touching anything, and read
+> `site/methodology.md` before touching any metric. The domain rules in
+> `STATE.md` are each enforced by a named test; never relax a test to make a
+> change pass.
+>
+> Set up with `python -m venv .venv` and
+> `..\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Baseline to
+> expect before you start: 119 tests passing, ruff clean, `gpa validate`
+> reporting 591 valid partitions, `gpa export --check` clean, and `mypy`
+> reporting 17 errors.
+>
+> Your task is **Sprint 1 in `TODO.md`, items S1.1 through S1.5, in order.**
+> Each carries its own acceptance criterion. The sprint is complete when mypy
+> exits clean, no module is under 60 percent coverage, CI enforces both, and
+> `origin/main` has no divergence.
+>
+> Do not start Front B or Front C. Do not introduce Airflow. Both decisions
+> are recorded under "Scope decisions" in `TODO.md`.
+>
+> After any change to ingestion or metrics, run `gpa export` and commit
+> `site/data`, or CI fails its freshness check.
+
 After changes to ingestion or metrics, regenerate and commit `site/data`.
 Agree the next scope with the user before beginning a new increment; the
 roadmap is a menu, not a queue to work through unprompted. Keep `TODO.md`
 current as the handoff record.
 
-The largest known gaps are France and Spain holding three months against two
-years elsewhere, CCEE holding 2026 only, and the three US zones carrying no
-wholesale price at all.
+Those three gaps were closed on 2026-09-12. The largest remaining data gap is
+that ERCOT, PJM and CAISO carry no wholesale price, because EIA-930 publishes
+balancing-authority load and generation but no hub or nodal price. That removes
+price duration curves, block spreads, capture rates and spark spreads from the
+three largest US markets, and it is the first item of P2.
