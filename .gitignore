@@ -11,6 +11,10 @@ dist-python/
 .ruff_cache/
 .coverage
 htmlcov/
+.gpa/
+mlruns/
+mlartifacts/
+mlflow.db
 
 # Node and Observable Framework
 node_modules/

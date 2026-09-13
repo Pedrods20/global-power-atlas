@@ -1,0 +1,144 @@
+{
+  "runs": [
+    {
+      "zone": "DE-LU",
+      "zone_name": "Germany-Luxembourg",
+      "currency": "EUR",
+      "timezone": "Europe/Berlin",
+      "target": "Day-ahead price for one market-local hour, as the duration-weighted mean of the intervals the auction published for that hour.",
+      "gate": "12:00 market time on the day before delivery, when the day-ahead auction closes for the following delivery day.",
+      "train_start": "2024-09-20",
+      "validation_start": "2025-06-17",
+      "test_start": "2025-10-15",
+      "test_end": "2026-09-12",
+      "test_days": 333,
+      "scored_hours": 7982,
+      "alpha": 0.1,
+      "reference": "naive_similar_day",
+      "features": [
+        "price_d1",
+        "price_d2",
+        "price_d3",
+        "price_d7",
+        "price_d1_mean",
+        "price_d1_min",
+        "price_d1_max",
+        "price_d1_end",
+        "price_d7_mean",
+        "residual_d2",
+        "residual_d2_mean",
+        "dow_2",
+        "dow_3",
+        "dow_4",
+        "dow_5",
+        "dow_6",
+        "dow_7",
+        "year_sin",
+        "year_cos"
+      ],
+      "models": [
+        "naive_previous_day",
+        "naive_previous_week",
+        "naive_similar_day",
+        "ridge",
+        "lightgbm"
+      ],
+      "best_model": "ridge",
+      "baselines": [
+        "naive_previous_day",
+        "naive_previous_week",
+        "naive_similar_day"
+      ],
+      "best_mae": 21.060292830420345,
+      "best_skill_pct": 27.767014173250814,
+      "best_skill_vs_best_baseline_pct": 25.92293432193299,
+      "quantile_levels": [
+        0.1,
+        0.5,
+        0.9
+      ],
+      "conformal_window_days": 56,
+      "evaluation": "retrospective development benchmark; not an untouched holdout",
+      "data_vintages": "latest revised observations; publication-time vintages unavailable",
+      "benchmark_end": "2026-09-12",
+      "input_sha256": "d891960f87329ab566389cf79acb2ad86f3ad238f15c9e4e41af8e632e6b2e6f",
+      "eligible_hours": 7986,
+      "min_train_days": 270,
+      "validation_days": 90,
+      "window": null,
+      "lightgbm_parameters": {
+        "objective": "regression_l1",
+        "learning_rate": 0.05,
+        "num_leaves": 15,
+        "min_data_in_leaf": 48,
+        "lambda_l2": 1.0,
+        "num_threads": 1,
+        "seed": 42,
+        "deterministic": true,
+        "force_col_wise": true,
+        "verbosity": -1,
+        "num_boost_round": 100
+      },
+      "lightgbm_features": [
+        "price_d1",
+        "price_d2",
+        "price_d3",
+        "price_d7",
+        "price_d1_mean",
+        "price_d1_min",
+        "price_d1_max",
+        "price_d1_end",
+        "price_d7_mean",
+        "residual_d2",
+        "residual_d2_mean",
+        "dow_2",
+        "dow_3",
+        "dow_4",
+        "dow_5",
+        "dow_6",
+        "dow_7",
+        "year_sin",
+        "year_cos",
+        "local_hour"
+      ],
+      "target_convention": "complete UTC hours; repeated autumn clock hour averaged; each clock-hour cell scored equally",
+      "alpha_search": [
+        {
+          "alpha": 0.01,
+          "n": 2150,
+          "mae": 16.841407792647455
+        },
+        {
+          "alpha": 0.03,
+          "n": 2150,
+          "mae": 16.582128174237067
+        },
+        {
+          "alpha": 0.1,
+          "n": 2150,
+          "mae": 16.364270882232923
+        },
+        {
+          "alpha": 0.3,
+          "n": 2150,
+          "mae": 16.652056244019033
+        },
+        {
+          "alpha": 1.0,
+          "n": 2150,
+          "mae": 17.719543951845772
+        },
+        {
+          "alpha": 3.0,
+          "n": 2150,
+          "mae": 19.668709918084332
+        },
+        {
+          "alpha": 10.0,
+          "n": 2150,
+          "mae": 22.657824079487703
+        }
+      ]
+    }
+  ]
+}

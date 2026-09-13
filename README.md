@@ -8,12 +8,12 @@ Supply, demand and price across wholesale electricity markets in five continents
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Live site:** [Open dashboard](https://pedrods20.github.io/global-power-atlas/) · **Methodology:** [`site/methodology.md`](site/methodology.md)
+**Live site:** [Open dashboard](https://pedrods20.github.io/global-power-atlas/) · **Methodology:** [`site/methodology.md`](site/methodology.md) · **Forecast backtest:** [`site/forecast.md`](site/forecast.md)
 
 | | |
 |---|---|
 | Zones | 11 across five continents |
-| Observations | 3,584,484 in 591 validated monthly partitions |
+| Observations | 3,602,004 in 616 validated monthly partitions |
 | History | Two years, extended daily by a scheduled job |
 | Stack | Python, Polars, DuckDB, Parquet, Observable Framework |
 | Infrastructure | None. No backend, no database server, no browser-visible credential |
@@ -54,6 +54,7 @@ Coverage is dataset-specific. The three US balancing authorities carry hourly de
 - How do generation-weighted solar and wind revenues compare with baseload prices?
 - How do load shape, generation mix and renewable share vary by market?
 - What do historical German clean spark and dark screening spreads show after benchmark fuel and EUA costs?
+- Can a fitted model beat "the same hour last week" at forecasting tomorrow's day-ahead price, and in which hours does it fail to?
 
 The site reports observed data, not causal attribution. A negative-price episode does not by itself prove curtailment, and a falling block spread does not isolate the effect of solar. These hypotheses need additional dispatch, outage and constraint data.
 
@@ -84,6 +85,30 @@ market cheap, and wind largely does not.
 Germany and New South Wales show the same pattern at earlier stages, and the
 [prices page](https://pedrods20.github.io/global-power-atlas/prices) puts the
 three side by side.
+
+**Ridge beats the naive baselines in the local retrospective benchmark;
+LightGBM loses to them in the tails.** Over 333 calendar days, from 2025-10-15
+to 2026-09-12, all five models are scored on the same 7,982 clock-hour cells.
+Daily-refitted ridge reaches a mean absolute error of 21.06 EUR/MWh against
+28.43 for the best naive baseline, a skill of 25.9 percent. The fixed LightGBM
+challenger reaches 22.18 EUR/MWh and loses to the best naive baseline by 3.5
+percent on negative hours and 9.5 percent on scarce hours. Ridge's breakdown:
+
+| Bucket | MAE | Skill over the best baseline | Bias |
+|---|---|---|---|
+| Off-peak | 16.79 | +33.0% | −1.1 |
+| On-peak | 28.72 | +16.0% | −3.7 |
+| Negative hours | 40.94 | +4.3% | −33.6 |
+| Scarce hours (top 5%) | 55.48 | +13.7% | +50.1 |
+
+EUR/MWh; bias is realised price minus forecast. The model shrinks towards the
+middle: it forecasts negative hours too high and scarce hours too low. The
+[local forecasting page](site/forecast.md) reports these failures together with
+pinball loss, interval coverage and interval width calculated before rounding.
+This is previously inspected development history using the providers' latest
+revisions, not an untouched holdout or a record of forecasts issued in advance.
+Only complete observed hours enter; the repeated autumn clock hour is averaged
+into one cell. Publication of this local increment remains pending.
 
 ## Why the numbers are trustworthy
 
@@ -129,7 +154,19 @@ src/gpa/           Python package
   store.py         partitioned Parquet store and DuckDB queries
   sources/         one adapter per upstream provider
   metrics/         load, price, mix and spread analytics
-  cli.py           gpa backfill | ingest | validate | stats
+  forecast/        day-ahead price forecasting and its walk-forward harness
+    panel.py       the target, and only what was knowable before it
+    models.py      naive baselines and a per-hour ridge regression
+    boosting.py    fixed pooled LightGBM challenger
+    backtest.py    expanding-origin backtest, refitted at every step
+    scoring.py     MAE, RMSE and pinball, split by block and by regime
+    linalg.py      Cholesky ridge solver, tested against a NumPy oracle
+    tracking.py    optional local MLflow metrics, inputs and source snapshots
+  freshness.py     per-series staleness rules and the alerting check
+  export.py        builds the aggregated tables the static site reads
+  benchmarks.py    official fuel, carbon and FX references
+  cli.py           gpa backfill | ingest | validate | stats | freshness |
+                   export | backtest | query
 data/curated/      committed interval Parquet, partitioned by zone and month
 data/reference/    committed monthly fuel, EUA and FX references
 site/              Observable Framework site
@@ -148,6 +185,8 @@ pip install -e ".[dev]"
 gpa zones                      # list the registry
 gpa backfill --days 30         # fill data/curated from keyless sources
 gpa validate                   # check every Parquet file against its contract
+gpa freshness                  # measure each series against its staleness rule
+gpa backtest --scope regime    # walk-forward price forecast and its scoreboard
 pytest
 
 npm ci
@@ -155,6 +194,13 @@ gpa export
 npm run build
 npm run dev
 ```
+
+With the preview running, use `npm run test:browser` in another terminal.
+It checks the home page and every configured navigation page at 1440 px and
+390 px for HTTP failures, runtime errors, horizontal overflow and visible
+charts (except the text-only methodology page). `GPA_TEST_URL` overrides the
+preview URL; `GPA_SCREENSHOT_DIR` overrides `docs/screenshots` for dashboard
+captures.
 
 The US zones need a free [EIA API key](https://www.eia.gov/opendata/register.php) in `EIA_API_KEY`. CCEE can be read automatically when the provider permits it; `GPA_CCEE_IMPORT_DIR` points to official CSV downloads when access returns HTTP 403.
 
@@ -183,14 +229,21 @@ of it.
 | Front | State |
 |---|---|
 | Ingestion, validation, storage | Done. Seven adapters, 11 zones, daily scheduled refresh. |
-| Market metrics and published site | Done. Six pages, blocks, duration curves, negative prices, capture rates, carbon intensity, thermal spreads. |
-| Engineering quality bar | In progress. Typing and orchestration tests being brought up to the standard the domain code already meets. |
-| Short-term price forecasting | Next. Two years of validated hourly history is the substrate. |
-| Regulatory retrieval | Planned, after forecasting, so its contribution can be measured rather than assumed. |
+| Market metrics and site | Seven pages in the local build, including forecasting; blocks, duration curves, negative prices, capture rates, carbon intensity and thermal spreads. |
+| Engineering quality bar | Done. mypy strict across all source files and a 75 percent coverage floor, both enforced by CI. |
+| Operations and alerting | Done. Per-series freshness rules; a stalled feed fails the scheduled run and opens an issue. |
+| Short-term price forecasting | Locally validated retrospective benchmark: three naive baselines, ridge, LightGBM, daily refits, block/regime errors and empirical intervals. Optional local MLflow tracking. Publication and prospective validation remain pending. |
+| Regulatory retrieval | Planned after Front C, so its contribution can be measured against the harness. |
 
-Known gaps are stated rather than hidden. The three US zones carry no wholesale
-price because EIA-930 does not publish one, so they have no duration curve,
-block spread or spark spread. Brazilian generation trails real time by about two
+Known gaps are stated rather than hidden. ERCOT and PJM carry no wholesale
+price because EIA-930 does not publish one and their price sources need separate
+access. CAISO has SP15 day-ahead prices from OASIS, including duration curves,
+block spreads and capture rates; US thermal spreads remain pending. The local
+forecast runs on one market and without the
+operators' own day-ahead wind, solar and load forecasts, which are the strongest
+inputs for the day being predicted and which this project does not store;
+substituting the realised values would be leakage, so the model works without
+them and says so. Brazilian generation trails real time by about two
 days, which is the provider's lag. Everything here is hub or zonal, so nothing
 measures nodal congestion. The full list lives in [`TODO.md`](TODO.md) and the
 conventions behind every figure in [`site/methodology.md`](site/methodology.md).
@@ -199,6 +252,11 @@ Orchestration deliberately stays on GitHub Actions rather than Airflow. A
 scheduler, metadata database and webserver would buy nothing this pipeline needs
 and would cost the property that anyone can clone this repository and reproduce
 the whole thing with no infrastructure.
+
+The local forecasting work is still uncommitted and has not been verified on
+the hosted site. The remaining Front C work is publication and a separately
+recorded prospective evaluation; the retrospective scores do not establish
+future performance. Orchestration remains on GitHub Actions.
 
 ## License
 

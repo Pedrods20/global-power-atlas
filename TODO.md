@@ -9,8 +9,11 @@ This file tracks **what is still missing**. Items are ordered by how much they
 affect the credibility of the published work, not by effort.
 
 The P1 block was cleared in the session of 2026-09-12; see
-"Recently completed" at the foot of this file for what changed and what it
-revealed.
+the completed P1 items below for what changed and what it revealed.
+
+Continuation, 2026-09-13: validate the existing local Front C implementation,
+correct its interval diagnostics, and align the documentation with the actual
+benchmark. Publication and prospective evaluation remain open.
 
 ---
 
@@ -115,9 +118,9 @@ to; never lower it to make a change pass.
       the first time mypy and the coverage gate ran on the Linux runner rather
       than only on the Windows workstation.
 
-**Sprint 1 is complete.** Agree the next scope with the user before starting
-anything: P2 is the missing US wholesale price, Front C is forecasting, Front B
-is retrieval after it.
+**Sprint 1 is complete.** Do not repeat it. P2 contains the remaining data gaps;
+Front C now has local retrospective validation; publication remains pending
+and Front B follows it.
 
 ## P2 - Analytical asymmetries
 
@@ -189,7 +192,18 @@ California is done. ERCOT and PJM are blocked on access, not on code.
 
 - [x] **Add CI and deploy badges to the README.**
 
-## Front C - Short-term price forecasting (next after Sprint 1)
+- [x] **Keep browser smoke aligned with site navigation.** Read routes from
+  `observablehq.config.js`, covering all seven current pages at desktop and
+  mobile widths. Fail on HTTP errors and missing visible Plot charts, excluding
+  the text-only methodology page. Dashboard captures support a separate output
+  directory through `GPA_SCREENSHOT_DIR`.
+
+## Front C - Short-term price forecasting (retrospective validation complete locally)
+
+`src/gpa/forecast/`, CLI/export integration, the page and exported tables are
+validated locally and remain uncommitted. Existing work includes three naive
+baselines, per-hour ridge, a fixed pooled LightGBM challenger and optional local
+MLflow tracking. Local acceptance and publication are tracked separately below.
 
 Two years of validated hourly history exist, which is the substrate the
 previous architecture could never provide. This is the front that turns a
@@ -199,22 +213,36 @@ Sequenced before the retrieval layer on purpose: the evaluation harness built
 here is what will later decide whether regulatory signals actually improve
 anything, rather than being assumed to.
 
-- [ ] **Naive baselines first, and publish them.** Previous day, previous week
+- [x] **Naive baselines first, with a common scoreboard.** Previous day, previous week
   same hour, and a seasonal-naive variant. Every later model is judged against
   these. A forecast that cannot beat "same hour last week" is not a forecast.
-- [ ] **Walk-forward backtest, never a random split.** Time-series data leaks
+- [x] **Walk-forward backtest, never a random split.** Time-series data leaks
   through a shuffled split. Expanding or rolling origin, refit at each step,
   and no feature that would not have been known at prediction time.
-- [ ] **Report the error metrics that suit power prices.** MAE and RMSE plus a
+- [x] **Report the error metrics that suit power prices.** MAE and RMSE plus a
   pinball loss if any quantile output is produced. Report them by block and by
   regime separately: aggregate error hides the fact that the interesting hours
   are the scarce and the negative ones.
-- [ ] **State the target precisely.** Day-ahead hourly price for one zone to
-  start, most likely DE-LU given its depth and clean history. Say which
-  information set is available at forecast time.
-- [ ] **Publish failure honestly.** If the model loses to a naive baseline in
-  some regime, the site says so. A backtest that only shows wins is not a
-  backtest.
+- [x] **State the target precisely.** DE-LU duration-weighted hourly day-ahead
+  price, complete observed hours only. Repeated autumn clock hours are averaged
+  into one cell. Price lags start at D-1, actuals-derived inputs at D-2; source
+  revisions are not historical publication-time vintages.
+- [x] **Show failure honestly in the local page.** LightGBM loses to the best
+  naive baseline on negative hours (skill -3.5%) and scarce hours (-9.5%).
+  Every model uses the same 7,982 cells over 333 calendar days, ending
+  2026-09-12. Ridge MAE is 21.06 EUR/MWh; LightGBM is 22.18. This is a
+  retrospective development benchmark, not an untouched holdout.
+- [x] **Validate predictive intervals numerically.** Pinball, coverage and
+  mean width have hand-calculated test cases; coverage is computed before
+  chart values are rounded. Incomplete intervals do not enter coverage/width.
+  Local MLflow runs record these diagnostics alongside inputs and source.
+- [ ] **Publish the validated increment.** Commit the complete forecasting
+  implementation and regenerated `site/data`; verify CI, deploy and the hosted
+  desktop/mobile smoke before claiming it is live.
+- [ ] **Record a prospective evaluation.** Issue and retain forecasts before
+  prices become known, preserve input vintages and evaluate the separate period.
+  The historical benchmark is capped at 2026-09-12; extending that cap is not
+  prospective validation.
 
 ## Front B - Regulatory retrieval (after Front C)
 

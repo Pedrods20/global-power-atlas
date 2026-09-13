@@ -21,9 +21,14 @@ dependencies = [
     # may not ship one either. Depending on tzdata makes market-time handling
     # deterministic across every platform this runs on.
     "tzdata>=2024.1",
+    "lightgbm>=4.6,<5",
+    "scikit-learn>=1.6,<2",
+    # Keep annotations compatible with the declared Python 3.11 mypy target.
+    "numpy>=2.1,<2.3",
 ]
 
 [project.optional-dependencies]
+tracking = ["mlflow>=3.1,<4"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

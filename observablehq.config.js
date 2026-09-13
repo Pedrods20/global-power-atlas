@@ -13,6 +13,7 @@ export default {
     { name: "Demand", path: "/demand" },
     { name: "Supply", path: "/supply" },
     { name: "Fuel & carbon", path: "/spreads" },
+    { name: "Forecasting", path: "/forecast" },
     { name: "Methodology", path: "/methodology" },
   ],
 

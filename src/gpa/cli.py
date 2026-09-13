@@ -7,6 +7,7 @@ Five verbs cover the whole workflow:
 ``gpa backfill``   fetch a long history, for the one-off initial load
 ``gpa validate``   re-check everything on disk against the schema contracts
 ``gpa stats``      report what the store holds
+``gpa backtest``   walk-forward price forecast, scored against naive baselines
 
 Exit codes matter because a scheduled workflow reads them: 0 when every target
 succeeded or was cleanly skipped, 1 when any target failed.
@@ -17,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import polars as pl
@@ -29,6 +31,7 @@ from gpa.schema import validate as validate_frame
 from gpa.zones import ZONES
 
 load_dotenv()
+DEFAULT_TRACKING_DIR = Path(".gpa/mlflow")
 
 app = typer.Typer(
     name="gpa",
@@ -344,6 +347,123 @@ def update_benchmarks() -> None:
         f"Wrote {frame.height} aligned months to {reference_path()}.",
         fg=typer.colors.GREEN,
     )
+
+
+@app.command()
+def backtest(
+    zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to forecast.")] = "DE-LU",
+    scope: Annotated[
+        str, typer.Option("--scope", help="overall, block, regime, hour or all.")
+    ] = "overall",
+    min_train_days: Annotated[
+        int, typer.Option(help="Usable days required before the first fit.")
+    ] = 0,
+    validation_days: Annotated[
+        int, typer.Option(help="Days reserved for choosing the ridge penalty.")
+    ] = 0,
+    alpha: Annotated[
+        float | None, typer.Option(help="Fix the ridge penalty instead of selecting it.")
+    ] = None,
+    window: Annotated[
+        int | None, typer.Option(help="Rolling training window in days. Default: expanding.")
+    ] = None,
+    track: Annotated[bool, typer.Option(help="Record this comparison in local MLflow.")] = False,
+    tracking_dir: Annotated[
+        Path, typer.Option(help="Local MLflow database and artifacts.")
+    ] = DEFAULT_TRACKING_DIR,
+    verbose: VerboseOption = False,
+) -> None:
+    """Walk-forward backtest of the day-ahead price forecast.
+
+    Every model is refitted at each step on an expanding origin and scored on
+    hours that all of them could forecast, so the columns compare like with
+    like. Skill is reported both against the declared reference baseline and
+    against whichever baseline actually won the bucket, which is the harder and
+    more honest of the two.
+    """
+    _configure_logging(verbose)
+    from gpa.forecast import backtest as harness
+
+    if scope not in ("overall", "block", "regime", "hour", "all"):
+        raise typer.BadParameter("scope must be overall, block, regime, hour or all")
+    if min_train_days < 0 or validation_days < 0:
+        raise typer.BadParameter("training and validation days cannot be negative")
+    result = harness.run(
+        zone,
+        min_train_days=min_train_days or harness.MIN_TRAIN_DAYS,
+        validation_days=validation_days or harness.VALIDATION_DAYS,
+        alpha=alpha,
+        window=window,
+    )
+
+    if track:
+        from gpa.forecast.tracking import track_result
+
+        run_id = track_result(result, tracking_dir)
+        typer.echo(f"MLflow run: {run_id} ({tracking_dir.resolve()})")
+
+    typer.secho(f"{result.zone.code} day-ahead hourly price", bold=True)
+    typer.echo(
+        "Retrospective development benchmark; latest revised data, not a prospective result."
+    )
+    typer.echo(
+        f"  train from {result.train_start}, validate from {result.validation_start}, "
+        f"test {result.test_start} to {result.test_end} ({result.test_days} days)"
+    )
+    typer.echo(
+        f"  {len(result.features)} features, ridge penalty {result.alpha:g}, "
+        f"reference {harness.REFERENCE_MODEL}"
+    )
+    typer.echo("")
+
+    scopes = ("overall", "block", "regime", "hour") if scope == "all" else (scope,)
+    shown = result.scores.filter(pl.col("scope").is_in(list(scopes)))
+    if shown.is_empty():
+        typer.secho(f"No such scope: {scope!r}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    with pl.Config(tbl_rows=-1, tbl_width_chars=220, float_precision=2):
+        typer.echo(
+            str(
+                shown.select(
+                    "scope",
+                    "bucket",
+                    "model",
+                    "n",
+                    "mae",
+                    "rmse",
+                    "bias",
+                    "mean_pinball",
+                    "skill_pct",
+                    "skill_vs_best_baseline_pct",
+                )
+            )
+        )
+
+    # Always print where the model is weakest, whether or not it lost outright.
+    # A scoreboard that only reports the aggregate is how a model with no skill
+    # in the hours that matter gets published as a success.
+    typer.echo("")
+    fitted = result.scores.filter(~pl.col("model").is_in(list(result.baselines))).sort(
+        "skill_vs_best_baseline_pct"
+    )
+    losing = fitted.filter(pl.col("skill_vs_best_baseline_pct") <= 0.0)
+    if losing.is_empty():
+        typer.secho(
+            "Fitted models beat every baseline in every bucket. Weakest margins:",
+            fg=typer.colors.GREEN,
+        )
+    else:
+        typer.secho(
+            f"Fitted models lost to a naive baseline in {losing.height} model/bucket pairs:",
+            fg=typer.colors.YELLOW,
+        )
+    for row in fitted.head(3).iter_rows(named=True):
+        typer.echo(
+            f"  {row['model']} {row['scope']} {row['bucket']}: "
+            f"{row['skill_vs_best_baseline_pct']:+.1f}% against the best baseline, "
+            f"MAE {row['mae']:.2f}"
+        )
 
 
 @app.command()

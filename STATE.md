@@ -1,7 +1,9 @@
 # PROJECT STATE
 
-Last updated: 2026-09-13 (P3, freshness alerting) · Repository: `global-power-atlas` · Replaces:
+Last recorded delivery: 2026-09-13 (P3, freshness alerting) · Repository: `global-power-atlas` · Replaces:
 `power-pulse-global`
+
+Working-tree review: 2026-09-13 (local forecasting acceptance and interval diagnostics).
 
 ## Current result
 
@@ -21,9 +23,48 @@ and publishes them without a backend or browser-visible credentials.
   efficiency, emissions and coal-energy assumptions.
 
 Steps 1-6 of the original delivery are complete. [`TODO.md`](TODO.md) now
-holds the forward roadmap: 14 open items, ordered by how much each one affects
+holds the forward roadmap, ordered by how much each item affects
 the credibility of the published work. Treat it as the authoritative list of
 what is still missing.
+
+## Current local increment
+
+- Browser smoke follows the navigation configuration, including the existing
+  forecasting page, at 1440 px and 390 px. HTTP failures and missing visible
+  Plot charts now fail the check; methodology is explicitly text-only.
+- `GPA_SCREENSHOT_DIR` allows local checks to keep captures outside the
+  versioned screenshots directory.
+- Validation: `npm run build` passed for seven pages; `npm run test:browser`
+  passed all 14 page/viewport combinations against the local preview, with no
+  runtime errors or horizontal overflow. A temporary HTTP 503 page containing
+  only a legend SVG correctly failed with exit code 1 for both the HTTP error
+  and missing chart. This is UI validation, not an audit
+  of the forecasting methodology or a hosted deployment check.
+- Forecasting code, CLI/export integration, page and exported tables were
+  already present as uncommitted work, including a fixed LightGBM challenger
+  and optional local MLflow tracking. The continuation requested on 2026-09-13
+  validates that existing increment; publication remains pending.
+- Interval coverage and mean width now come from full-precision Python scoring,
+  including MLflow metrics. The browser previously calculated coverage from
+  rounded chart values, which could change inclusion at an interval boundary.
+- Acceptance tests cover unavailable future prices/actuals, daily refits,
+  validation-only ridge selection, common samples, incomplete hours and days,
+  both DST transitions, negative skill, and hand-calculated pinball/coverage.
+- The local benchmark scores all five models on 7,982 of 7,986 target cells
+  across 333 calendar days (2025-10-15 through 2026-09-12). Ridge MAE is
+  21.06 EUR/MWh, LightGBM 22.18, best naive 28.43. LightGBM loses to the best
+  naive on negative hours (-3.5% skill) and scarce hours (-9.5%).
+- Historical inputs are the latest provider revisions. This is a retrospective
+  development benchmark, not an untouched holdout or proof of publication-time
+  data availability. Prospective evaluation remains a separate open TODO.
+- Validation on 2026-09-13: 259 tests passed, 81.47% overall coverage against
+  the 75% floor; ruff lint/format and strict mypy passed (33 source files).
+  All 616 partitions passed validation. The 18 site exports were regenerated,
+  `gpa export --check` passed and `npm run build` built all seven pages.
+  Browser smoke passed all 14 route/viewport combinations (1440 px and 390 px),
+  with no runtime errors, missing charts or horizontal overflow. Captures are
+  under ignored `.gpa/screenshots/`. No commit, push or hosted verification was
+  performed in this continuation.
 
 ## Completed in the current delivery
 
@@ -260,13 +301,12 @@ Important paths:
 ## Resume instructions
 
 Work from `C:\Users\Pedro\Desktop\Python\global-power-atlas`. Read
-`TODO.md` first and work Sprint 1 in order, S1.1 through S1.5. Do not use the
+`TODO.md` first and inspect `git status` for existing work. Do not use the
 old `power-pulse-global` directory.
 
-Sprint 1 closes the three audit reservations above. It is deliberately
-unglamorous: typing, tests for the orchestration, and making CI enforce what
-`pyproject.toml` already declares. It comes before the new fronts so that those
-are born under the rule instead of inheriting the debt.
+Sprint 1 and P3 are complete. Front C is retrospectively validated locally;
+preserve its existing implementation and distinguish local validation from
+publication and prospective acceptance. Remaining Front C TODOs track both.
 
 Two scope decisions are settled and should not be reopened without the user:
 
@@ -299,15 +339,16 @@ npm run build
 > change pass.
 >
 > Set up with `python -m venv .venv` and
-> `..\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Baseline to
-> expect before you start: 193 tests passing, ruff clean, `mypy` clean,
+> `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"`. Historical P3 baseline:
+> 193 tests passing, ruff clean, `mypy` clean,
 > coverage at 78 percent against a 75 percent gate, `gpa validate`
-> reporting 616 valid partitions, and `gpa export --check` clean.
+> reporting 616 valid partitions, and `gpa export --check` clean. Recheck these
+> before publishing; this historical baseline predates forecasting acceptance.
 >
-> Sprint 1 is complete. **Agree the next scope with the user before starting
-> anything.** The roadmap in `TODO.md` is a menu, not a queue: P2 covers the
-> missing US wholesale price, Front C is short-term price forecasting, and
-> Front B is regulatory retrieval after it.
+> Sprint 1 is complete. The user requested continuation of the TODOs on
+> 2026-09-13; this increment validates existing Front C work. Follow `TODO.md`
+> for remaining acceptance: Front C publication and prospective evaluation,
+> P2 data gaps, then Front B regulatory retrieval after Front C.
 >
 > Do not introduce Airflow, and do not start Front B before Front C. Both
 > decisions are recorded under "Scope decisions" in `TODO.md`.
@@ -316,12 +357,9 @@ npm run build
 > `site/data`, or CI fails its freshness check.
 
 After changes to ingestion or metrics, regenerate and commit `site/data`.
-Agree the next scope with the user before beginning a new increment; the
-roadmap is a menu, not a queue to work through unprompted. Keep `TODO.md`
-current as the handoff record.
+Keep `TODO.md` current as the handoff record and preserve the scope decisions
+above. Do not equate the local retrospective scores with prospective results.
 
-Those three gaps were closed on 2026-09-12. The largest remaining data gap is
-that ERCOT, PJM and CAISO carry no wholesale price, because EIA-930 publishes
-balancing-authority load and generation but no hub or nodal price. That removes
-price duration curves, block spreads, capture rates and spark spreads from the
-three largest US markets, and it is the first item of P2.
+The remaining US price gaps are ERCOT and PJM, whose separate price sources
+require access credentials. CAISO already carries SP15 day-ahead prices from
+OASIS. Thermal spreads beyond Germany remain a separate open P2 item.

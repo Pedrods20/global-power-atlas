@@ -19,8 +19,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import polars as pl
 
@@ -30,7 +31,24 @@ from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
 from gpa.zones import ZONES, Zone, get_zone
 
+if TYPE_CHECKING:
+    from gpa.forecast.backtest import BacktestResult
+
 __all__ = ["DEFAULT_OUTPUT", "export_all", "site_root"]
+
+_FORECAST_TABLES: tuple[str, ...] = (
+    "forecast_scores",
+    "forecast_daily",
+    "forecast_predictions",
+    "forecast_coefficients",
+)
+"""Site tables produced by the walk-forward backtest.
+
+Recomputed on every export rather than committed as a separate artefact, so a
+change to ingestion or to the model shows up in ``gpa export --check`` the same
+way every other table does. Daily LightGBM refits make this the expensive export
+step; :data:`gpa.forecast.backtest.PUBLISHED_ZONES` currently holds one zone.
+"""
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +102,12 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "freshness": _freshness(),
         "europe_spreads": _europe_spreads(),
     }
+    # The backtest is the one expensive step in this module, so it is run once
+    # here and its results are handed to both consumers rather than recomputed.
+    from gpa.forecast import backtest as harness
+
+    forecasts = harness.published()
+    tables.update(_forecast_tables(forecasts))
 
     written: dict[str, int] = {}
     for name, frame in tables.items():
@@ -99,6 +123,12 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         json.dumps(overview, indent=2, default=str), encoding="utf-8"
     )
     written["zones.json"] = len(overview["zones"])
+
+    runs = _forecast_runs(forecasts)
+    (destination / "forecast.json").write_text(
+        json.dumps(runs, indent=2, default=str), encoding="utf-8"
+    )
+    written["forecast.json"] = len(forecasts)
 
     return written
 
@@ -314,6 +344,52 @@ def _europe_spreads() -> pl.DataFrame:
         return pl.DataFrame()
     monthly_power = price_metrics.block_prices(prices, get_zone("DE-LU"), period="month")
     return benchmarks.calculate_spreads(pl.read_parquet(path), monthly_power)
+
+
+def _forecast_tables(results: Sequence[BacktestResult]) -> dict[str, pl.DataFrame]:
+    """Backtest results for every published zone, stacked and zone-tagged.
+
+    A zone whose history is too short is skipped by the harness, so the tables
+    can come back empty. That is a site with one chart missing rather than a
+    failed build, which is the right trade for a page that is analysis rather
+    than a data contract.
+    """
+    collected: dict[str, list[pl.DataFrame]] = {name: [] for name in _FORECAST_TABLES}
+    for result in results:
+        code = pl.lit(result.zone.code).alias("zone")
+        collected["forecast_scores"].append(result.scores.with_columns(code))
+        collected["forecast_daily"].append(result.daily.with_columns(code))
+        collected["forecast_coefficients"].append(result.coefficients.with_columns(code))
+        # Prices are quoted to the cent, so the published forecasts are rounded
+        # to it. Scoring uses full precision; this only stops sixteen digits of
+        # float noise per value from tripling the size of the file the browser
+        # downloads.
+        collected["forecast_predictions"].append(
+            result.predictions.drop("ts_utc")
+            .with_columns(pl.col(pl.Float64).round(2))
+            .with_columns(code)
+        )
+
+    return {
+        name: pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        for name, frames in collected.items()
+    }
+
+
+def _forecast_runs(results: Sequence[BacktestResult]) -> dict[str, object]:
+    """Metadata for each published backtest: target, split, penalty and features.
+
+    Published as JSON beside the tables so the page can state what was forecast
+    and on what information, rather than leaving a reader to infer it from a
+    chart. The alpha search is included so the penalty does not look like a
+    number pulled out of the air.
+    """
+    runs: list[dict[str, object]] = []
+    for result in results:
+        entry = result.metadata()
+        entry["alpha_search"] = result.alpha_search.to_dicts()
+        runs.append(entry)
+    return {"runs": runs}
 
 
 def _freshness() -> pl.DataFrame:
