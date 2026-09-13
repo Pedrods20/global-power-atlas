@@ -121,6 +121,9 @@ All three audit reservations are closed.
 | Total coverage | 53% | 76%, gated at 75% |
 | Tests | 119 | 176 |
 
+Pushed as `d884bb5`; CI and Deploy both succeeded, so the gates are proven on
+the Linux runner and not only on the Windows workstation.
+
 The protocol failure had a cause worth recording. Adapters wrote
 `max_window_days = None` with no annotation, so mypy inferred `None`, and
 Protocol attributes are invariant, so it did not satisfy the declared

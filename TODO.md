@@ -51,7 +51,7 @@ one changed where Brazilian load comes from.
 
 ## Sprint 1 - Enforce the quality bar before the codebase triples
 
-Worked 2026-09-13. S1.1 through S1.4 are done; S1.5 is publication.
+Worked and completed 2026-09-13.
 
 Outcome in one line: mypy is clean across all 23 source files and enforced by
 CI, and coverage went from 53 to 76 percent with the orchestration at 100.
@@ -109,9 +109,15 @@ to; never lower it to make a change pass.
 - [x] Both proven to fail: a deliberate type error exits 1, an unreachable
       coverage floor exits 1, and both exit 0 once restored.
 
-### S1.5 - Publish  [ ]
+### S1.5 - Publish  [x]
 
-- [ ] Push and confirm the CI and Pages runs succeed.
+- [x] Pushed as `d884bb5`. CI and Deploy both completed successfully, which is
+      the first time mypy and the coverage gate ran on the Linux runner rather
+      than only on the Windows workstation.
+
+**Sprint 1 is complete.** Agree the next scope with the user before starting
+anything: P2 is the missing US wholesale price, Front C is forecasting, Front B
+is retrieval after it.
 
 ## P2 - Analytical asymmetries
 
