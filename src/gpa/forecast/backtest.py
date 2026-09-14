@@ -43,7 +43,7 @@ from typing import Final
 import polars as pl
 
 from gpa.forecast import scoring
-from gpa.forecast.boosting import LightGBM
+from gpa.forecast.boosting import DEFAULT_LIGHTGBM_GRID, LightGBM, select_parameters
 from gpa.forecast.models import DEFAULT_ALPHA_GRID, Model, Ridge, naive_baselines
 from gpa.forecast.panel import Panel, load_panel
 from gpa.zones import Zone, get_zone
@@ -114,6 +114,8 @@ class BacktestResult:
         coefficients: The ridge weights at the final refit, for inspection.
         alpha: The penalty chosen on the validation window.
         alpha_search: Validation MAE for every penalty offered.
+        lightgbm_parameters: The selected tree configuration.
+        lightgbm_search: Validation MAE for every tree configuration offered.
         train_start: First usable day in the panel.
         validation_start: First day of the penalty-selection window.
         test_start: First day scored.
@@ -130,6 +132,8 @@ class BacktestResult:
     coefficients: pl.DataFrame
     alpha: float
     alpha_search: pl.DataFrame
+    lightgbm_parameters: dict[str, object]
+    lightgbm_search: pl.DataFrame
     train_start: dt.date
     validation_start: dt.date
     test_start: dt.date
@@ -198,9 +202,16 @@ class BacktestResult:
             "min_train_days": self.min_train_days,
             "validation_days": self.validation_days,
             "window": self.window,
-            "lightgbm_parameters": {**LightGBM().parameters(), "num_boost_round": 100},
+            "lightgbm_parameters": self.lightgbm_parameters,
+            "lightgbm_search": self.lightgbm_search.to_dicts(),
+            "lightgbm_refit_days": self.lightgbm_parameters.get("refit_every_days", 1),
             "lightgbm_features": [*self.features, "local_hour"],
             "target_convention": "complete UTC hours; repeated autumn clock hour averaged; each clock-hour cell scored equally",
+            "feature_mode": (
+                "lagged actual load/generation"
+                if any(name.startswith("residual_") for name in self.features)
+                else "price and calendar only"
+            ),
         }
 
 
@@ -302,9 +313,13 @@ def run(
     validation_days: int = VALIDATION_DAYS,
     alpha: float | None = None,
     alpha_grid: Sequence[float] = DEFAULT_ALPHA_GRID,
+    lightgbm_grid: Sequence[dict[str, float | int]] = DEFAULT_LIGHTGBM_GRID,
     window: int | None = None,
     levels: Sequence[float] = scoring.QUANTILE_LEVELS,
     include_lightgbm: bool = True,
+    tune_lightgbm: bool = True,
+    lightgbm_refit_days: int = 1,
+    include_actual_features: bool = True,
     end: dt.date | None = BENCHMARK_END,
 ) -> BacktestResult:
     """Run the whole harness for one zone.
@@ -318,9 +333,14 @@ def run(
             the validation window is still withheld from scoring, so a fixed
             penalty and a selected one are scored on the same days.
         alpha_grid: Penalties offered to the selection.
+        lightgbm_grid: Tree configurations offered to the selection.
         window: Rolling training window in usable days, or ``None`` for
             expanding.
         levels: Quantile levels to publish.
+        lightgbm_refit_days: Refit cadence for the tree challenger. Daily is
+            the operational default; a larger value accelerates long diagnostics.
+        include_actual_features: Include lagged realised load/generation when
+            loading from the store. Disable for a long price-only stress test.
 
     Returns:
         A :class:`BacktestResult`.
@@ -334,7 +354,11 @@ def run(
         raise ValueError("training and validation days must be positive")
     if alpha is not None and (not math.isfinite(alpha) or alpha < 0):
         raise ValueError("alpha must be finite and nonnegative")
-    prepared = panel if panel is not None else load_panel(market)
+    if lightgbm_refit_days < 1:
+        raise ValueError("lightgbm_refit_days must be positive")
+    prepared = (
+        panel if panel is not None else load_panel(market, include_actuals=include_actual_features)
+    )
     if prepared.zone != market:
         raise ValueError("panel zone does not match requested market")
     if end is not None:
@@ -388,13 +412,55 @@ def run(
         validation_days,
     )
 
+    if include_lightgbm and tune_lightgbm:
+        lightgbm_parameters, lightgbm_search = select_parameters(
+            prepared,
+            validation_start=validation_start,
+            validation_end=validation_end,
+            min_train_rows=min_train_days,
+            grid=lightgbm_grid,
+            window=window,
+            refit_every_days=lightgbm_refit_days,
+        )
+        lightgbm_parameters["refit_every_days"] = lightgbm_refit_days
+    else:
+        lightgbm_parameters = {
+            "num_leaves": 15,
+            "learning_rate": 0.05,
+            "min_data_in_leaf": 48,
+            "lambda_l2": 1.0,
+        }
+        lightgbm_search = pl.DataFrame(
+            schema={
+                "num_leaves": pl.Int64,
+                "learning_rate": pl.Float64,
+                "min_data_in_leaf": pl.Int64,
+                "lambda_l2": pl.Float64,
+                "n": pl.Int64,
+                "mae": pl.Float64,
+            }
+        )
+
     ridge = Ridge(alpha=chosen, window=window)
     baselines = naive_baselines(prepared)
     baseline_names = tuple(baseline.name for baseline in baselines)
     models: tuple[Model, ...] = (
         *baselines,
         ridge,
-        *((LightGBM(window=window),) if include_lightgbm else ()),
+        *(
+            (
+                LightGBM(
+                    window=window,
+                    num_leaves=int(lightgbm_parameters["num_leaves"]),
+                    learning_rate=float(lightgbm_parameters["learning_rate"]),
+                    min_data_in_leaf=int(lightgbm_parameters["min_data_in_leaf"]),
+                    lambda_l2=float(lightgbm_parameters["lambda_l2"]),
+                    refit_every_days=lightgbm_refit_days,
+                ),
+            )
+            if include_lightgbm
+            else ()
+        ),
     )
 
     frames: list[pl.DataFrame] = []
@@ -440,6 +506,11 @@ def run(
         coefficients=ridge.coefficients(prepared, before=test_end),
         alpha=chosen,
         alpha_search=search,
+        lightgbm_parameters={
+            **lightgbm_parameters,
+            "num_boost_round": LightGBM().num_boost_round,
+        },
+        lightgbm_search=lightgbm_search,
         train_start=train_start,
         validation_start=validation_start,
         test_start=test_start,

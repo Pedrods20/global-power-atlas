@@ -37,7 +37,7 @@ The stored inputs contain the providers' latest revisions. Publication-time vers
 - **Target:** duration-weighted hourly average of the DE-LU day-ahead prices, in EUR/MWh. Since the move to 15-minute products, this is an analytical hourly benchmark, not a forecast of each traded quarter-hour.
 - **Forecast gate:** noon in the market timezone on the day before delivery. Prices for that preceding delivery day have already cleared in the previous auction.
 - **Inputs:** lagged prices, calendar variables, and residual load from at least two delivery days earlier. Residual load is demand minus wind and solar; both fuels must actually be reported, including explicit zeros.
-- **Missing inputs:** operator forecasts of demand, wind and solar for the delivery day are not stored. Realised delivery-day values are never substituted for them.
+- **Published benchmark inputs:** operator forecasts of demand, wind and solar for the delivery day are not part of this retrospective run. The prospective panel accepts publication-time snapshots when supplied; realised delivery-day values are never substituted for them.
 
 Only complete, contiguous UTC hours enter the panel. A provider transition left hourly-spaced records marked as 15-minute intervals in September 2025; those incomplete hours are excluded rather than assigned an inferred duration. Missing observations stay missing.
 
@@ -47,7 +47,7 @@ The spring clock change has no invented hour. The two occurrences of an autumn c
 
 Training begins ${run.train_start}; validation begins ${run.validation_start}. The evaluation runs from ${run.test_start} to ${run.test_end}. All five models are scored on the same ${run.scored_hours.toLocaleString("en")} clock-hour cells, out of ${run.eligible_hours.toLocaleString("en")} target cells in that period. Missing lagged features and insufficient per-hour training history explain excluded cells.
 
-The ridge penalty is selected on the preceding validation window and frozen for evaluation. Every model refits with dates strictly before its forecast day. LightGBM uses one model across hours, with market-local hour as an additional known input; ridge conditions on hour through separate regressions. LightGBM's configuration was fixed before inspecting its results: 100 boosting rounds, 15 leaves, learning rate 0.05, absolute-error objective and seed 42. No early stopping or tuning uses evaluation prices.
+The ridge penalty and LightGBM tree configuration are selected on the preceding validation window and frozen for evaluation. Every model refits with dates strictly before its forecast day. LightGBM uses one model across hours, with market-local hour as an additional known input; ridge conditions on hour through separate regressions. The published run records the candidate grid, chosen settings, refit cadence and seed 42. No early stopping or tuning uses evaluation prices.
 
 ```js
 Inputs.table(overall.map((d) => ({
@@ -72,7 +72,7 @@ Ridge MAE is **${number(ridge.mae)} EUR/MWh**; LightGBM MAE is **${number(trees.
 ## Where the models fail
 
 ```js
-const scope = view(Inputs.select(new Map([["Price regime", "regime"], ["Market block", "block"], ["Hour of day", "hour"]]), {label: "Break down by", value: "regime"}));
+const scope = view(Inputs.select(new Map([["Price regime", "regime"], ["Market block", "block"], ["Calendar year", "year"], ["Hour of day", "hour"]]), {label: "Break down by", value: "regime"}));
 const split = scores.filter((d) => d.scope === scope);
 ```
 
@@ -165,9 +165,9 @@ mlflow ui --backend-store-uri sqlite:///.gpa/mlflow/mlflow.db
 gpa export
 ```
 
-Tracking is optional and local. Each MLflow run records the comparison metrics, fixed LightGBM parameters, ridge validation search, predictions, input panel, source snapshot, dependency versions and Git state. The input-panel SHA-256 is `${run.input_sha256}`. `gpa backtest` and the site build work without MLflow installed.
+Tracking is optional and local. Each MLflow run records the comparison metrics, selected LightGBM parameters and search, ridge validation search, predictions, input panel, source snapshot, dependency versions and Git state. The input-panel SHA-256 is `${run.input_sha256}`. `gpa backtest` and the site build work without MLflow installed.
 
-The next acceptance step is a separately recorded prospective period with forecasts issued before prices become known. Battery dispatch and economic evaluation follow that step, using the market's actual interval resolution and physical constraints. They are not included in the results above.
+The prospective path is now operationalised by `gpa issue` and `gpa reconcile`: a scheduled job seeds an isolated store, refreshes a short input window, reconciles older ledger rows and issues before the market gate. The first separately recorded run is still needed before its metrics can be accepted. Historical battery dispatch and economic evaluation are published on the Battery page; the prospective battery result follows reconciliation and remains separate from the retrospective scores above.
 
 <style>
 main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }

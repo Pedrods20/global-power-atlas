@@ -9,11 +9,8 @@ export default {
   title: "Global Power Atlas",
 
   pages: [
-    { name: "Prices", path: "/prices" },
-    { name: "Demand", path: "/demand" },
-    { name: "Supply", path: "/supply" },
-    { name: "Fuel & carbon", path: "/spreads" },
     { name: "Forecasting", path: "/forecast" },
+    { name: "Battery", path: "/battery" },
     { name: "Methodology", path: "/methodology" },
   ],
 

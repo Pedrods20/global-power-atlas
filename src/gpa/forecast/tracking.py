@@ -13,7 +13,6 @@ import tempfile
 from pathlib import Path
 
 from gpa.forecast.backtest import BacktestResult
-from gpa.forecast.boosting import LightGBM
 
 
 def track_result(result: BacktestResult, root: Path) -> str:
@@ -69,7 +68,7 @@ def track_result(result: BacktestResult, root: Path) -> str:
         ):
             client.log_param(run_id, key, str(metadata[key]))
         client.log_param(run_id, "models", ",".join(result.models))
-        for key, value in {**LightGBM().parameters(), "num_boost_round": 100}.items():
+        for key, value in result.lightgbm_parameters.items():
             client.log_param(run_id, f"lightgbm.{key}", str(value))
         for row in result.scores.iter_rows(named=True):
             for metric in (
@@ -107,9 +106,13 @@ def track_result(result: BacktestResult, root: Path) -> str:
                 "daily",
                 "coefficients",
                 "alpha_search",
+                "lightgbm_search",
                 "input_panel",
             ):
-                getattr(result, name).write_parquet(output / f"{name}.parquet")
+                if name == "lightgbm_search":
+                    result.lightgbm_search.write_parquet(output / f"{name}.parquet")
+                else:
+                    getattr(result, name).write_parquet(output / f"{name}.parquet")
             for path in source_files:
                 target = output / "source" / path.relative_to(repo)
                 target.parent.mkdir(parents=True, exist_ok=True)

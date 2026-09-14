@@ -1,0 +1,134 @@
+name: Forecast
+
+# The historical dashboard remains monthly. This job is separate because a
+# prospective forecast has to be issued on the market clock, then reconciled
+# after the delivery price is observable.
+
+on:
+  schedule:
+    # Before noon in both CET and CEST; DE-LU's documented day-ahead gate is
+    # 12:00 local market time on D-1.
+    - cron: "30 9 * * *"
+  workflow_dispatch:
+    inputs:
+      delivery_date:
+        description: "Optional delivery date (YYYY-MM-DD); blank means tomorrow"
+        required: false
+        default: ""
+      model:
+        description: "Model to issue"
+        required: false
+        type: choice
+        options:
+          - ridge
+          - lightgbm
+        default: ridge
+      lookback_days:
+        description: "Trailing days to refresh in the temporary forecast store"
+        required: false
+        default: "7"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: forecast-issue
+  cancel-in-progress: false
+
+jobs:
+  issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The public store and monthly site exports stay untouched. The forecast
+      # run receives the committed history as a seed and refreshes a private
+      # trailing window before reconciliation and issuance.
+      GPA_DATA_ROOT: ${{ runner.temp }}/gpa-curated
+      FORECAST_MODEL: ${{ github.event.inputs.model || 'ridge' }}
+      FORECAST_LOOKBACK: ${{ github.event.inputs.lookback_days || '7' }}
+      FORECAST_DELIVERY_DATE: ${{ github.event.inputs.delivery_date || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e .
+
+      - name: Seed an isolated forecast store
+        run: |
+          mkdir -p "$GPA_DATA_ROOT"
+          cp -a data/curated/. "$GPA_DATA_ROOT/"
+
+      - name: Refresh the DE-LU forecast inputs
+        run: gpa ingest --zone DE-LU --days "$FORECAST_LOOKBACK"
+
+      - name: Validate the isolated inputs
+        run: gpa validate
+
+      - name: Reconcile previously issued forecasts
+        run: gpa reconcile --zone DE-LU
+
+      - name: Evaluate reconciled battery dispatch
+        run: gpa battery --zone DE-LU --output data/forecast_issues/evaluations
+
+      - name: Issue before the market gate
+        run: |
+          if [ -n "$FORECAST_DELIVERY_DATE" ]; then
+            gpa issue --zone DE-LU --model "$FORECAST_MODEL" --delivery-date "$FORECAST_DELIVERY_DATE"
+          else
+            gpa issue --zone DE-LU --model "$FORECAST_MODEL"
+          fi
+
+      - name: Commit the prospective ledger
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/forecast_issues
+          if git diff --cached --quiet; then
+            echo "No new issue records; nothing to commit."
+            exit 0
+          fi
+          git commit -m "forecast: issue DE-LU $(date -u +%Y-%m-%d)"
+          git pull --rebase --autostash origin main
+          git push
+
+      - name: Open an issue when the run fails
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              'The prospective forecast job did not complete.',
+              '',
+              `Run: ${run}`,
+              '',
+              'No issue record should be treated as a forecast. Inspect the run before rerunning it.',
+            ].join('\n');
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'forecast-failure',
+            });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open.data[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Forecast issuance failed on ${new Date().toISOString().slice(0, 10)}`,
+                body,
+                labels: ['forecast-failure'],
+              });
+            }

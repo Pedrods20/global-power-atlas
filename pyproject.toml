@@ -15,7 +15,6 @@ dependencies = [
     "pyarrow>=16.0",
     "typer>=0.12",
     "python-dotenv>=1.0",
-    "openpyxl>=3.1",
     "pandera[polars]>=0.20",
     # zoneinfo has no tz database to read on Windows, and a slim Linux CI image
     # may not ship one either. Depending on tzdata makes market-time handling
@@ -34,10 +33,6 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
-    # openpyxl ships no inline types, and benchmarks.py reads an xlsx workbook.
-    # Without the stubs mypy cannot see through the import and strict mode
-    # fails the whole module.
-    "types-openpyxl>=3.1",
 ]
 
 [project.scripts]

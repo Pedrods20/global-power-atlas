@@ -306,6 +306,12 @@ def scoreboard(
             _scope(prepared, scope="regime", bucket=pl.col("regime"), levels=levels),
             _scope(
                 prepared,
+                scope="year",
+                bucket=pl.col("local_date").dt.year().cast(pl.String),
+                levels=levels,
+            ),
+            _scope(
+                prepared,
                 scope="hour",
                 bucket=pl.col("local_hour").cast(pl.String).str.zfill(2),
                 levels=levels,

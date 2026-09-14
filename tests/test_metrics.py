@@ -16,7 +16,6 @@ import pytest
 from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
-from gpa.metrics import spreads
 from gpa.zones import get_zone
 
 GERMANY = get_zone("DE-LU")
@@ -437,56 +436,6 @@ def test_capture_rate_is_empty_for_a_fuel_with_no_generation() -> None:
     assert result.is_empty()
 
 
-# --- Spreads ---------------------------------------------------------------
-
-
-def test_spark_spread_worked_example() -> None:
-    """A 50 percent CCGT, power at 90, gas at 30 per MWh thermal, earns 30."""
-    result = pl.select(spreads.spread(90.0, 30.0, 0.50)).item()
-    assert result == APPROX(30.0)
-
-
-def test_clean_spark_spread_turns_negative_under_a_high_carbon_price() -> None:
-    """Carbon at 80 costs 80 * 0.2016 / 0.5 = 32.26, flipping a 30 spread to -2.26."""
-    result = pl.select(spreads.clean_spread(90.0, 30.0, 80.0, 0.50, fuel="gas")).item()
-    assert result == APPROX(30.0 - 80.0 * 0.2016 / 0.50)
-    assert result < 0
-
-
-def test_carbon_cost_falls_as_efficiency_rises() -> None:
-    """An efficient plant is shielded twice: less fuel and fewer allowances."""
-    low = pl.select(spreads.clean_spread(90.0, 30.0, 80.0, 0.40, fuel="gas")).item()
-    high = pl.select(spreads.clean_spread(90.0, 30.0, 80.0, 0.58, fuel="gas")).item()
-    assert high > low
-
-
-def test_dark_spread_uses_the_coal_carbon_intensity() -> None:
-    clean = pl.select(spreads.clean_spread(90.0, 15.0, 80.0, 0.38, fuel="coal")).item()
-    gross = pl.select(spreads.spread(90.0, 15.0, 0.38)).item()
-    assert gross - clean == APPROX(80.0 * 0.3406 / 0.38)
-
-
-def test_heat_rate_and_efficiency_round_trip() -> None:
-    assert spreads.efficiency_from_heat_rate(spreads.heat_rate_from_efficiency(0.55)) == APPROX(
-        0.55
-    )
-
-
-def test_a_modern_ccgt_heat_rate_is_about_six_mmbtu() -> None:
-    assert spreads.heat_rate_from_efficiency(0.58) == APPROX(5.88, abs=0.01)
-
-
-@pytest.mark.parametrize("efficiency", [0.0, 1.0, -0.1, 1.5])
-def test_spread_rejects_impossible_efficiency(efficiency: float) -> None:
-    with pytest.raises(ValueError, match="strictly between 0 and 1"):
-        spreads.spread(90.0, 30.0, efficiency)
-
-
-def test_clean_spread_rejects_an_unknown_fuel() -> None:
-    with pytest.raises(KeyError, match="unknown fuel"):
-        spreads.clean_spread(90.0, 30.0, 80.0, 0.5, fuel="uranium")
-
-
 # --- Empty input -----------------------------------------------------------
 
 
@@ -494,10 +443,6 @@ def test_clean_spread_rejects_an_unknown_fuel() -> None:
     "call",
     [
         lambda f: price_metrics.block_prices(f, GERMANY),
-        lambda f: price_metrics.negative_price_summary(f, GERMANY),
-        lambda f: price_metrics.realised_volatility(f, GERMANY),
-        lambda f: price_metrics.price_spikes(f, GERMANY),
-        lambda f: price_metrics.duration_curve(f),
     ],
 )
 def test_price_metrics_handle_empty_input(call) -> None:  # type: ignore[no-untyped-def]

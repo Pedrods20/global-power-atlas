@@ -208,6 +208,13 @@ def test_query_runs_sql_against_the_store(populated: Path) -> None:
     assert "24" in result.stdout
 
 
+def test_reconcile_empty_ledger_is_a_noop(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["reconcile", "--zone", "DE-LU", "--output", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "no issue records" in result.stdout.lower()
+
+
 # --- ingest and backfill ----------------------------------------------------
 
 

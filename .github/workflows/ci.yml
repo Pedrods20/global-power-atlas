@@ -3,6 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    # A prospective ledger commit does not change the static site or the
+    # canonical observations. Its own workflow validates the isolated inputs;
+    # avoid rebuilding and redeploying the monthly dashboard for every issue.
+    paths-ignore:
+      - "data/forecast_issues/**"
   pull_request:
   workflow_dispatch:
 

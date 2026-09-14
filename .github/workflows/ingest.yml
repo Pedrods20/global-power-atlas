@@ -1,6 +1,6 @@
 name: Ingest
 
-# The engine that accumulates history. Runs daily, refetches a trailing window
+# The engine that accumulates history. Runs monthly, refetches a trailing window
 # rather than only yesterday because providers publish on a lag and revise
 # afterwards, and commits the resulting Parquet. The store upserts on each
 # dataset's natural key, so overlapping runs converge on the restated figures
@@ -8,10 +8,10 @@ name: Ingest
 
 on:
   schedule:
-    # 05:40 UTC. Late enough that the European and Australian previous day is
-    # settled, early enough to be well clear of the hour boundary when every
-    # other scheduled job on GitHub fires.
-    - cron: "40 5 * * *"
+    # First day of each month at 05:40 UTC. The public dashboard is historical;
+    # monthly refresh is enough while the forecast issuance workflow is being
+    # built separately.
+    - cron: "40 5 1 * *"
   workflow_dispatch:
     inputs:
       days:
@@ -62,9 +62,6 @@ jobs:
         # block persistence, not just staleness.
         run: gpa audit
 
-      - name: Refresh fuel, carbon and FX references
-        run: gpa benchmarks
-
       - name: Rebuild site tables
         run: gpa export
 
@@ -80,7 +77,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/curated data/reference site/data
+          git add data/curated site/data
           if git diff --cached --quiet; then
             echo "No new observations; nothing to commit."
             echo "committed=false" >> "$GITHUB_OUTPUT"
@@ -95,12 +92,10 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Check freshness
-        # A run that fetched nothing still exits zero if no adapter raised, so
-        # without this a provider could go dark for a week while the site kept
-        # serving last week's numbers as current. Rules are per zone and
-        # dataset because providers publish at genuinely different speeds; see
-        # src/gpa/freshness.py for each threshold and the reason behind it.
-        run: gpa freshness
+        # The public history is intentionally monthly, so the age check is
+        # informative here rather than a daily SLA. Use `gpa freshness` as a
+        # strict manual check when operating a more frequent forecast workflow.
+        run: gpa freshness --no-strict
 
       - name: Open an issue when the run fails
         # Last, so that a failure in any earlier step reaches it, including the

@@ -32,7 +32,7 @@ error metric moves.
 
 from __future__ import annotations
 
-from gpa.forecast import backtest, linalg, models, panel, scoring
+from gpa.forecast import backtest, fundamentals, ledger, linalg, models, panel, scoring
 from gpa.forecast.backtest import BacktestResult, InsufficientHistory, run
 from gpa.forecast.panel import Panel, build_panel, load_panel
 
@@ -42,6 +42,8 @@ __all__ = [
     "Panel",
     "backtest",
     "build_panel",
+    "fundamentals",
+    "ledger",
     "linalg",
     "load_panel",
     "models",

@@ -46,6 +46,8 @@ from zoneinfo import ZoneInfo
 import polars as pl
 
 from gpa.calendar import attach_local_time
+from gpa.forecast.fundamentals import FUNDAMENTAL_FEATURES
+from gpa.forecast.fundamentals import attach as attach_fundamentals
 from gpa.zones import Zone
 
 __all__ = [
@@ -285,6 +287,7 @@ def build_panel(
     *,
     load: pl.DataFrame | None = None,
     generation: pl.DataFrame | None = None,
+    fundamentals: pl.DataFrame | None = None,
     delivery_date: dt.date | None = None,
 ) -> Panel:
     """Assemble the target and its lawful features from canonical frames.
@@ -295,6 +298,9 @@ def build_panel(
         load: Rows matching the ``load`` schema, for the residual-load features.
         generation: Rows matching the ``generation`` schema, likewise. Residual
             features are produced only when both are supplied and overlap.
+        fundamentals: Optional wide snapshots of day-ahead load, wind and solar
+            forecasts. Each row must carry ``published_at`` as well as ``ts_utc``;
+            only the latest snapshot published before the market gate is used.
 
     Returns:
         A :class:`Panel`. The residual-load features are absent from
@@ -304,7 +310,7 @@ def build_panel(
     Raises:
         ValueError: If ``prices`` carries more than one zone.
     """
-    for frame in (prices, load, generation):
+    for frame in (prices, load, generation, fundamentals):
         if frame is not None and not frame.is_empty():
             codes = frame.get_column("zone").unique().to_list()
             if codes != [zone.code]:
@@ -377,6 +383,10 @@ def build_panel(
             panel, added = _attach_residual_features(panel, residual, zone)
             features.extend(added)
 
+    if fundamentals is not None:
+        panel = attach_fundamentals(panel, fundamentals, zone)
+        features.extend(FUNDAMENTAL_FEATURES)
+
     panel = _attach_calendar(panel)
     features.extend(CALENDAR_FEATURES)
 
@@ -394,13 +404,20 @@ def build_panel(
     )
 
 
-def load_panel(zone: Zone) -> Panel:
-    """Build the panel for ``zone`` from the curated store."""
+def load_panel(zone: Zone, *, include_actuals: bool = True) -> Panel:
+    """Build the panel from the curated store.
+
+    ``include_actuals=False`` is useful for long price-only stress tests when
+    older load/generation vintages are not available. It deliberately removes
+    residual-load features rather than forward-filling them across the gap.
+    """
     from gpa import store
 
     prices = store.read("price", zone.code)
-    load = store.read("load", zone.code) if zone.has("load") else None
-    generation = store.read("generation", zone.code) if zone.has("generation") else None
+    load = store.read("load", zone.code) if include_actuals and zone.has("load") else None
+    generation = (
+        store.read("generation", zone.code) if include_actuals and zone.has("generation") else None
+    )
     return build_panel(prices, zone, load=load, generation=generation)
 
 

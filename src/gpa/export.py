@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING, TypedDict
 
 import polars as pl
 
-from gpa import benchmarks, store
+from gpa import store
 from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
-from gpa.zones import ZONES, Zone, get_zone
+from gpa.zones import ZONES, Zone
 
 if TYPE_CHECKING:
     from gpa.forecast.backtest import BacktestResult
@@ -51,14 +51,12 @@ way every other table does. Daily LightGBM refits make this the expensive export
 step; :data:`gpa.forecast.backtest.PUBLISHED_ZONES` currently holds one zone.
 """
 
+_BATTERY_TABLES: tuple[str, ...] = ("battery_dispatch", "battery_summary")
+"""Economic dispatch rows and the compact strategy scoreboard."""
+
 log = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT = "site/data"
-
-# The duration curves are downsampled for the browser. Two thousand points is
-# past the pixel resolution of any chart the site draws, so the curve's shape,
-# including both tails, survives intact.
-_CURVE_POINTS = 2000
 
 
 class Overview(TypedDict):
@@ -91,17 +89,9 @@ def export_all(output: Path | None = None) -> dict[str, int]:
 
     tables: dict[str, pl.DataFrame] = {
         "daily_prices": _daily_prices(),
-        "price_duration": _price_duration(),
-        "negative_prices": _negative_prices(),
-        "volatility": _volatility(),
         "daily_load": _daily_load(),
-        "load_profile": _load_profile(),
-        "load_factor": _load_factor(),
         "generation_mix": _generation_mix(),
-        "carbon_intensity": _carbon_intensity(),
-        "capture_rates": _capture_rates(),
         "freshness": _freshness(),
-        "europe_spreads": _europe_spreads(),
     }
     # The backtest is the one expensive step in this module, so it is run once
     # here and its results are handed to both consumers rather than recomputed.
@@ -125,6 +115,8 @@ def export_all(output: Path | None = None) -> dict[str, int]:
             tables[f"forecast_{suffix}"] = result.with_columns(
                 pl.lit(metadata["zone"]).alias("zone")
             )
+
+    tables.update(_battery_tables(tables.get("forecast_predictions", pl.DataFrame())))
 
     written: dict[str, int] = {}
     for name, frame in tables.items():
@@ -295,53 +287,9 @@ def _daily_prices() -> pl.DataFrame:
     return _for_each("price", build)
 
 
-def _price_duration() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        return price_metrics.duration_curve(frame, points=_CURVE_POINTS)
-
-    return _for_each("price", build)
-
-
-def _negative_prices() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        return price_metrics.negative_price_summary(frame, zone)
-
-    return _for_each("price", build)
-
-
-def _volatility() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        return price_metrics.realised_volatility(frame, zone, window=30).rename(
-            {"local_date": "date"}
-        )
-
-    return _for_each("price", build)
-
-
 def _daily_load() -> pl.DataFrame:
     def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
         return load_metrics.daily_energy(frame, zone).rename({"local_date": "date"})
-
-    return _for_each("load", build)
-
-
-def _load_profile() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        # Normalised so that markets of very different size share an axis.
-        profile = load_metrics.daily_profile(frame, zone)
-        mean = profile["avg_load_mw"].mean()
-        return profile.with_columns(
-            (pl.col("avg_load_mw") / pl.lit(mean)).alias("normalised")
-            if mean
-            else pl.lit(None, dtype=pl.Float64).alias("normalised")
-        )
-
-    return _for_each("load", build)
-
-
-def _load_factor() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        return load_metrics.load_factor(frame, zone, period="month").rename({"period": "month"})
 
     return _for_each("load", build)
 
@@ -351,54 +299,6 @@ def _generation_mix() -> pl.DataFrame:
         return mix_metrics.generation_mix(frame, zone, period="month").rename({"period": "month"})
 
     return _for_each("generation", build)
-
-
-def _carbon_intensity() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        operational = mix_metrics.carbon_intensity(frame, zone, basis="operational")
-        lifecycle = mix_metrics.carbon_intensity(frame, zone, basis="lifecycle")
-        renewable = mix_metrics.renewable_share(frame, zone, period="month")
-        combined = pl.concat([operational, lifecycle], how="vertical")
-        return combined.join(
-            renewable.select("period", "renewable_pct"), on="period", how="left"
-        ).rename({"period": "month"})
-
-    return _for_each("generation", build)
-
-
-def _capture_rates() -> pl.DataFrame:
-    """Capture rates for the two technologies whose revenue erodes with build-out."""
-    frames: list[pl.DataFrame] = []
-    for zone in ZONES:
-        if not (zone.has("price") and zone.has("generation")):
-            continue
-        prices = store.read("price", zone.code)
-        generation = store.read("generation", zone.code)
-        if prices.is_empty() or generation.is_empty():
-            continue
-
-        for fuel in ("solar", "wind"):
-            result = price_metrics.capture_rate(prices, generation, zone, fuel=fuel, period="month")
-            if result.is_empty():
-                continue
-            frames.append(
-                result.rename({"period": "month"}).with_columns(
-                    pl.lit(zone.code).alias("zone"), pl.lit(fuel).alias("fuel")
-                )
-            )
-
-    if not frames:
-        return pl.DataFrame()
-    return pl.concat(frames, how="diagonal_relaxed")
-
-
-def _europe_spreads() -> pl.DataFrame:
-    path = benchmarks.reference_path()
-    prices = store.read("price", "DE-LU")
-    if not path.exists() or prices.is_empty():
-        return pl.DataFrame()
-    monthly_power = price_metrics.block_prices(prices, get_zone("DE-LU"), period="month")
-    return benchmarks.calculate_spreads(pl.read_parquet(path), monthly_power)
 
 
 def _forecast_tables(results: Sequence[BacktestResult]) -> dict[str, pl.DataFrame]:
@@ -445,6 +345,24 @@ def _forecast_runs(results: Sequence[BacktestResult]) -> dict[str, object]:
         entry["alpha_search"] = result.alpha_search.to_dicts()
         runs.append(entry)
     return {"runs": runs}
+
+
+def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    """Create the static battery study from the common forecast sample."""
+    from gpa import battery
+
+    if predictions.is_empty():
+        return {name: pl.DataFrame() for name in _BATTERY_TABLES}
+    result = battery.backtest_predictions(
+        predictions,
+        model_names=("ridge", "lightgbm", "naive_previous_week"),
+        durations_mwh=(1.0, 4.0),
+        horizon_steps=24,
+    )
+    return {
+        "battery_dispatch": result.dispatch.with_columns(pl.lit("DE-LU").alias("zone")),
+        "battery_summary": result.summary.with_columns(pl.lit("DE-LU").alias("zone")),
+    }
 
 
 def _freshness() -> pl.DataFrame:

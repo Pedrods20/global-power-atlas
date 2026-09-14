@@ -9,9 +9,9 @@ incremental run rewrites only the current month, which in turn keeps git
 history readable and the repository small. Months in the past are effectively
 append-only.
 
-Writes are upserts on the dataset's natural key. Power data is revised: EIA
-restates hourly figures for days after the fact, and ONS republishes its yearly
-file continuously. Re-ingesting a window therefore has to replace what is
+Writes are upserts on the dataset's natural key. Power data is revised: providers
+can restate observations, and ONS republishes its yearly file continuously.
+Re-ingesting a window therefore has to replace what is
 already there rather than duplicate it, and the last writer for a given key
 wins.
 """

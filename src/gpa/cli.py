@@ -1,6 +1,6 @@
-"""Command line interface.
+"""Command line interface for the data, forecast and portfolio workflows.
 
-Five verbs cover the whole workflow:
+The main portfolio commands are:
 
 ``gpa zones``      inspect the registry
 ``gpa ingest``     fetch a recent window, for the daily scheduled run
@@ -8,6 +8,9 @@ Five verbs cover the whole workflow:
 ``gpa validate``   re-check everything on disk against the schema contracts
 ``gpa stats``      report what the store holds
 ``gpa backtest``   walk-forward price forecast, scored against naive baselines
+``gpa issue``      issue a feature-only forecast and retain its evidence
+``gpa reconcile``  attach observed prices to issued forecasts
+``gpa battery``    evaluate reconciled forecasts through the battery dispatch
 
 Exit codes matter because a scheduled workflow reads them: 0 when every target
 succeeded or was cleanly skipped, 1 when any target failed.
@@ -20,6 +23,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import polars as pl
 import typer
@@ -28,7 +32,7 @@ from dotenv import load_dotenv
 from gpa import __version__, pipeline, store
 from gpa.schema import SchemaError, SchemaErrors
 from gpa.schema import validate as validate_frame
-from gpa.zones import ZONES
+from gpa.zones import ZONES, get_zone
 
 load_dotenv()
 DEFAULT_TRACKING_DIR = Path(".gpa/mlflow")
@@ -63,7 +67,7 @@ def _configure_logging(verbose: bool) -> None:
         format="%(levelname)-8s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-    # HTTPX INFO includes query strings, including EIA's api_key parameter.
+    # HTTPX logs can include provider query strings; keep them out of normal output.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -349,23 +353,11 @@ def export(
     )
 
 
-@app.command("benchmarks")
-def update_benchmarks() -> None:
-    """Refresh official World Bank, EEX and ECB monthly references."""
-    from gpa.benchmarks import reference_path, refresh
-
-    frame = refresh()
-    typer.secho(
-        f"Wrote {frame.height} aligned months to {reference_path()}.",
-        fg=typer.colors.GREEN,
-    )
-
-
 @app.command()
 def backtest(
     zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to forecast.")] = "DE-LU",
     scope: Annotated[
-        str, typer.Option("--scope", help="overall, block, regime, hour or all.")
+        str, typer.Option("--scope", help="overall, block, regime, year, hour or all.")
     ] = "overall",
     min_train_days: Annotated[
         int, typer.Option(help="Usable days required before the first fit.")
@@ -379,6 +371,25 @@ def backtest(
     window: Annotated[
         int | None, typer.Option(help="Rolling training window in days. Default: expanding.")
     ] = None,
+    tune_lightgbm: Annotated[
+        bool,
+        typer.Option(
+            "--tune-lightgbm/--no-tune-lightgbm",
+            help="Choose LightGBM tree settings on the pre-test validation window.",
+        ),
+    ] = True,
+    lightgbm_refit_days: Annotated[
+        int,
+        typer.Option(
+            help="LightGBM refit cadence in days; use 1 operationally and larger values for long diagnostics."
+        ),
+    ] = 1,
+    price_only: Annotated[
+        bool,
+        typer.Option(
+            help="Run a long price-only stress test without requiring old load/generation history."
+        ),
+    ] = False,
     track: Annotated[bool, typer.Option(help="Record this comparison in local MLflow.")] = False,
     tracking_dir: Annotated[
         Path, typer.Option(help="Local MLflow database and artifacts.")
@@ -403,16 +414,21 @@ def backtest(
     _configure_logging(verbose)
     from gpa.forecast import backtest as harness
 
-    if scope not in ("overall", "block", "regime", "hour", "all"):
-        raise typer.BadParameter("scope must be overall, block, regime, hour or all")
+    if scope not in ("overall", "block", "regime", "year", "hour", "all"):
+        raise typer.BadParameter("scope must be overall, block, regime, year, hour or all")
     if min_train_days < 0 or validation_days < 0:
         raise typer.BadParameter("training and validation days cannot be negative")
+    if lightgbm_refit_days < 1:
+        raise typer.BadParameter("lightgbm refit cadence must be positive")
     result = harness.run(
         zone,
         min_train_days=min_train_days or harness.MIN_TRAIN_DAYS,
         validation_days=validation_days or harness.VALIDATION_DAYS,
         alpha=alpha,
         window=window,
+        tune_lightgbm=tune_lightgbm,
+        lightgbm_refit_days=lightgbm_refit_days,
+        include_actual_features=not price_only,
     )
 
     if track:
@@ -445,7 +461,7 @@ def backtest(
     )
     typer.echo("")
 
-    scopes = ("overall", "block", "regime", "hour") if scope == "all" else (scope,)
+    scopes = ("overall", "block", "regime", "year", "hour") if scope == "all" else (scope,)
     shown = result.scores.filter(pl.col("scope").is_in(list(scopes)))
     if shown.is_empty():
         typer.secho(f"No such scope: {scope!r}", fg=typer.colors.RED)
@@ -493,6 +509,188 @@ def backtest(
             f"{row['skill_vs_best_baseline_pct']:+.1f}% against the best baseline, "
             f"MAE {row['mae']:.2f}"
         )
+
+
+@app.command()
+def issue(
+    zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to forecast.")] = "DE-LU",
+    delivery_date: Annotated[
+        str | None,
+        typer.Option(help="Delivery date YYYY-MM-DD. Default: tomorrow in market time."),
+    ] = None,
+    model: Annotated[str, typer.Option(help="ridge or lightgbm.")] = "ridge",
+    allow_late: Annotated[
+        bool, typer.Option(help="Allow a late issue for diagnostics; labels it in the ledger.")
+    ] = False,
+    output: Annotated[
+        Path | None, typer.Option(help="Issue ledger root. Default: data/forecast_issues.")
+    ] = None,
+) -> None:
+    """Issue tomorrow's feature-only forecast and persist its evidence.
+
+    Every delivery hour is retained, including explicit abstentions when a
+    required feature or enough training history is unavailable.
+    """
+    from gpa.forecast import ledger
+    from gpa.forecast.boosting import LightGBM
+    from gpa.forecast.models import Ridge
+    from gpa.forecast.panel import build_panel
+
+    market = get_zone(zone)
+    if delivery_date is None:
+        local_today = dt.datetime.now(ZoneInfo(market.timezone)).date()
+        target_date = local_today + dt.timedelta(days=1)
+    else:
+        try:
+            target_date = dt.date.fromisoformat(delivery_date)
+        except ValueError as exc:
+            raise typer.BadParameter("delivery date must be YYYY-MM-DD") from exc
+
+    prices = store.read("price", market.code)
+    load = store.read("load", market.code) if market.has("load") else None
+    generation = store.read("generation", market.code) if market.has("generation") else None
+    prepared = build_panel(
+        prices,
+        market,
+        load=load,
+        generation=generation,
+        delivery_date=target_date,
+    )
+    forecaster: Ridge | LightGBM
+    if model == "ridge":
+        forecaster = Ridge(alpha=1.0)
+    elif model == "lightgbm":
+        forecaster = LightGBM()
+    else:
+        raise typer.BadParameter("model must be ridge or lightgbm")
+
+    issued_at = dt.datetime.now(dt.UTC)
+    frame = ledger.issue(
+        prepared,
+        forecaster,
+        target_date,
+        issued_at=issued_at,
+        allow_late=allow_late,
+    )
+    issued = frame.filter(pl.col("status") == "issued").height
+    abstained = frame.height - issued
+    if issued == 0:
+        typer.secho(
+            f"No forecasts available for {market.code} {target_date}; "
+            "the issue was not persisted. Check the pre-gate input window.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+    path = ledger.append(frame, root=output or ledger.DEFAULT_ROOT)
+    typer.secho(
+        f"Issued {market.code} {target_date}: {issued} forecasts, "
+        f"{abstained} abstentions -> {path}",
+        fg=typer.colors.GREEN if abstained == 0 else typer.colors.YELLOW,
+    )
+
+
+@app.command()
+def reconcile(
+    zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to reconcile.")] = "DE-LU",
+    output: Annotated[
+        Path | None, typer.Option(help="Issue ledger root. Default: data/forecast_issues.")
+    ] = None,
+) -> None:
+    """Attach observed hourly prices to every stored issue for a zone.
+
+    Reconciliation is idempotent: it rewrites the same zone/month partitions,
+    preserving the original issue timestamp and input fingerprint while moving
+    rows from ``issued`` to ``scored`` or ``issued_waiting_for_actual``.
+    """
+    from gpa.forecast import ledger
+
+    market = get_zone(zone)
+    root = output or ledger.DEFAULT_ROOT
+    issues = ledger.read(root=root, zone=market.code)
+    if issues.is_empty():
+        typer.secho(f"No issue records for {market.code} under {root}.", fg=typer.colors.YELLOW)
+        return
+
+    prices = store.read("price", market.code)
+    reconciled = ledger.reconcile(issues, prices, market)
+    months = (
+        reconciled.with_columns(pl.col("delivery_date").dt.strftime("%Y-%m").alias("_month"))[
+            "_month"
+        ]
+        .unique()
+        .sort()
+        .to_list()
+    )
+    for month in months:
+        ledger.append(
+            reconciled.filter(pl.col("delivery_date").dt.strftime("%Y-%m") == month),
+            root=root,
+        )
+
+    counts = {
+        row["status"]: row["len"]
+        for row in reconciled.group_by("status").len().iter_rows(named=True)
+    }
+    typer.echo(
+        f"Reconciled {market.code}: {reconciled.height} rows | "
+        + " | ".join(f"{status}={counts[status]}" for status in sorted(counts))
+    )
+
+
+@app.command("battery")
+def battery_value(
+    zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to evaluate.")] = "DE-LU",
+    ledger_root: Annotated[
+        Path | None, typer.Option(help="Issue ledger root. Default: data/forecast_issues.")
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(help="Optional directory for dispatch and summary Parquet files."),
+    ] = None,
+    horizon_steps: Annotated[
+        int, typer.Option(help="Rolling optimisation horizon in market intervals.")
+    ] = 24,
+) -> None:
+    """Evaluate reconciled forecasts as constrained battery dispatch.
+
+    The command is intentionally separate from ``export``: prospective ledger
+    evaluation can be persisted without changing the monthly dashboard.
+    """
+    from gpa import battery as battery_module
+    from gpa.forecast import ledger
+
+    market = get_zone(zone)
+    root = ledger_root or ledger.DEFAULT_ROOT
+    issues = ledger.read(root=root, zone=market.code)
+    if issues.is_empty():
+        typer.secho(f"No issue records for {market.code} under {root}.", fg=typer.colors.YELLOW)
+        return
+    reconciled = ledger.reconcile(issues, store.read("price", market.code), market)
+    scored = reconciled.filter(pl.col("status") == "scored").select(
+        "model",
+        pl.col("delivery_date").alias("local_date"),
+        "local_hour",
+        "forecast",
+        "actual",
+    )
+    if scored.is_empty():
+        typer.secho("No complete scored delivery rows yet.", fg=typer.colors.YELLOW)
+        return
+
+    result = battery_module.backtest_predictions(
+        scored,
+        model_names=("ridge", "lightgbm"),
+        durations_mwh=(1.0, 4.0),
+        horizon_steps=horizon_steps,
+    )
+    if output is not None:
+        destination = Path(output)
+        destination.mkdir(parents=True, exist_ok=True)
+        result.dispatch.write_parquet(destination / f"{market.code}_dispatch.parquet")
+        result.summary.write_parquet(destination / f"{market.code}_summary.parquet")
+        typer.echo(f"Wrote battery evaluation to {destination}.")
+    with pl.Config(tbl_rows=-1, tbl_width_chars=180, float_precision=2):
+        typer.echo(str(result.summary))
 
 
 @app.command()
