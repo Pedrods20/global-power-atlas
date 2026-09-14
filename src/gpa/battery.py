@@ -1,16 +1,13 @@
-"""Constrained battery dispatch for the DE-LU forecast study.
+"""Price-taking, full-day battery schedules settled on observed prices.
 
-This module deliberately keeps the economic experiment small and inspectable.
-At every interval a dynamic program chooses the first action of a rolling
-horizon using only the supplied signal.  The action is then settled against the
-observed price, so forecast error becomes economic error rather than a chart
-annotation.
+One charge-then-discharge episode is permitted per local day, with identical
+initial and terminal SOC. Optimization uses only the supplied forecast, never
+settlement prices. This is a discretized day-ahead experiment, not intraday
+trading or a general multi-cycle optimizer.
 
-The current published forecast is an hourly clock-hour benchmark.  The
-optimizer accepts an explicit ``duration_hours`` column and therefore keeps the
-power limit correct when a quarter-hour forecast is introduced later.  A
-quarter-hour run should use a finer ``soc_step_mwh`` than the default hourly
-study.
+UTC delivery timestamps and explicit interval durations support physical DST
+and quarter-hour accounting. Legacy clock-hour forecasts are accepted only on
+ordinary 24-hour days: averaged repeated hours cannot recover physical trades.
 """
 
 from __future__ import annotations
@@ -18,12 +15,14 @@ from __future__ import annotations
 import datetime as dt
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Final, cast
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
 __all__ = [
+    "DEFAULT_MODELS",
     "BatteryBacktestResult",
     "BatterySpec",
     "backtest_predictions",
@@ -31,32 +30,62 @@ __all__ = [
     "summarize",
 ]
 
-_OUTPUT_SCHEMA: Final[pl.Schema] = pl.Schema(
+DEFAULT_MODELS: Final = (
+    "naive_previous_day",
+    "naive_previous_week",
+    "naive_similar_day",
+    "ridge",
+    "lightgbm",
+)
+
+_INPUT_SCHEMA: Final = pl.Schema(
     {
-        "local_date": pl.Date,
-        "local_hour": pl.Int8,
-        "forecast": pl.Float64,
-        "actual": pl.Float64,
-        "action_mwh": pl.Float64,
-        "charge_mwh": pl.Float64,
-        "discharge_mwh": pl.Float64,
-        "battery_throughput_mwh": pl.Float64,
-        "soc_mwh": pl.Float64,
-        "gross_revenue_eur": pl.Float64,
-        "operating_cost_eur": pl.Float64,
-        "degradation_cost_eur": pl.Float64,
-        "profit_eur": pl.Float64,
-        "strategy": pl.String,
-        "power_mw": pl.Float64,
-        "energy_mwh": pl.Float64,
-        "duration_hours": pl.Float64,
+        "ts_utc": pl.Datetime("us", "UTC"),
+        "local_date": pl.Date(),
+        "local_hour": pl.Int8(),
+        "forecast": pl.Float64(),
+        "actual": pl.Float64(),
+        "duration_hours": pl.Float64(),
+    }
+)
+_OUTPUT_SCHEMA: Final = pl.Schema(_INPUT_SCHEMA)
+_OUTPUT_SCHEMA.update(
+    {
+        "action_mwh": pl.Float64(),
+        "charge_mwh": pl.Float64(),
+        "discharge_mwh": pl.Float64(),
+        "battery_throughput_mwh": pl.Float64(),
+        "soc_mwh": pl.Float64(),
+        "gross_revenue_eur": pl.Float64(),
+        "operating_cost_eur": pl.Float64(),
+        "degradation_cost_eur": pl.Float64(),
+        "profit_eur": pl.Float64(),
+        "strategy": pl.String(),
+        "power_mw": pl.Float64(),
+        "energy_mwh": pl.Float64(),
+    }
+)
+_COVERAGE_SCHEMA: Final = pl.Schema(
+    {
+        "model": pl.String,
+        "candidate_days": pl.UInt32,
+        "complete_days": pl.UInt32,
+        "common_days": pl.UInt32,
+        "excluded_days": pl.UInt32,
     }
 )
 
 
 @dataclass(frozen=True, slots=True)
 class BatterySpec:
-    """Physical and economic assumptions for one battery experiment."""
+    """Physical and economic assumptions for one battery experiment.
+
+    Both cost rates apply to absolute grid-side energy (charge plus discharge).
+    Equivalent cycles use battery-side throughput / (2 * nameplate capacity).
+    Cost rates are assumptions, not calibrated market or investment costs.
+    SOC resolution can materially limit dispatch: quarter-hour studies need
+    a finer grid than the default 0.25 MWh hourly benchmark (for example 0.05).
+    """
 
     power_mw: float = 1.0
     energy_mwh: float = 4.0
@@ -68,6 +97,8 @@ class BatterySpec:
     max_cycles_per_day: float = 1.0
 
     def __post_init__(self) -> None:
+        if any(not math.isfinite(getattr(self, field.name)) for field in fields(self)):
+            raise ValueError("battery assumptions must be finite")
         if self.power_mw <= 0.0 or self.energy_mwh <= 0.0:
             raise ValueError("battery power and energy must be positive")
         if not 0.0 < self.round_trip_efficiency <= 1.0:
@@ -80,33 +111,30 @@ class BatterySpec:
             raise ValueError("max_cycles_per_day must be in (0, 1]")
         if not 0.0 <= self.initial_soc_mwh <= self.energy_mwh:
             raise ValueError("initial_soc_mwh must be inside the battery capacity")
-        steps = self.energy_mwh / self.soc_step_mwh
-        if not math.isclose(steps, round(steps), abs_tol=1e-9):
-            raise ValueError("energy_mwh must be divisible by soc_step_mwh")
-        if not math.isclose(
-            self.initial_soc_mwh / self.soc_step_mwh,
-            round(self.initial_soc_mwh / self.soc_step_mwh),
-            abs_tol=1e-9,
+        for value, label in (
+            (self.energy_mwh, "energy_mwh"),
+            (self.initial_soc_mwh, "initial_soc_mwh"),
         ):
-            raise ValueError("initial_soc_mwh must lie on the SOC grid")
+            steps = value / self.soc_step_mwh
+            if not math.isclose(steps, round(steps), rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(f"{label} must lie on the SOC grid")
 
     @property
     def charge_efficiency(self) -> float:
-        """One-way efficiency applied to energy entering the battery."""
         return math.sqrt(self.round_trip_efficiency)
 
     @property
     def discharge_efficiency(self) -> float:
-        """One-way efficiency applied to energy leaving the battery."""
         return math.sqrt(self.round_trip_efficiency)
 
 
 @dataclass(frozen=True, slots=True)
 class BatteryBacktestResult:
-    """Dispatch rows and the economic scoreboard derived from them."""
+    """Common-sample economics and explicit day-level coverage counts."""
 
     dispatch: pl.DataFrame
     summary: pl.DataFrame
+    coverage: pl.DataFrame
 
 
 def dispatch(
@@ -114,98 +142,65 @@ def dispatch(
     spec: BatterySpec,
     *,
     strategy: str,
-    horizon_steps: int = 24,
+    horizon_steps: int | None = None,
+    timezone: str = "Europe/Berlin",
 ) -> pl.DataFrame:
-    """Dispatch a battery against forecast signals and settle on actual prices.
+    """Choose one full-day schedule, then settle it against actual prices.
 
-    ``frame`` must have ``local_date``, ``local_hour`` and ``forecast``.  An
-    ``actual`` column is required for economic settlement but may contain nulls
-    for a live, not-yet-reconciled path.  Only complete local days are used;
-    incomplete DST or provider days are not silently filled.
+    UTC timestamps identify delivery intervals; duration_hours defaults to 1.
+    Without timestamps only ordinary, unique 24-clock-hour days are eligible.
+    Missing forecasts or physical gaps exclude the whole day. Duplicate,
+    overlapping, non-finite or mislabelled intervals raise instead of being
+    silently repaired. Actuals may be null for an unsettled schedule.
 
-    Strategies are labels, not alternate information sets. ``perfect_foresight``
-    is implemented by passing realised prices as ``forecast``. It is therefore
-    an upper bound under the same rolling horizon and physical constraints, not
-    a claim that a real trader could have known the future.
+    horizon_steps is retained as an optional compatibility guard: a provided
+    value must cover every interval of each eligible day. A shorter rolling
+    horizon is not a valid full-day auction schedule and is rejected.
     """
     if not strategy:
         raise ValueError("strategy must not be empty")
-    if horizon_steps < 1:
+    if horizon_steps is not None and horizon_steps < 1:
         raise ValueError("horizon_steps must be positive")
-    prepared = _prepare(frame)
-    if prepared.is_empty():
-        return pl.DataFrame(schema=_OUTPUT_SCHEMA)
-
+    prepared = _complete_days(_prepare(frame, timezone), timezone)
     rows: list[dict[str, object]] = []
-    for block in _contiguous_blocks(prepared):
-        soc = spec.initial_soc_mwh
-        current_date: dt.date | None = None
-        phase = 0
-        for index in range(block.height):
-            day = block["local_date"][index]
-            if day != current_date:
-                current_date = day
-                phase = 0
-            remaining_day = block.filter(pl.col("local_date") == day).filter(
-                pl.col("local_hour") >= block["local_hour"][index]
-            )
-            horizon = remaining_day.head(horizon_steps)
-            signal = horizon["forecast"].to_list()
-            durations = horizon["duration_hours"].to_list()
-            terminal = spec.initial_soc_mwh if horizon.height == remaining_day.height else None
-            next_soc, grid_mwh, next_phase = _first_action(
-                soc,
-                phase,
-                signal,
-                durations,
-                spec,
-                terminal_soc_mwh=terminal,
-            )
-            current = block.row(index, named=True)
+    for day in prepared.partition_by("local_date", maintain_order=True):
+        if horizon_steps is not None and horizon_steps < day.height:
+            raise ValueError("horizon_steps must cover the full delivery day")
+        schedule = _schedule(day["forecast"].to_list(), day["duration_hours"].to_list(), spec)
+        previous_soc = spec.initial_soc_mwh
+        for current, (soc, grid_mwh) in zip(day.iter_rows(named=True), schedule, strict=True):
             actual = _float_or_none(current["actual"])
-            duration = float(current["duration_hours"])
-            charge = max(0.0, -grid_mwh)
-            discharge = max(0.0, grid_mwh)
-            battery_throughput = (
-                charge * spec.charge_efficiency + discharge / spec.discharge_efficiency
-            )
+            charge, discharge = max(0.0, -grid_mwh), max(0.0, grid_mwh)
             operating = (charge + discharge) * spec.variable_cost_eur_mwh
             degradation = (charge + discharge) * spec.degradation_cost_eur_mwh
             gross = grid_mwh * actual if actual is not None else None
-            profit = gross - operating - degradation if gross is not None else None
             rows.append(
                 {
-                    "local_date": current["local_date"],
-                    "local_hour": current["local_hour"],
-                    "forecast": current["forecast"],
-                    "actual": actual,
+                    **current,
                     "action_mwh": grid_mwh,
                     "charge_mwh": charge,
                     "discharge_mwh": discharge,
-                    "battery_throughput_mwh": battery_throughput,
-                    "soc_mwh": next_soc,
+                    "battery_throughput_mwh": abs(soc - previous_soc),
+                    "soc_mwh": soc,
                     "gross_revenue_eur": gross,
                     "operating_cost_eur": operating,
                     "degradation_cost_eur": degradation,
-                    "profit_eur": profit,
+                    "profit_eur": gross - operating - degradation if gross is not None else None,
                     "strategy": strategy,
                     "power_mw": spec.power_mw,
                     "energy_mwh": spec.energy_mwh,
-                    "duration_hours": duration,
                 }
             )
-            soc = next_soc
-            phase = next_phase
-
-    if not rows:
-        return pl.DataFrame(schema=_OUTPUT_SCHEMA)
-    return pl.DataFrame(rows).cast(_OUTPUT_SCHEMA).sort(["local_date", "local_hour"])
+            previous_soc = soc
+    return pl.DataFrame(rows, schema=_OUTPUT_SCHEMA).sort("ts_utc")
 
 
 def summarize(dispatch_frame: pl.DataFrame) -> pl.DataFrame:
-    """Aggregate dispatch economics and capture versus constrained foresight."""
+    """Aggregate economics without disguising missing settlement as zero P&L."""
+    keys = ["strategy", "power_mw", "energy_mwh"]
     schema = {
         "strategy": pl.String,
+        "power_mw": pl.Float64,
         "energy_mwh": pl.Float64,
         "days": pl.UInt32,
         "intervals": pl.UInt32,
@@ -219,75 +214,144 @@ def summarize(dispatch_frame: pl.DataFrame) -> pl.DataFrame:
     }
     if dispatch_frame.is_empty():
         return pl.DataFrame(schema=schema)
-
     grouped = (
-        dispatch_frame.group_by(["strategy", "energy_mwh"])
+        dispatch_frame.group_by(keys)
         .agg(
             pl.col("local_date").n_unique().cast(pl.UInt32).alias("days"),
             pl.col("profit_eur").count().cast(pl.UInt32).alias("intervals"),
-            pl.col("profit_eur").sum().alias("profit_eur"),
-            pl.col("gross_revenue_eur").sum().alias("gross_revenue_eur"),
-            pl.col("operating_cost_eur").sum().alias("operating_cost_eur"),
-            pl.col("degradation_cost_eur").sum().alias("degradation_cost_eur"),
+            *[
+                pl.when(pl.col(column).null_count() == 0)
+                .then(pl.col(column).sum())
+                .otherwise(None)
+                .alias(column)
+                for column in (
+                    "profit_eur",
+                    "gross_revenue_eur",
+                    "operating_cost_eur",
+                    "degradation_cost_eur",
+                )
+            ],
             pl.col("battery_throughput_mwh").sum().alias("throughput_mwh"),
         )
         .with_columns(
-            (pl.col("throughput_mwh") / (2.0 * pl.col("energy_mwh"))).alias("equivalent_cycles")
+            (pl.col("throughput_mwh") / (2 * pl.col("energy_mwh"))).alias("equivalent_cycles")
         )
     )
     perfect = grouped.filter(pl.col("strategy") == "perfect_foresight").select(
-        pl.col("energy_mwh"), pl.col("profit_eur").alias("_perfect_profit")
+        "power_mw", "energy_mwh", pl.col("profit_eur").alias("_perfect_profit")
     )
     return (
-        grouped.join(perfect, on="energy_mwh", how="left")
+        grouped.join(perfect, on=["power_mw", "energy_mwh"], how="left")
         .with_columns(
-            pl.when(pl.col("_perfect_profit") > 0.0)
+            pl.when(pl.col("_perfect_profit") > 0)
             .then(pl.col("profit_eur") / pl.col("_perfect_profit"))
             .otherwise(None)
             .alias("capture_vs_perfect")
         )
-        .drop("_perfect_profit")
         .select(list(schema))
-        .sort(["energy_mwh", "strategy"])
+        .sort(["energy_mwh", "power_mw", "strategy"])
     )
 
 
 def backtest_predictions(
     predictions: pl.DataFrame,
     *,
-    model_names: Iterable[str] = ("ridge", "lightgbm", "naive_previous_week"),
-    durations_mwh: Sequence[float] = (1.0, 4.0),
-    horizon_steps: int = 24,
+    model_names: Iterable[str] = DEFAULT_MODELS,
+    durations_mwh: Sequence[float] = (1.0, 2.0, 4.0),
+    horizon_steps: int | None = None,
     spec_kwargs: dict[str, float] | None = None,
+    timezone: str = "Europe/Berlin",
 ) -> BatteryBacktestResult:
-    """Run forecast-guided, no-trade and constrained-foresight strategies.
+    """Compare all requested models on identical complete, settled days.
 
-    The input is the common-sample output of the price backtest. Each model is
-    evaluated only on its own complete days, and all economic settlement uses
-    the shared ``actual`` column. ``spec_kwargs`` is intentionally explicit so
-    changing degradation or efficiency becomes visible in a reproducible run.
+    Missing requested models and conflicting settlement prices/durations raise.
+    Coverage records candidate, eligible and common day counts for each model.
+    Capacity values are MWh, not hours unless power is exactly 1 MW.
     """
     required = {"model", "local_date", "local_hour", "forecast", "actual"}
-    missing = required - set(predictions.columns)
-    if missing:
+    if missing := required - set(predictions.columns):
         raise ValueError(f"predictions missing columns: {sorted(missing)}")
-    if not durations_mwh or any(duration <= 0.0 for duration in durations_mwh):
-        raise ValueError("durations_mwh must contain positive capacities")
-    kwargs = spec_kwargs or {}
-    outputs: list[pl.DataFrame] = []
-    for duration in durations_mwh:
-        spec = BatterySpec(energy_mwh=float(duration), **kwargs)
-        actuals = _complete_days(
-            predictions.select("local_date", "local_hour", "actual").unique(
-                ["local_date", "local_hour"], keep="first"
-            )
+    names = tuple(model_names)
+    if (
+        not names
+        or len(set(names)) != len(names)
+        or any(not n or n in {"no_trade", "perfect_foresight"} for n in names)
+    ):
+        raise ValueError("model_names must be distinct nonempty forecast model names")
+    if not durations_mwh or len(set(durations_mwh)) != len(durations_mwh):
+        raise ValueError("durations_mwh must contain distinct positive capacities")
+    specs = [
+        BatterySpec(energy_mwh=float(capacity), **(spec_kwargs or {})) for capacity in durations_mwh
+    ]
+    if predictions.is_empty():
+        empty = pl.DataFrame(schema=_OUTPUT_SCHEMA)
+        return BatteryBacktestResult(empty, summarize(empty), pl.DataFrame(schema=_COVERAGE_SCHEMA))
+    if missing_models := set(names) - set(predictions["model"].unique().to_list()):
+        raise ValueError(f"missing requested models: {sorted(missing_models)}")
+
+    prepared: dict[str, pl.DataFrame] = {}
+    complete: dict[str, pl.DataFrame] = {}
+    candidate_counts: dict[str, int] = {}
+    for name in names:
+        frame = predictions.filter(pl.col("model") == name)
+        candidate_counts[name] = frame["local_date"].n_unique()
+        prepared[name] = _prepare(frame, timezone)
+        eligible = _complete_days(prepared[name], timezone)
+        settled = eligible.group_by("local_date").agg(
+            pl.col("actual").null_count().alias("_missing")
         )
+        complete[name] = eligible.join(
+            settled.filter(pl.col("_missing") == 0).select("local_date"), on="local_date"
+        )
+
+    observations = pl.concat(list(prepared.values()))
+    conflicts = (
+        observations.group_by("ts_utc")
+        .agg(
+            pl.col("actual").drop_nulls().n_unique().alias("_actuals"),
+            pl.col("duration_hours").n_unique().alias("_durations"),
+        )
+        .filter((pl.col("_actuals") > 1) | (pl.col("_durations") > 1))
+    )
+    if not conflicts.is_empty():
+        raise ValueError("inconsistent actual prices or interval durations between models")
+    common = set(complete[names[0]]["local_date"].to_list())
+    for name in names[1:]:
+        common.intersection_update(complete[name]["local_date"].to_list())
+    # Complete days can have different resolutions: compare physical keys too.
+    for day in list(common):
+        keys = [
+            set(prepared[name].filter(pl.col("local_date") == day)["ts_utc"].to_list())
+            for name in names
+        ]
+        if any(key != keys[0] for key in keys[1:]):
+            common.remove(day)
+    coverage = pl.DataFrame(
+        [
+            {
+                "model": name,
+                "candidate_days": candidate_counts[name],
+                "complete_days": complete[name]["local_date"].n_unique(),
+                "common_days": len(common),
+                "excluded_days": candidate_counts[name] - len(common),
+            }
+            for name in names
+        ],
+        schema=_COVERAGE_SCHEMA,
+    )
+    sample = {
+        name: complete[name].filter(pl.col("local_date").is_in(sorted(common))) for name in names
+    }
+    outputs: list[pl.DataFrame] = []
+    for spec in specs:
+        actuals = sample[names[0]]
         outputs.append(
             dispatch(
                 actuals.with_columns(pl.col("actual").alias("forecast")),
                 spec,
                 strategy="perfect_foresight",
                 horizon_steps=horizon_steps,
+                timezone=timezone,
             )
         )
         outputs.append(
@@ -296,164 +360,188 @@ def backtest_predictions(
                 spec,
                 strategy="no_trade",
                 horizon_steps=horizon_steps,
-            ).with_columns(
-                pl.lit(0.0).alias("action_mwh"),
-                pl.lit(0.0).alias("charge_mwh"),
-                pl.lit(0.0).alias("discharge_mwh"),
-                pl.lit(0.0).alias("soc_mwh"),
-                pl.lit(0.0).alias("gross_revenue_eur"),
-                pl.lit(0.0).alias("operating_cost_eur"),
-                pl.lit(0.0).alias("degradation_cost_eur"),
-                pl.lit(0.0).alias("profit_eur"),
+                timezone=timezone,
             )
         )
-        for model in model_names:
-            candidate = _complete_days(predictions.filter(pl.col("model") == model))
-            if candidate.is_empty():
-                continue
-            outputs.append(dispatch(candidate, spec, strategy=model, horizon_steps=horizon_steps))
-    if not outputs:
-        empty = pl.DataFrame(schema=_OUTPUT_SCHEMA)
-        return BatteryBacktestResult(empty, summarize(empty))
-    combined = pl.concat(outputs, how="vertical_relaxed").sort(
-        ["energy_mwh", "local_date", "local_hour", "strategy"]
-    )
-    return BatteryBacktestResult(combined, summarize(combined))
+        for name in names:
+            outputs.append(
+                dispatch(
+                    sample[name],
+                    spec,
+                    strategy=name,
+                    horizon_steps=horizon_steps,
+                    timezone=timezone,
+                )
+            )
+    combined = pl.concat(outputs).sort(["energy_mwh", "power_mw", "ts_utc", "strategy"])
+    return BatteryBacktestResult(combined, summarize(combined), coverage)
 
 
-def _prepare(frame: pl.DataFrame) -> pl.DataFrame:
-    missing = {"local_date", "local_hour", "forecast"} - set(frame.columns)
-    if missing:
-        raise ValueError(f"dispatch frame missing columns: {sorted(missing)}")
-    prepared = frame
-    if "actual" not in prepared.columns:
-        prepared = prepared.with_columns(pl.lit(None, dtype=pl.Float64).alias("actual"))
-    if "duration_hours" not in prepared.columns:
-        prepared = prepared.with_columns(pl.lit(1.0).alias("duration_hours"))
+def _day_bounds(day: dt.date, timezone: str) -> tuple[dt.datetime, dt.datetime]:
+    zone = ZoneInfo(timezone)
     return (
-        prepared.select("local_date", "local_hour", "forecast", "actual", "duration_hours")
-        .with_columns(
-            pl.col("local_date").cast(pl.Date),
-            pl.col("local_hour").cast(pl.Int8),
-            pl.col("forecast").cast(pl.Float64),
-            pl.col("actual").cast(pl.Float64),
-            pl.col("duration_hours").cast(pl.Float64),
-        )
-        .drop_nulls(["forecast", "duration_hours"])
-        .filter(pl.col("duration_hours") > 0.0)
-        .sort(["local_date", "local_hour"])
+        dt.datetime.combine(day, dt.time(), zone).astimezone(dt.UTC),
+        dt.datetime.combine(day + dt.timedelta(days=1), dt.time(), zone).astimezone(dt.UTC),
     )
 
 
-def _complete_days(frame: pl.DataFrame) -> pl.DataFrame:
-    if frame.is_empty():
-        return frame
-    valid = (
-        frame.group_by("local_date")
-        .agg(
-            pl.col("local_hour").n_unique().alias("_n"),
-            pl.col("local_hour").min().alias("_min"),
-            pl.col("local_hour").max().alias("_max"),
-        )
-        .filter((pl.col("_n") == 24) & (pl.col("_min") == 0) & (pl.col("_max") == 23))
-        .select("local_date")
+def _prepare(frame: pl.DataFrame, timezone: str) -> pl.DataFrame:
+    if missing := {"local_date", "local_hour", "forecast"} - set(frame.columns):
+        raise ValueError(f"dispatch frame missing columns: {sorted(missing)}")
+    prepared = frame.with_columns(
+        pl.col("local_date").cast(pl.Date),
+        pl.col("forecast").cast(pl.Float64),
+        pl.col("actual").cast(pl.Float64)
+        if "actual" in frame.columns
+        else pl.lit(None, dtype=pl.Float64).alias("actual"),
+        pl.col("duration_hours").cast(pl.Float64)
+        if "duration_hours" in frame.columns
+        else pl.lit(1.0).alias("duration_hours"),
     )
-    return frame.join(valid, on="local_date", how="inner").sort(["local_date", "local_hour"])
-
-
-def _contiguous_blocks(frame: pl.DataFrame) -> list[pl.DataFrame]:
-    complete = _complete_days(frame)
-    if complete.is_empty():
-        return []
-    days = complete.get_column("local_date").unique().sort().to_list()
-    blocks: list[pl.DataFrame] = []
-    start = 0
-    for index in range(1, len(days)):
-        if days[index] - days[index - 1] != dt.timedelta(days=1):
-            blocks.append(complete.filter(pl.col("local_date").is_in(days[start:index])))
-            start = index
-    blocks.append(complete.filter(pl.col("local_date").is_in(days[start:])))
-    return blocks
-
-
-def _first_action(
-    soc: float,
-    phase: int,
-    prices: list[object],
-    durations: list[object],
-    spec: BatterySpec,
-    *,
-    terminal_soc_mwh: float | None,
-) -> tuple[float, float, int]:
-    grid = spec.soc_step_mwh
-    states = round(spec.energy_mwh / grid)
-    initial = round(soc / grid)
-    values = [-math.inf] * (states + 1)
-    phase_values = [values.copy(), values.copy()]
-    if terminal_soc_mwh is None:
-        phase_values = [[0.0] * (states + 1), [0.0] * (states + 1)]
-    else:
-        terminal = round(terminal_soc_mwh / grid)
-        phase_values = [[-math.inf] * (states + 1), [-math.inf] * (states + 1)]
-        phase_values[0][terminal] = 0.0
-        phase_values[1][terminal] = 0.0
-    policies: list[list[list[tuple[int, float, int] | None]]] = []
-
-    for price, duration in reversed(list(zip(prices, durations, strict=True))):
-        signal = _float_or_none(price)
-        if signal is None:
-            signal = 0.0
-        hours = float(cast(float, duration))
-        next_values = [[-math.inf] * (states + 1), [-math.inf] * (states + 1)]
-        policy: list[list[tuple[int, float, int] | None]] = [
-            [None] * (states + 1),
-            [None] * (states + 1),
+    if prepared.select(
+        pl.any_horizontal(pl.col("local_date").is_null(), pl.col("local_hour").is_null()).any()
+    ).item():
+        raise ValueError("local delivery labels must not be null")
+    if prepared.filter(
+        ~pl.col("local_hour").is_between(0, 23)
+        | (pl.col("local_hour") != pl.col("local_hour").floor())
+    ).height:
+        raise ValueError("local_hour must be an integer in 0..23")
+    prepared = prepared.with_columns(pl.col("local_hour").cast(pl.Int8))
+    for column in ("forecast", "actual", "duration_hours"):
+        if prepared.filter(pl.col(column).is_not_null() & ~pl.col(column).is_finite()).height:
+            raise ValueError(f"{column} must be finite when present")
+    if prepared.filter(pl.col("duration_hours").is_null() | (pl.col("duration_hours") <= 0)).height:
+        raise ValueError("duration_hours must be finite and positive")
+    if "ts_utc" not in prepared.columns:
+        if prepared.select(pl.struct("local_date", "local_hour").is_duplicated().any()).item():
+            raise ValueError("duplicate clock-hour rows require unique UTC delivery timestamps")
+        valid_days = [
+            day
+            for day in prepared["local_date"].unique().to_list()
+            if _day_bounds(day, timezone)[1] - _day_bounds(day, timezone)[0]
+            == dt.timedelta(hours=24)
         ]
-        for current_phase in (0, 1):
-            for state in range(states + 1):
-                current_soc = state * grid
-                for next_state, grid_mwh in _actions(state, current_soc, hours, spec, states):
-                    if current_phase == 1 and grid_mwh < 0.0:
-                        continue
-                    next_phase = 1 if grid_mwh > 0.0 else current_phase
-                    action_cost = spec.variable_cost_eur_mwh + spec.degradation_cost_eur_mwh
-                    value = grid_mwh * signal - abs(grid_mwh) * action_cost
-                    value += phase_values[next_phase][next_state]
-                    if value > next_values[current_phase][state]:
-                        next_values[current_phase][state] = value
-                        policy[current_phase][state] = (next_state, grid_mwh, next_phase)
-        phase_values = next_values
-        policies.append(policy)
+        prepared = prepared.filter(pl.col("local_date").is_in(valid_days))
+        stamps = [
+            dt.datetime.combine(day, dt.time(hour), ZoneInfo(timezone)).astimezone(dt.UTC)
+            for day, hour in prepared.select("local_date", "local_hour").iter_rows()
+        ]
+        prepared = prepared.with_columns(
+            pl.Series("ts_utc", stamps, dtype=pl.Datetime("us", "UTC"))
+        )
+    else:
+        dtype = prepared.schema["ts_utc"]
+        if not isinstance(dtype, pl.Datetime) or dtype.time_zone is None:
+            raise ValueError("ts_utc must contain timezone-aware delivery timestamps")
+        prepared = prepared.with_columns(
+            pl.col("ts_utc").dt.convert_time_zone("UTC").cast(pl.Datetime("us", "UTC"))
+        )
+    if prepared["ts_utc"].null_count():
+        raise ValueError("ts_utc must not be null")
+    if prepared["ts_utc"].is_duplicated().any():
+        raise ValueError("duplicate delivery timestamps")
+    local = pl.col("ts_utc").dt.convert_time_zone(timezone)
+    if prepared.filter(
+        (local.dt.date() != pl.col("local_date")) | (local.dt.hour() != pl.col("local_hour"))
+    ).height:
+        raise ValueError("UTC timestamps do not match local delivery labels")
+    prepared = prepared.select(list(_INPUT_SCHEMA)).sort("ts_utc")
+    stamps = prepared["ts_utc"].to_list()
+    ends = [
+        stamp + dt.timedelta(hours=hours)
+        for stamp, hours in zip(stamps, prepared["duration_hours"], strict=True)
+    ]
+    if any(end > stamp for end, stamp in zip(ends[:-1], stamps[1:], strict=True)):
+        raise ValueError("overlapping delivery intervals")
+    return prepared.cast(_INPUT_SCHEMA)
 
-    chosen = policies[-1][phase][initial] if policies else None
-    if chosen is None:
-        return soc, 0.0, phase
-    next_state, action, next_phase = chosen
-    return next_state * grid, action, next_phase
+
+def _complete_days(frame: pl.DataFrame, timezone: str) -> pl.DataFrame:
+    valid: list[dt.date] = []
+    for day in frame.partition_by("local_date", maintain_order=True):
+        date = day["local_date"][0]
+        start, end = _day_bounds(date, timezone)
+        stamps = day["ts_utc"].to_list()
+        ends = [
+            stamp + dt.timedelta(hours=hours)
+            for stamp, hours in zip(stamps, day["duration_hours"], strict=True)
+        ]
+        if (
+            stamps[0] == start
+            and ends[-1] == end
+            and not day["forecast"].null_count()
+            and all(a == b for a, b in zip(ends[:-1], stamps[1:], strict=True))
+        ):
+            valid.append(date)
+    return frame.filter(pl.col("local_date").is_in(valid)).sort("ts_utc")
+
+
+def _schedule(
+    prices: list[float], durations: list[float], spec: BatterySpec
+) -> list[tuple[float, float]]:
+    """Backward DP, then one forward execution of the preselected daily policy.
+
+    With one charge-then-discharge episode and terminal SOC equal to initial
+    SOC, throughput is exactly twice (peak SOC - initial SOC). Bounding that
+    peak therefore enforces the daily equivalent-cycle budget without a third
+    DP state. This equivalence does NOT hold for multi-cycle or free-terminal
+    schedules. A non-grid-aligned budget is rounded down, never exceeded.
+    """
+    grid = spec.soc_step_mwh
+    initial = round(spec.initial_soc_mwh / grid)
+    peak = min(
+        round(spec.energy_mwh / grid),
+        initial + math.floor(spec.max_cycles_per_day * spec.energy_mwh / grid + 1e-9),
+    )
+    values = [[-math.inf] * (peak + 1) for _ in range(2)]
+    values[0][initial] = values[1][initial] = 0.0
+    policies: list[list[list[tuple[int, float, int] | None]]] = []
+    for signal, duration in reversed(list(zip(prices, durations, strict=True))):
+        next_values = [[-math.inf] * (peak + 1) for _ in range(2)]
+        policy: list[list[tuple[int, float, int] | None]] = [[None] * (peak + 1) for _ in range(2)]
+        for phase in (0, 1):
+            for state in range(initial, peak + 1):
+                for next_state, action in _actions(state, duration, spec, initial, peak):
+                    if phase == 1 and action < 0:
+                        continue
+                    next_phase = 1 if action > 0 else phase
+                    value = action * signal - abs(action) * (
+                        spec.variable_cost_eur_mwh + spec.degradation_cost_eur_mwh
+                    )
+                    value += values[next_phase][next_state]
+                    if value > next_values[phase][state]:
+                        next_values[phase][state] = value
+                        policy[phase][state] = (next_state, action, next_phase)
+        values = next_values
+        policies.append(policy)
+    state, phase = initial, 0
+    schedule: list[tuple[float, float]] = []
+    for policy in reversed(policies):
+        chosen = policy[phase][state]
+        if chosen is None:
+            raise RuntimeError("no feasible full-day battery schedule")
+        state, action, phase = chosen
+        schedule.append((state * grid, action))
+    return schedule
 
 
 def _actions(
-    state: int,
-    soc: float,
-    duration: float,
-    spec: BatterySpec,
-    states: int,
+    state: int, duration: float, spec: BatterySpec, minimum: int, maximum: int
 ) -> list[tuple[int, float]]:
-    grid = spec.soc_step_mwh
-    eta_c = spec.charge_efficiency
-    eta_d = spec.discharge_efficiency
     max_grid = spec.power_mw * duration
-    max_charge_steps = math.floor(min(spec.energy_mwh - soc, max_grid * eta_c) / grid + 1e-9)
-    max_discharge_steps = math.floor(min(soc, max_grid / eta_d) / grid + 1e-9)
-    actions = [(state, 0.0)]
-    for steps in range(1, max_charge_steps + 1):
-        actions.append((state + steps, -(steps * grid) / eta_c))
-    for steps in range(1, min(max_discharge_steps, state) + 1):
-        actions.append((state - steps, steps * grid * eta_d))
-    return [(next_state, action) for next_state, action in actions if 0 <= next_state <= states]
+    grid = spec.soc_step_mwh
+    charge = min(maximum - state, math.floor(max_grid * spec.charge_efficiency / grid + 1e-9))
+    discharge = min(state - minimum, math.floor(max_grid / spec.discharge_efficiency / grid + 1e-9))
+    return [
+        (state, 0.0),
+        *[(state + step, -step * grid / spec.charge_efficiency) for step in range(1, charge + 1)],
+        *[
+            (state - step, step * grid * spec.discharge_efficiency)
+            for step in range(1, discharge + 1)
+        ],
+    ]
 
 
 def _float_or_none(value: object) -> float | None:
-    if value is None:
-        return None
-    return float(cast(float, value))
+    return None if value is None else float(cast(float, value))
