@@ -10,15 +10,14 @@ written plan before code changes. No GitHub publication is authorized by this
 request. This section is the single implementation log; do not create parallel
 STATE/TODO/handoff documents.
 
-**Current state: A/B/C implemented and validated locally; D substantially
-implemented but not yet green; E/F/G pending.**
-P0 and P1 are not complete as whole priorities. Work remains uncommitted on
-`main`; no push, public export, data ingestion or prospective issuance occurred.
-Resume by finishing the open items in "D handoff evidence" below (two
-pre-existing tests need updating to the new ledger contract, one ruff finding,
-three mypy findings, `reconcile` CLI and the workflow failure path still
-unwired) — not by reimplementing the battery engine or the ledger/provenance/
-attempts core, which are done and covered by new passing tests.
+**Current state: A/B/C/D implemented, tested and committed locally on `main`
+(commits `c893fa7`, `f2bb495`, `c594b75`); E/F/G pending.**
+P0 and P1 are not complete as whole priorities. Nothing has been pushed to a
+remote; no public export, data ingestion or prospective issuance occurred.
+Resume at **E — input availability/history** below. Do not reopen or
+reimplement the battery engine or the ledger/provenance/attempts core: they
+are committed and green (311 tests, ruff check/format and mypy strict clean,
+87.25% coverage).
 
 ### D execution plan — recorded before implementation
 
@@ -64,18 +63,23 @@ Planned code: `forecast/ledger.py`, focused `forecast/provenance.py` and
 records local availability evidence; provider publication/vintage correctness
 and history catch-up remain E and are not implicitly certified by a hash.
 
-### D handoff evidence — partial, uncommitted (this session)
+### D handoff evidence — done, committed
 
-The user resumed D and asked to stop before it was finished. This is not a
-completed increment: two tests fail, lint and mypy each have open findings,
-and two of the six D plan items (reconcile CLI, workflow) were not started.
+D was resumed, finished and committed in three commits: `c893fa7` (A/B/C:
+battery accounting and the economic study layer), `f2bb495` (D's initial
+ledger/provenance/attempts rewrite, with two known-failing tests and open
+lint/mypy findings), and `c594b75` (closing those gaps: contract-matching
+tests, clean lint/format/mypy, CLI-level attempt tests, and the workflow wire-up).
+All six D plan items above are done.
 
 Changed files: `src/gpa/forecast/ledger.py` (rewritten), `src/gpa/cli.py`
-(`issue` and `battery` commands, new `forecast-attempt` command),
-`src/gpa/forecast/models.py` (+4 lines: feature-only `predict_day` on `Naive`).
+(`issue`, `battery` and `reconcile` commands, new `forecast-attempt` command),
+`src/gpa/forecast/models.py` (+4 lines: feature-only `predict_day` on `Naive`),
+`.github/workflows/forecast.yml` (attempt registration and failure finalization).
 New files: `src/gpa/forecast/provenance.py`, `src/gpa/forecast/attempts.py`,
-`tests/test_ledger.py`, `tests/test_forecast_attempts.py`. `src/gpa/battery.py`
-and `src/gpa/battery_study.py` carry only the already-recorded A/B/C changes.
+`tests/test_ledger.py`, `tests/test_forecast_attempts.py`, plus new tests
+appended to `tests/test_cli.py`. `src/gpa/battery.py` and
+`src/gpa/battery_study.py` carry only the already-recorded A/B/C changes.
 
 Implemented and covered by new, passing tests:
 
@@ -112,70 +116,74 @@ Implemented and covered by new, passing tests:
   always records a completion (including on ingestion failure or a late
   issue), and never reports success without a persisted, eligible issue.
   `gpa battery` reads its scored sample through `ledger.canonical` instead of
-  raw `status == "scored"` rows. A new `gpa forecast-attempt` subcommand
-  exposes `start`/`finish`/`report` directly.
+  raw `status == "scored"` rows. `gpa reconcile` needed no code change — it
+  already called `ledger.reconcile`/`ledger.append` directly and those
+  functions carry the new contract. A new `gpa forecast-attempt` subcommand
+  exposes `start`/`finish`/`report` directly, with CLI-level tests covering a
+  successful issue, an insufficient-history abstention, delivery-date
+  inheritance from a pre-started attempt, and a full issue → reconcile →
+  battery pass reading the same canonical selection.
+- **Workflow.** `.github/workflows/forecast.yml` registers a tracked attempt
+  (`gh-<run_id>-<run_attempt>`, origin `schedule` or `workflow_dispatch`)
+  before refreshing inputs, reuses it in the final `gpa issue` step, and a
+  `if: failure()` step finalizes it as failed if an earlier step (ingest,
+  validate, reconcile or battery) never reached issuance. The commit step now
+  runs `if: always()` so that failure evidence is preserved even though the
+  job's own conclusion still reports the failure.
 
-Known gaps — do not report D as done:
+Closed this session (were open gaps in the prior partial commit `f2bb495`):
 
-- `tests/test_forecast_extensions.py::test_issue_ledger_retains_abstentions_and_round_trips`
+- Rewrote `tests/test_forecast_extensions.py::test_issue_ledger_retains_abstentions_and_round_trips`
   and `::test_reconcile_scores_observed_hours_without_changing_issue_identity`
-  fail against the new code: they assert the old, narrower contract (a 2-row
-  result instead of the full 24-row grid; no `abstain_missing_inputs` status on
-  unscored hours). The new behaviour matches the plan above; rewrite these two
-  pre-existing tests to the new contract rather than reverting the fix.
-- `ruff check src tests` reports one open finding: `src/gpa/cli.py:545` should
-  use `contextlib.suppress(FileNotFoundError)` instead of `try`/`except`/`pass`.
-- `mypy` (strict) reports three open findings: `provenance.py:66` and
-  `attempts.py:34` return `Any` from a typed function; `ledger.py:152` has a
-  redundant cast.
-- `gpa reconcile` and `.github/workflows/forecast.yml` were not touched this
-  session. Plan item 6 ("update issue/reconcile/battery CLI consumers and the
-  workflow failure path") is two-thirds done: `issue` and `battery` call the
-  new ledger/attempts code; `reconcile` and the workflow's failure path still
-  use the old interfaces.
+  for the new full-grid-with-abstentions contract, instead of the old 2-row
+  assertion (`small_panel` only has data for hours 3 and 14; the other 22
+  hours must survive as `abstain_missing_inputs`, not be dropped).
+- Fixed the one ruff finding (`cli.py:545`, now `contextlib.suppress`) and the
+  three mypy findings (`provenance.py:66`, `attempts.py:34`: cast instead of
+  returning `Any`; `ledger.py:152`: removed a redundant cast).
+- Ran `ruff format` on all D files, none of which had been formatted before.
 
-Test evidence (Windows, Python 3.13.9, this session):
+Final validation (Windows, Python 3.13.9):
 
 | Check | Result |
 |---|---|
-| Full suite | 307 collected, **305 passed, 2 failed** (both pre-existing, contract-mismatch — listed above) |
-| Ruff lint | 1 open finding, `src/gpa/cli.py:545` |
-| Mypy strict | 3 open findings, `provenance.py:66`, `ledger.py:152`, `attempts.py:34` |
-| Ruff format / full coverage run | Not run to completion this session |
+| Full suite | **311 passed, 0 failed** |
+| Ruff check | Passed |
+| Ruff format --check | Passed |
+| Mypy strict | Passed, 34 source files |
+| Coverage | 87.25% (floor 75%) |
 
-### Session close — 14 September 2026 (second checkpoint, item D)
+### Session close — 14 September 2026 (third checkpoint, D done)
 
-The user asked to stop again after this partial D implementation. This update
-changes documentation only; it does not start the next increment.
+The user asked to commit and continue the roadmap. D is now fully done and
+committed; nothing was pushed to a remote and no public export, ingestion or
+prospective issuance occurred.
 
 To resume safely in a new session:
 
-1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas` and
-   run `git status --short`. Expect four modified files (`src/gpa/battery.py`,
-   `src/gpa/cli.py`, `src/gpa/forecast/ledger.py`, `src/gpa/forecast/models.py`)
-   and untracked new files including this roadmap, `src/gpa/battery_study.py`,
-   `src/gpa/forecast/provenance.py`, `src/gpa/forecast/attempts.py` and four
-   test files. Preserve all of them.
-2. Read "D handoff evidence" above, then finish D in this order: (a) rewrite
-   the two failing tests in `tests/test_forecast_extensions.py` for the new
-   ledger contract; (b) fix the one ruff finding and three mypy findings;
-   (c) wire `gpa reconcile` and the `.github/workflows/forecast.yml` failure
-   path to the attempts/ledger changes already made to `issue`/`battery`;
-   (d) run the full validation command list below and record a clean result
-   here before calling D done.
-3. Keep the existing studies under `.gpa/battery-studies/`; this session did
-   not touch them. Do not clean this directory or overwrite a saved study.
-4. After D is genuinely green, continue with E (input availability/history),
-   then F (frozen release/presentation) and G (remaining sensitivities). Do
-   not treat P0/P1 as complete or start a prospective pilot yet. No commit,
-   push or dashboard publication was performed in this session.
+1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas`
+   and run `git log --oneline -5` / `git status --short`. Expect a clean
+   working tree with `c594b75` (D done), `f2bb495` and `c893fa7` as the three
+   most recent commits on `main`, all unpushed.
+2. Read "D handoff evidence" above for what D actually built, then start
+   **E — input availability/history**: replace the fixed seven-day ingestion
+   window with checkpoint-based catch-up and revision overlap, ingest the
+   full already-published price curve instead of clipping at "now", and
+   persist the isolated forecasting history. E has not been scoped into a
+   step-by-step plan yet — write that plan into this file before editing code,
+   the same way D's plan was recorded in "D execution plan" before D started.
+3. Keep the existing studies under `.gpa/battery-studies/`; nothing this
+   session touched them. Do not clean this directory or overwrite a saved study.
+4. After E, continue with F (frozen release/presentation) and G (remaining
+   sensitivities). Do not treat P0/P1 as complete or start a prospective pilot
+   yet — a real pilot needs E's end-to-end tests passing first.
 
 Suggested resume request:
 
-> Leia `docs/portfolio-roadmap.md` e finalize o item D (testes falhando, lint,
-> mypy, CLI do reconcile, workflow); depois siga para o item E. Preserve os
-> avanços A/B/C e os estudos locais; atualize este mesmo arquivo com os
-> resultados; não publique no GitHub sem eu pedir.
+> Leia `docs/portfolio-roadmap.md`. D está concluído e commitado; registre o
+> plano do item E (disponibilidade/histórico de entradas) antes de alterar
+> código, depois implemente. Atualize este mesmo arquivo com os resultados;
+> não publique no GitHub sem eu pedir.
 
 **First implementation increment:** make the battery accounting trustworthy and
 build the P1 economic-comparison layer on that corrected engine. This increment
@@ -187,7 +195,7 @@ research outputs must be frozen and reviewed before replacing public headlines.
 | A — Dispatch correctness (P0) | `src/gpa/battery.py`, `tests/test_battery.py` | Fractional cycle budget, finite inputs, initial/terminal SOC, unique chronological intervals, 23/25-hour UTC days, duration propagation, rejection of ambiguous DST clock-hour input | Done locally; regression and exhaustive small-schedule tests passed |
 | B — Comparable strategies (P1) | Battery backtest adapter and tests | All five existing forecast models plus no trade and perfect foresight; 1/2/4 MWh; exactly the same complete settled days for every strategy; consistent actuals; no-trade keeps initial SOC | Done locally; common-sample and coverage tests passed |
 | C — Economic evidence (P1) | `src/gpa/battery_study.py`, tests and a local `battery-study` CLI | Daily margin, cost accounting, incremental value versus each fixed naive, downside/concentration, deterministic paired calendar-block bootstrap; costs explicitly labelled assumptions | Done locally; three historical studies saved and zero-cost study replayed |
-| D — Issuance provenance (P0) | `forecast/ledger.py`, `forecast/provenance.py`, `forecast/attempts.py`, `cli.py`, workflow/tests | Target-day feature hash, model parameters/version, input snapshot, late/failure/abstention policy, canonical issuance | Core done locally (2 tests, ruff, mypy still open); `reconcile` CLI and workflow not started |
+| D — Issuance provenance (P0) | `forecast/ledger.py`, `forecast/provenance.py`, `forecast/attempts.py`, `cli.py`, workflow/tests | Target-day feature hash, model parameters/version, input snapshot, late/failure/abstention policy, canonical issuance | **Done and committed** locally (`c893fa7`, `f2bb495`, `c594b75`); not pushed |
 | E — Input availability/history (P0) | Pipeline, sources, ingest/forecast workflows and tests | Full already-published curve, no unavailable targets, checkpoint catch-up and isolated persistent history | Pending after first increment |
 | F — Frozen release and presentation (P0/P1) | Snapshot/export, existing site pages, README/tests | Reproducible corrected release; honest date/coverage/cost labels; separate units; concise commercial summary | Pending after engine and provenance checks |
 | G — Remaining P1 sensitivities | Analysis/configuration/tests | Sourced/calibrated cost assumptions, availability/error stresses, model-selection/evaluation separation and a qualified duration recommendation | Pending after comparison layer |
@@ -227,26 +235,13 @@ Validation commands (PowerShell, repository root):
 npm run build
 ```
 
-**Next action — finish D, then move to issuance provenance's remaining scope:**
-items 1–4 below are implemented and covered by new passing tests (see "D
-handoff evidence" above); items 5 and 6 are the open work.
-
-1. ~~Changing a target-day feature must change the issuance fingerprint...~~
-   Done: `provenance.input_hash`/`provenance.sanitized`.
-2. ~~Late diagnostic runs must be explicitly ineligible...~~ Done:
-   `ledger.timing_reason` plus `forecast/attempts.py`.
-3. ~~Select a canonical eligible pre-gate issue per model/delivery...~~ Done:
-   `ledger.canonical`, snapshot-verified.
-4. ~~Add parameter/code/environment manifests and archived inputs...~~ Done:
-   `provenance.save_snapshot`/`read_snapshot`.
-5. Rewrite the two failing tests in `tests/test_forecast_extensions.py` for the
-   new contract, fix the one ruff finding (`cli.py:545`) and three mypy
-   findings (`provenance.py:66`, `ledger.py:152`, `attempts.py:34`), then wire
-   `gpa reconcile` and `.github/workflows/forecast.yml`'s failure path to the
-   attempts/ledger changes already made to `issue`/`battery`. Run the full
-   validation command list and record a clean pass before calling D done.
-6. After D, implement E's availability-aware price retrieval and checkpoint
-   catch-up. Do not start a real pilot before those end-to-end tests pass.
+**Next action — D is done; implement E's availability-aware price retrieval
+and checkpoint catch-up.** All six items of D's plan are complete and
+committed (see "D handoff evidence" above: `provenance.input_hash`/`sanitized`
+for the fingerprint, `ledger.timing_reason` plus `forecast/attempts.py` for
+late/failure eligibility, `ledger.canonical` for snapshot-verified selection,
+`provenance.save_snapshot`/`read_snapshot` for manifests, and the CLI/workflow
+wiring). Do not start a real pilot before E's end-to-end tests pass.
 
 Then finish F's full-precision frozen research release and public presentation,
 and G's calibrated costs/availability/error stresses. The current C snapshots
