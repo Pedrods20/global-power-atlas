@@ -26,7 +26,7 @@ jobs:
       # The public store and monthly site exports stay untouched. The forecast
       # run receives the committed history as a seed and refreshes a private
       # trailing window before reconciliation and issuance.
-      GPA_DATA_ROOT: ${{ runner.temp }}/gpa-curated
+      GPA_DATA_ROOT: /tmp/gpa-curated
       FORECAST_MODEL: ridge
       FORECAST_LOOKBACK: "7"
       FORECAST_DELIVERY_DATE: ""
