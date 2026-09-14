@@ -11,6 +11,7 @@ The main portfolio commands are:
 ``gpa issue``      issue a feature-only forecast and retain its evidence
 ``gpa reconcile``  attach observed prices to issued forecasts
 ``gpa battery``    evaluate reconciled forecasts through the battery dispatch
+``gpa battery-study`` evaluate a local retrospective prediction snapshot
 
 Exit codes matter because a scheduled workflow reads them: 0 when every target
 succeeded or was cleanly skipped, 1 when any target failed.
@@ -21,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sys
+import uuid
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -518,75 +520,124 @@ def issue(
         str | None,
         typer.Option(help="Delivery date YYYY-MM-DD. Default: tomorrow in market time."),
     ] = None,
-    model: Annotated[str, typer.Option(help="ridge or lightgbm.")] = "ridge",
+    model: Annotated[str, typer.Option(help="ridge, lightgbm or an existing naive comparator.")] = "ridge",
     allow_late: Annotated[
         bool, typer.Option(help="Allow a late issue for diagnostics; labels it in the ledger.")
     ] = False,
     output: Annotated[
         Path | None, typer.Option(help="Issue ledger root. Default: data/forecast_issues.")
     ] = None,
+    attempt_id: Annotated[str | None, typer.Option(help="Reuse a workflow start event; otherwise create a manual attempt.")] = None,
 ) -> None:
     """Issue tomorrow's feature-only forecast and persist its evidence.
 
     Every delivery hour is retained, including explicit abstentions when a
     required feature or enough training history is unavailable.
     """
-    from gpa.forecast import ledger
-    from gpa.forecast.boosting import LightGBM
-    from gpa.forecast.models import Ridge
+    from gpa.forecast import attempts, ledger, provenance
     from gpa.forecast.panel import build_panel
 
     market = get_zone(zone)
+    root = output or ledger.DEFAULT_ROOT
+    identifier = attempt_id or uuid.uuid4().hex
+    existing = None
+    if attempt_id is not None:
+        try:
+            existing = attempts.read(root, identifier)
+        except FileNotFoundError:
+            pass
     if delivery_date is None:
-        local_today = dt.datetime.now(ZoneInfo(market.timezone)).date()
-        target_date = local_today + dt.timedelta(days=1)
+        local_today = ledger.now_utc().astimezone(ZoneInfo(market.timezone)).date()
+        target_date = dt.date.fromisoformat(existing["delivery_date"]) if existing else local_today + dt.timedelta(days=1)
     else:
         try:
             target_date = dt.date.fromisoformat(delivery_date)
         except ValueError as exc:
             raise typer.BadParameter("delivery date must be YYYY-MM-DD") from exc
 
-    prices = store.read("price", market.code)
-    load = store.read("load", market.code) if market.has("load") else None
-    generation = store.read("generation", market.code) if market.has("generation") else None
-    prepared = build_panel(
-        prices,
-        market,
-        load=load,
-        generation=generation,
-        delivery_date=target_date,
-    )
-    forecaster: Ridge | LightGBM
-    if model == "ridge":
-        forecaster = Ridge(alpha=1.0)
-    elif model == "lightgbm":
-        forecaster = LightGBM()
-    else:
-        raise typer.BadParameter("model must be ridge or lightgbm")
-
-    issued_at = dt.datetime.now(dt.UTC)
-    frame = ledger.issue(
-        prepared,
-        forecaster,
-        target_date,
-        issued_at=issued_at,
-        allow_late=allow_late,
-    )
-    issued = frame.filter(pl.col("status") == "issued").height
-    abstained = frame.height - issued
-    if issued == 0:
-        typer.secho(
-            f"No forecasts available for {market.code} {target_date}; "
-            "the issue was not persisted. Check the pre-gate input window.",
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=1)
-    path = ledger.append(frame, root=output or ledger.DEFAULT_ROOT)
+    try:
+        forecaster = provenance.default_model(model)
+        event = attempts.start(root, identifier, zone=market.code, model=model, delivery_date=target_date,
+                               origin=existing["origin"] if existing else "manual")
+        if event["status"] != "started":
+            raise ValueError("attempt already completed; use a new attempt ID")
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    try:
+        sources: dict[str, pl.DataFrame] = {}
+        observations: dict[str, dt.datetime] = {}
+        for dataset in ("price", "load", "generation"):
+            if market.has(dataset):
+                sources[dataset] = store.read(dataset, market.code)
+                observations[dataset] = ledger.now_utc()
+        as_of = ledger.now_utc()
+        prepared = build_panel(sources["price"], market, load=sources.get("load"),
+                               generation=sources.get("generation"), delivery_date=target_date)
+        frame = ledger.record_issue(prepared, forecaster, target_date, root=root,
+                                     allow_late=allow_late, input_as_of=as_of,
+                                     min_train_rows=provenance.MIN_TRAIN_ROWS,
+                                     policy_id=provenance.POLICY_ID,
+                                     source_frames=sources, observed_at=observations)
+    except Exception as exc:
+        status = "late" if isinstance(exc, ledger.LateIssueError) else "failed"
+        attempts.finish(root, identifier, status=status, error_type=type(exc).__name__, if_open=True)
+        typer.secho(f"Forecast attempt {identifier} {status}: {type(exc).__name__}. Evidence retained under {root}.",
+                    fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    available = frame.height - frame["forecast"].null_count()
+    status = ("late" if not frame["eligible"].all() else
+              "abstained" if available == 0 else "partial" if available < frame.height else "issued")
+    attempts.finish(root, identifier, status=status, issue_id=frame["issue_id"][0])
     typer.secho(
-        f"Issued {market.code} {target_date}: {issued} forecasts, "
-        f"{abstained} abstentions -> {path}",
-        fg=typer.colors.GREEN if abstained == 0 else typer.colors.YELLOW,
+        f"{market.code} {target_date}: {status}, {available} forecasts, "
+        f"{frame.height - available} abstentions; immutable evidence -> {root / 'issues' / frame['issue_id'][0]}",
+        fg=typer.colors.GREEN if status == "issued" else typer.colors.YELLOW,
     )
+    if status != "issued":
+        raise typer.Exit(1)
+
+
+@app.command("forecast-attempt")
+def forecast_attempt(
+    action: Annotated[str, typer.Argument(help="start, finish or report.")],
+    attempt_id: Annotated[str | None, typer.Option(help="Stable ID for this attempt.")] = None,
+    zone: Annotated[str, typer.Option(help="Market zone.")] = "DE-LU",
+    model: Annotated[str, typer.Option(help="Declared forecast model.")] = "ridge",
+    delivery_date: Annotated[str | None, typer.Option(help="Delivery YYYY-MM-DD; start defaults to tomorrow.")] = None,
+    origin: Annotated[str, typer.Option(help="manual, schedule or workflow_dispatch.")] = "manual",
+    status: Annotated[str, typer.Option(help="Completion outcome.")] = "failed",
+    if_open: Annotated[bool, typer.Option(help="Do not overwrite an existing completion.")] = False,
+    start_date: Annotated[str | None, typer.Option(help="First expected delivery day in a report.")] = None,
+    end_date: Annotated[str | None, typer.Option(help="Last expected delivery day in a report.")] = None,
+    output: Annotated[Path | None, typer.Option(help="Ledger and attempt root.")] = None,
+) -> None:
+    """Track attempts before ingestion and report an explicit daily denominator."""
+    from gpa.forecast import attempts, ledger
+
+    root = output or ledger.DEFAULT_ROOT
+    market = get_zone(zone)
+    try:
+        if action == "report":
+            if start_date is None or end_date is None:
+                raise ValueError("report requires --start-date and --end-date")
+            report = attempts.report(root, start_date=dt.date.fromisoformat(start_date),
+                                      end_date=dt.date.fromisoformat(end_date), zone=zone, model=model)
+            with pl.Config(tbl_rows=-1, tbl_width_chars=200):
+                typer.echo(str(report))
+            typer.echo(f"Eligible deliveries: {report['eligible'].sum()}/{report.height}; requested window is the denominator.")
+            return
+        if attempt_id is None:
+            raise ValueError("start and finish require --attempt-id")
+        if action == "start":
+            day = dt.date.fromisoformat(delivery_date) if delivery_date else ledger.now_utc().astimezone(ZoneInfo(market.timezone)).date() + dt.timedelta(days=1)
+            event = attempts.start(root, attempt_id, zone=zone, model=model, delivery_date=day, origin=origin)
+        elif action == "finish":
+            event = attempts.finish(root, attempt_id, status=status, if_open=if_open)
+        else:
+            raise ValueError("action must be start, finish or report")
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"Attempt {event['attempt_id']}: {event['status']} ({event['delivery_date']}).")
 
 
 @app.command()
@@ -648,8 +699,8 @@ def battery_value(
         typer.Option(help="Optional directory for dispatch and summary Parquet files."),
     ] = None,
     horizon_steps: Annotated[
-        int, typer.Option(help="Rolling optimisation horizon in market intervals.")
-    ] = 24,
+        int | None, typer.Option(help="Optional guard; must cover the full delivery day.")
+    ] = None,
 ) -> None:
     """Evaluate reconciled forecasts as constrained battery dispatch.
 
@@ -666,7 +717,9 @@ def battery_value(
         typer.secho(f"No issue records for {market.code} under {root}.", fg=typer.colors.YELLOW)
         return
     reconciled = ledger.reconcile(issues, store.read("price", market.code), market)
-    scored = reconciled.filter(pl.col("status") == "scored").select(
+    # Keep the declared clock-hour benchmark here. Passing the first timestamp
+    # of an averaged autumn hour would pretend to recover physical trades.
+    scored = ledger.canonical(reconciled, root=root).filter(pl.col("status") == "scored").select(
         "model",
         pl.col("delivery_date").alias("local_date"),
         "local_hour",
@@ -679,18 +732,86 @@ def battery_value(
 
     result = battery_module.backtest_predictions(
         scored,
-        model_names=("ridge", "lightgbm"),
-        durations_mwh=(1.0, 4.0),
+        model_names=tuple(sorted(scored["model"].unique().to_list())),
+        durations_mwh=(1.0, 2.0, 4.0),
         horizon_steps=horizon_steps,
+        timezone=market.timezone,
     )
     if output is not None:
         destination = Path(output)
         destination.mkdir(parents=True, exist_ok=True)
         result.dispatch.write_parquet(destination / f"{market.code}_dispatch.parquet")
         result.summary.write_parquet(destination / f"{market.code}_summary.parquet")
+        result.coverage.write_parquet(destination / f"{market.code}_coverage.parquet")
         typer.echo(f"Wrote battery evaluation to {destination}.")
     with pl.Config(tbl_rows=-1, tbl_width_chars=180, float_precision=2):
         typer.echo(str(result.summary))
+
+
+@app.command("battery-study")
+def battery_study(
+    predictions: Annotated[
+        Path,
+        typer.Option(exists=True, dir_okay=False, help="DE-LU retrospective predictions Parquet."),
+    ],
+    output: Annotated[
+        Path, typer.Option(help="Local study root; completed runs are never overwritten.")
+    ] = Path(".gpa/battery-studies"),
+    variable_cost: Annotated[
+        float, typer.Option(min=0, help="Assumed EUR per absolute grid MWh; not a market estimate.")
+    ] = 0.0,
+    degradation_cost: Annotated[
+        float, typer.Option(min=0, help="Assumed EUR per absolute grid MWh; not a market estimate.")
+    ] = 0.0,
+    block_days: Annotated[
+        int, typer.Option(min=1, help="Calendar block length for paired bootstrap.")
+    ] = 7,
+    resamples: Annotated[
+        int, typer.Option(min=100, help="Exploratory bootstrap resamples.")
+    ] = 2000,
+    seed: Annotated[int, typer.Option(min=0, help="Deterministic bootstrap seed.")] = 20260914,
+) -> None:
+    """Compare five forecasts and 1/2/4 MWh batteries on shared settled days.
+
+    Reads only the supplied predictions; no ingestion, live issuance, model
+    training or public-site export. Costs must be calibrated before asset use.
+    """
+    from gpa.battery_study import evaluate, save_study
+
+    frame = pl.read_parquet(predictions)
+    try:
+        result = evaluate(
+            frame,
+            spec_kwargs={
+                "variable_cost_eur_mwh": variable_cost,
+                "degradation_cost_eur_mwh": degradation_cost,
+            },
+            block_days=block_days,
+            resamples=resamples,
+            seed=seed,
+        )
+        destination = save_study(result, frame, output)
+    except (ValueError, FileExistsError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Research study saved to {destination}.")
+    typer.echo(
+        "Retrospective common-sample margins; costs are assumptions, not investment returns."
+    )
+    with pl.Config(tbl_rows=-1, tbl_width_chars=180, float_precision=2):
+        typer.echo(str(result.coverage))
+        typer.echo(
+            str(
+                result.risk.select(
+                    "strategy",
+                    "energy_mwh",
+                    "days",
+                    "profit_eur_mw",
+                    "best_naive",
+                    "incremental_vs_best_naive_eur_mw",
+                )
+            )
+        )
 
 
 @app.command()

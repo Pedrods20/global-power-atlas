@@ -104,6 +104,10 @@ class Naive:
     column: str
     description: str
 
+    def predict_day(self, panel: Panel, day: dt.date, *, min_train_rows: int = 0) -> pl.DataFrame:
+        """Issue from an already-lagged predictor, without reading target outcomes."""
+        return self.forecasts(panel, test_start=day, test_end=day, min_train_rows=min_train_rows)
+
     def forecasts(
         self,
         panel: Panel,
