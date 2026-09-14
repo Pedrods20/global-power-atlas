@@ -55,15 +55,22 @@ def test_smard_series_parser_and_combiner_keep_publication_vintage():
 
 
 def test_issue_ledger_retains_abstentions_and_round_trips(tmp_path):
+    """`small_panel` only has data for hours 3 and 14; the other 22 clock
+    hours of the delivery day must survive as explicit abstentions rather
+    than being dropped from the issued grid."""
     prepared = small_panel()
     delivery = dt.date(2025, 2, 10)
     issued_at = dt.datetime(2025, 2, 9, 10, tzinfo=dt.UTC)
     result = ledger.issue(prepared, Ridge(alpha=0.1), delivery, issued_at=issued_at)
-    assert result.height == 2
-    assert set(result["status"].to_list()) == {"issued"}
-    assert result["forecast"].null_count() == 0
+    assert result.height == 24
+    covered = result.filter(pl.col("local_hour").is_in([3, 14])).sort("local_hour")
+    assert covered["status"].to_list() == ["issued", "issued"]
+    abstained = result.filter(~pl.col("local_hour").is_in([3, 14]))
+    assert abstained.height == 22
+    assert set(abstained["status"].to_list()) == {"abstain_missing_inputs"}
+    assert result["forecast"].null_count() == 22
     path = ledger.append(result, root=tmp_path)
-    assert ledger.read(root=tmp_path).height == 2
+    assert ledger.read(root=tmp_path).height == 24
     assert path.exists()
 
 
@@ -88,6 +95,9 @@ def test_panel_builds_a_null_target_grid_for_a_future_delivery_day():
 
 
 def test_reconcile_scores_observed_hours_without_changing_issue_identity():
+    """Only the two hours the model actually predicted can be scored; the
+    22 abstained clock hours have no actual to attach and must stay
+    abstentions rather than being silently marked scored or dropped."""
     prepared = small_panel()
     delivery = dt.date(2025, 2, 10)
     issued_at = dt.datetime(2025, 2, 9, 10, tzinfo=dt.UTC)
@@ -104,8 +114,11 @@ def test_reconcile_scores_observed_hours_without_changing_issue_identity():
 
     reconciled = ledger.reconcile(issued, prices, ZONE)
 
-    assert set(reconciled["status"].to_list()) == {"scored"}
-    assert reconciled["actual"].to_list() == [55.0, 65.0]
+    scored = reconciled.filter(pl.col("local_hour").is_in([3, 14])).sort("local_hour")
+    assert scored["status"].to_list() == ["scored", "scored"]
+    assert scored["actual"].to_list() == [55.0, 65.0]
+    abstained = reconciled.filter(~pl.col("local_hour").is_in([3, 14]))
+    assert set(abstained["status"].to_list()) == {"abstain_missing_inputs"}
     assert reconciled["issued_at"].unique().to_list() == [issued_at]
     assert reconciled["input_sha256"].null_count() == 0
 

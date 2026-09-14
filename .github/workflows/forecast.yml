@@ -41,6 +41,25 @@ jobs:
 
       - run: pip install -e .
 
+      - name: Register this run as a tracked attempt before any refresh
+        # A setup or ingestion failure below must still leave local evidence
+        # that this scheduled slot was attempted, not silently absent.
+        run: |
+          ATTEMPT_ID="gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "ATTEMPT_ID=$ATTEMPT_ID" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ORIGIN=workflow_dispatch
+          else
+            ORIGIN=schedule
+          fi
+          if [ -n "$FORECAST_DELIVERY_DATE" ]; then
+            gpa forecast-attempt start --attempt-id "$ATTEMPT_ID" --zone DE-LU \
+              --model "$FORECAST_MODEL" --origin "$ORIGIN" --delivery-date "$FORECAST_DELIVERY_DATE"
+          else
+            gpa forecast-attempt start --attempt-id "$ATTEMPT_ID" --zone DE-LU \
+              --model "$FORECAST_MODEL" --origin "$ORIGIN"
+          fi
+
       - name: Seed an isolated forecast store
         run: |
           mkdir -p "$GPA_DATA_ROOT"
@@ -59,20 +78,28 @@ jobs:
         run: gpa battery --zone DE-LU --output data/forecast_issues/evaluations
 
       - name: Issue before the market gate
-        run: |
-          if [ -n "$FORECAST_DELIVERY_DATE" ]; then
-            gpa issue --zone DE-LU --model "$FORECAST_MODEL" --delivery-date "$FORECAST_DELIVERY_DATE"
-          else
-            gpa issue --zone DE-LU --model "$FORECAST_MODEL"
-          fi
+        # Reuses the attempt registered above; its delivery date and origin
+        # carry over, so a late or failed issue still finalizes the same
+        # tracked attempt instead of leaving it open.
+        run: gpa issue --zone DE-LU --model "$FORECAST_MODEL" --attempt-id "$ATTEMPT_ID"
+
+      - name: Record a failed attempt if an earlier step never completed it
+        # gpa issue always finalizes its own attempt, so --if-open is a no-op
+        # there; this only closes attempts left open by an earlier failure
+        # (ingest, validate, reconcile or battery).
+        if: failure()
+        run: gpa forecast-attempt finish --attempt-id "$ATTEMPT_ID" --status failed --if-open
 
       - name: Commit the prospective ledger
+        # Runs even after an earlier failure so failed-attempt evidence is
+        # preserved; the job's own conclusion still reports that failure.
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/forecast_issues
           if git diff --cached --quiet; then
-            echo "No new issue records; nothing to commit."
+            echo "No new issue or attempt records; nothing to commit."
             exit 0
           fi
           git commit -m "forecast: issue DE-LU $(date -u +%Y-%m-%d)"

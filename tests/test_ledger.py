@@ -22,14 +22,21 @@ def full_panel():
 
 def changed_target(source, value):
     feature = source.features[0]
-    return replace(source, frame=source.frame.with_columns(
-        pl.when(pl.col("local_date") == DAY).then(value).otherwise(pl.col(feature)).alias(feature)
-    ))
+    return replace(
+        source,
+        frame=source.frame.with_columns(
+            pl.when(pl.col("local_date") == DAY)
+            .then(value)
+            .otherwise(pl.col(feature))
+            .alias(feature)
+        ),
+    )
 
 
 def record(root, *, panel=None, stamp=STAMP, **kwargs):
-    return ledger.record_issue(panel or full_panel(), Ridge(0.1), DAY,
-                               issued_at=stamp, root=root, **kwargs)
+    return ledger.record_issue(
+        panel or full_panel(), Ridge(0.1), DAY, issued_at=stamp, root=root, **kwargs
+    )
 
 
 def test_target_day_features_change_input_identity():
@@ -47,9 +54,15 @@ def test_parameter_changes_cannot_hide_behind_the_same_model_label():
 
 def test_future_outcomes_are_removed_before_prediction_and_fingerprinting():
     source = small_panel()
-    changed = replace(source, frame=source.frame.with_columns(
-        pl.when(pl.col("local_date") >= DAY).then(999999.0).otherwise(pl.col("price")).alias("price")
-    ))
+    changed = replace(
+        source,
+        frame=source.frame.with_columns(
+            pl.when(pl.col("local_date") >= DAY)
+            .then(999999.0)
+            .otherwise(pl.col("price"))
+            .alias("price")
+        ),
+    )
     one = ledger.issue(source, Ridge(0.1), DAY, issued_at=STAMP)
     two = ledger.issue(changed, Ridge(0.1), DAY, issued_at=STAMP)
     assert_frame_equal(one, two)
@@ -65,8 +78,9 @@ def test_all_expected_hours_and_abstentions_are_retained(tmp_path):
 
 
 def test_late_diagnostics_never_become_scored_prospective_rows():
-    late = ledger.issue(full_panel(), Ridge(0.1), DAY,
-                        issued_at=STAMP.replace(hour=12), allow_late=True)
+    late = ledger.issue(
+        full_panel(), Ridge(0.1), DAY, issued_at=STAMP.replace(hour=12), allow_late=True
+    )
     prices = price_frame(dt.datetime(2025, 2, 9, 23, tzinfo=dt.UTC), 24)
     result = ledger.reconcile(late, prices, ZONE)
     assert not result["eligible"].any()
@@ -95,6 +109,7 @@ def test_late_persistence_is_ineligible_even_if_computation_finished_before_gate
 def test_nonfinite_predictions_fail_instead_of_becoming_eligible(monkeypatch):
     def bad(self, panel, day, *, min_train_rows):
         return pl.DataFrame({"local_date": [DAY], "local_hour": [0], "forecast": [float("nan")]})
+
     monkeypatch.setattr(Ridge, "predict_day", bad)
     with pytest.raises(ValueError, match="finite"):
         ledger.issue(full_panel(), Ridge(0.1), DAY, issued_at=STAMP)
@@ -102,6 +117,7 @@ def test_nonfinite_predictions_fail_instead_of_becoming_eligible(monkeypatch):
 
 def test_snapshot_round_trip_and_replay(tmp_path):
     from gpa.forecast import provenance
+
     frame = record(tmp_path)
     meta, prepared, model, original = provenance.read_snapshot(tmp_path, frame["issue_id"][0])
     assert meta["model"]["parameters"]["alpha"] == 0.1
@@ -110,12 +126,15 @@ def test_snapshot_round_trip_and_replay(tmp_path):
     assert prepared.frame.filter(pl.col("local_date") > DAY).is_empty()
     assert_frame_equal(original, frame)
     replay = ledger.issue(prepared, model, DAY, issued_at=STAMP)
-    assert_frame_equal(replay.select("local_hour", "forecast"), frame.select("local_hour", "forecast"))
+    assert_frame_equal(
+        replay.select("local_hour", "forecast"), frame.select("local_hour", "forecast")
+    )
     assert ledger.canonical(frame, root=tmp_path).height == 24
 
 
 def test_snapshot_checksums_reject_modified_input(tmp_path):
     from gpa.forecast import provenance
+
     frame = record(tmp_path)
     path = tmp_path / "issues" / frame["issue_id"][0] / "input_panel.parquet"
     path.write_bytes(b"changed")
@@ -127,7 +146,9 @@ def test_snapshot_checksums_reject_modified_input(tmp_path):
 
 def test_canonical_selects_one_whole_earliest_complete_issue(tmp_path):
     first = record(tmp_path)
-    later = record(tmp_path, panel=changed_target(full_panel(), 400.0), stamp=STAMP.replace(hour=10))
+    later = record(
+        tmp_path, panel=changed_target(full_panel(), 400.0), stamp=STAMP.replace(hour=10)
+    )
     combined = pl.concat([later, first])
     chosen = ledger.canonical(combined, root=tmp_path)
     assert chosen["issue_id"].unique().to_list() == first["issue_id"].unique().to_list()
@@ -137,12 +158,24 @@ def test_canonical_selects_one_whole_earliest_complete_issue(tmp_path):
 def test_canonical_does_not_stitch_partial_retries(tmp_path):
     source = full_panel()
     feature = source.features[0]
-    first_panel = replace(source, frame=source.frame.with_columns(
-        pl.when((pl.col("local_date") == DAY) & (pl.col("local_hour") < 12))
-        .then(None).otherwise(pl.col(feature)).alias(feature)))
-    second_panel = replace(source, frame=source.frame.with_columns(
-        pl.when((pl.col("local_date") == DAY) & (pl.col("local_hour") >= 12))
-        .then(None).otherwise(pl.col(feature)).alias(feature)))
+    first_panel = replace(
+        source,
+        frame=source.frame.with_columns(
+            pl.when((pl.col("local_date") == DAY) & (pl.col("local_hour") < 12))
+            .then(None)
+            .otherwise(pl.col(feature))
+            .alias(feature)
+        ),
+    )
+    second_panel = replace(
+        source,
+        frame=source.frame.with_columns(
+            pl.when((pl.col("local_date") == DAY) & (pl.col("local_hour") >= 12))
+            .then(None)
+            .otherwise(pl.col(feature))
+            .alias(feature)
+        ),
+    )
     first = record(tmp_path, panel=first_panel)
     later = record(tmp_path, panel=second_panel, stamp=STAMP.replace(hour=10))
     assert ledger.canonical(pl.concat([first, later]), root=tmp_path).is_empty()
@@ -168,8 +201,19 @@ def test_duplicate_issue_rows_raise(tmp_path):
 
 def test_legacy_ledger_is_readable_but_not_prospectively_certified(tmp_path):
     frame = ledger.issue(full_panel(), Ridge(0.1), DAY, issued_at=STAMP)
-    legacy = frame.select("zone", "model", "model_version", "issued_at", "delivery_date",
-                         "local_hour", "delivery_start_utc", "forecast", "actual", "status", "input_sha256")
+    legacy = frame.select(
+        "zone",
+        "model",
+        "model_version",
+        "issued_at",
+        "delivery_date",
+        "local_hour",
+        "delivery_start_utc",
+        "forecast",
+        "actual",
+        "status",
+        "input_sha256",
+    )
     path = tmp_path / "zone=DE-LU" / "2025-02.parquet"
     path.parent.mkdir()
     legacy.write_parquet(path)

@@ -59,6 +59,32 @@ def populated(temporary_store: Path) -> Path:
     return temporary_store
 
 
+def price_series(start: dt.datetime, days: int) -> pl.DataFrame:
+    """`days` of clean, continuous clock-hour DE-LU prices from `start`."""
+    stamps = pl.datetime_range(
+        start, start + dt.timedelta(days=days), "1h", time_zone="UTC", eager=True, closed="left"
+    )
+    hours = stamps.len()
+    return pl.DataFrame(
+        {
+            "zone": ["DE-LU"] * hours,
+            "ts_utc": stamps,
+            "resolution_min": [60] * hours,
+            "price": [30.0 + (i % 24) + 0.1 * (i // 24) for i in range(hours)],
+            "currency": ["EUR"] * hours,
+            "source": ["test"] * hours,
+        },
+        schema={
+            "zone": pl.String,
+            "ts_utc": pl.Datetime("us", "UTC"),
+            "resolution_min": pl.Int16,
+            "price": pl.Float64,
+            "currency": pl.String,
+            "source": pl.String,
+        },
+    )
+
+
 # --- Commands that only read the registry -----------------------------------
 
 
@@ -213,6 +239,218 @@ def test_reconcile_empty_ledger_is_a_noop(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "no issue records" in result.stdout.lower()
+
+
+# --- issue, forecast-attempt and battery (issuance provenance) --------------
+
+
+def test_forecast_attempt_start_finish_and_report_round_trip(tmp_path: Path) -> None:
+    start = runner.invoke(
+        app,
+        [
+            "forecast-attempt",
+            "start",
+            "--attempt-id",
+            "att-1",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--origin",
+            "schedule",
+            "--delivery-date",
+            "2026-07-01",
+            "--output",
+            str(tmp_path),
+        ],
+    )
+    assert start.exit_code == 0, start.stdout
+    assert "started" in start.stdout.lower()
+
+    finish = runner.invoke(
+        app,
+        [
+            "forecast-attempt",
+            "finish",
+            "--attempt-id",
+            "att-1",
+            "--status",
+            "failed",
+            "--output",
+            str(tmp_path),
+        ],
+    )
+    assert finish.exit_code == 0, finish.stdout
+    assert "failed" in finish.stdout.lower()
+
+    report = runner.invoke(
+        app,
+        [
+            "forecast-attempt",
+            "report",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--start-date",
+            "2026-07-01",
+            "--end-date",
+            "2026-07-01",
+            "--output",
+            str(tmp_path),
+        ],
+    )
+    assert report.exit_code == 0, report.stdout
+    assert "failed" in report.stdout.lower()
+    assert "eligible deliveries: 0/1" in report.stdout.lower()
+
+
+def test_issue_registers_and_finalizes_an_abstained_attempt_on_insufficient_history(
+    populated: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`populated` has only one day of prices, so every clock hour of the next
+    day must abstain rather than fabricate a forecast, and the attempt started
+    for the run must be finalized as abstained rather than left open. The
+    clock is pinned pre-gate on the issue day so the run does not instead fail
+    as late/outside its issue window for reasons unrelated to this test."""
+    monkeypatch.setattr(
+        "gpa.forecast.ledger.now_utc", lambda: dt.datetime(2026, 6, 1, 8, tzinfo=dt.UTC)
+    )
+    ledger_root = tmp_path / "issues"
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--delivery-date",
+            "2026-06-02",
+            "--attempt-id",
+            "att-abstain",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "abstained" in result.stdout.lower()
+
+    report = runner.invoke(
+        app,
+        [
+            "forecast-attempt",
+            "report",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--start-date",
+            "2026-06-02",
+            "--end-date",
+            "2026-06-02",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+    assert report.exit_code == 0, report.stdout
+    assert "abstained" in report.stdout.lower()
+    assert "eligible deliveries: 0/1" in report.stdout.lower()
+
+
+def test_issue_inherits_delivery_date_from_a_pre_started_attempt(
+    populated: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "gpa.forecast.ledger.now_utc", lambda: dt.datetime(2026, 6, 1, 8, tzinfo=dt.UTC)
+    )
+    ledger_root = tmp_path / "issues"
+    start = runner.invoke(
+        app,
+        [
+            "forecast-attempt",
+            "start",
+            "--attempt-id",
+            "att-reuse",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--origin",
+            "workflow_dispatch",
+            "--delivery-date",
+            "2026-06-02",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+    assert start.exit_code == 0, start.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--attempt-id",
+            "att-reuse",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "2026-06-02" in result.stdout
+    assert "abstained" in result.stdout.lower()
+
+
+def test_issue_reconcile_and_battery_agree_on_the_canonical_forecast(
+    temporary_store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end CLI happy path: enough clean history that Ridge does not
+    abstain, a full day settled, and battery reading it back through the same
+    canonical selection reconcile and issue rely on."""
+    monkeypatch.setattr("gpa.forecast.provenance.MIN_TRAIN_ROWS", 5)
+    monkeypatch.setattr(
+        "gpa.forecast.ledger.now_utc", lambda: dt.datetime(2026, 6, 30, 8, tzinfo=dt.UTC)
+    )
+    delivery = dt.date(2026, 7, 1)
+    history_start = dt.datetime.combine(delivery - dt.timedelta(days=35), dt.time(), dt.UTC)
+    store.write(price_series(history_start, days=36), "price")
+    ledger_root = tmp_path / "issues"
+
+    issued = runner.invoke(
+        app,
+        [
+            "issue",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--delivery-date",
+            str(delivery),
+            "--attempt-id",
+            "att-ok",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+    assert issued.exit_code == 0, issued.stdout
+    assert "issued" in issued.stdout.lower()
+
+    reconciled = runner.invoke(app, ["reconcile", "--zone", "DE-LU", "--output", str(ledger_root)])
+    assert reconciled.exit_code == 0, reconciled.stdout
+    assert "scored=24" in reconciled.stdout.lower()
+
+    battery_result = runner.invoke(
+        app, ["battery", "--zone", "DE-LU", "--ledger-root", str(ledger_root)]
+    )
+    assert battery_result.exit_code == 0, battery_result.stdout
+    assert "ridge" in battery_result.stdout.lower()
 
 
 # --- ingest and backfill ----------------------------------------------------
