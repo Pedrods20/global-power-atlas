@@ -58,10 +58,93 @@ documented as the battery study's reproducible input while actually holding
 only the 12-week browser preview. All fixed, tested, verified in a real
 browser again, and a live spot-check across five years confirmed the wind bug
 never actually corrupted the already-published fundamentals-ablation numbers.
-**Next:** no further task has been requested; the open items are the
-capacity/renewables portfolio direction's own next natural step (P4,
-packaging the evidence) or the still-undecided fundamentals-adoption
-question from part B above -- present both as an open choice, do not assume.
+**Next:** user chose P4 (package the evidence for recruiting) over the
+fundamentals-adoption decision. Plan recorded immediately below, before any
+edit.
+
+### P4 — package the evidence for recruiting — recorded before implementation
+
+A gap review against the roadmap's own P4 acceptance criterion ("a reader can
+identify the market, candidate contribution, commercial finding and principal
+caveat in under a minute, then locate the reproduction path") against the
+current `site/index.md`, `site/forecast.md`, `site/battery.md`,
+`site/methodology.md` and `README.md`, before writing anything.
+
+**What already satisfies P4, left alone:** the home page already has the
+question, three qualified findings, limitations and a personal-contribution
+line with a verified GitHub link (confirmed with the user earlier: GitHub
+only). The battery page already has incremental margin, costs/downside,
+duration trade-offs and the P3 structural/durability narrative -- P4's
+battery bullet is essentially done already.
+
+**Real gaps found, each traced to the file and line, not asserted from
+memory:**
+
+1. **Forecast page has zero fundamentals-ablation content.** P4's own text
+   explicitly asks for "baseline skill, fundamentals ablation, evaluation
+   protocol." `site/forecast.md` currently only compares the five published
+   models; the ablation (Ridge 22.07 -> ~19.17, LightGBM 25.56 -> ~20.55
+   EUR/MWh) exists only as roadmap prose, never as a site table. This is the
+   highest-risk item in this plan -- see step 3.
+2. **No disclosure structure.** P4 says "put secondary diagnostics in a
+   disclosure." `site/forecast.md` is 221 lines of uniformly-weighted
+   sections (interval calibration, hour/regime breakdowns, the week
+   inspector) with nothing collapsed; a time-boxed reader has no fast path
+   through it today.
+3. **`site/methodology.md` is stale, not just incomplete.** Line 134-137
+   still reads "Operator forecast vintages are not yet stored for the
+   retrospective history" -- false since the fundamentals backfill earlier
+   this session; the page also never mentions the P3 capacity/cannibalisation
+   data sources (Energy-Charts `/installed_power`, BNEF, BNetzA) or their
+   small-sample-correlation caveat at all.
+4. **No commercial comparison on the home page.** P4's home bullet asks for
+   "one commercial comparison"; none exists today.
+5. **README has no personal-contribution framing.** The homepage has it;
+   README (the GitHub landing surface, read by anyone who never clicks
+   through to the live site) does not.
+6. **The screenshot predates all of P3.** `docs/screenshots/dashboard-1440.png`
+   was captured before the battery page's new section existed.
+7. **GitHub "About" and topics are outside this session's reach.** No `gh`
+   CLI or API access is available in this environment (confirmed: `gh` is
+   not installed, checked both Bash and PowerShell). These are live
+   repository settings, not files to edit and commit, and changing them is a
+   public-facing action this session cannot take and should not attempt via
+   any other channel without the user's explicit action. **This step
+   produces a recommended description and topic list as a deliverable for
+   the user to apply, not a commit.**
+
+**Sequencing and one real risk, resolved before coding, not during it:**
+
+Items 2, 3, 4, 5 and 6 are straightforward content/structure edits, no new
+computation, done first. Item 1 is not: `gpa backtest --include-fundamentals
+--save-snapshot` calls `snapshot.save()`, which **unconditionally overwrites
+`data/experiments/current.json`** (confirmed by reading
+`src/gpa/forecast/snapshot.py:41` directly, not assumed) -- there is no
+"save but do not adopt" mode. Running that command naively would silently
+repoint the published release at the fundamentals-ablation run, exactly the
+mistake the roadmap has repeatedly flagged as "an explicitly separate, undone
+decision." This plan does **not** touch `snapshot.save()`/`current.json` at
+all. Instead, mirroring the P3 precedent (`gpa capacity` ->
+`data/reference/capacity/`, never touching the interval store or the
+frozen-release contract): a small, separate, explicitly-named artifact under
+`data/reference/fundamentals_ablation/` holding just the `scores` comparison
+(with vs. without fundamentals, both scoped to the identical frozen test
+window), produced by a dedicated command run once, not by routine `gpa
+export` (a full walk-forward re-run on every export would make it minutes
+slower for a diagnostic nobody asked to re-verify daily). `gpa export` reads
+that reference file if present and ships it as a new, clearly-separate site
+table; the page states plainly that this is a diagnostic comparison, not the
+published model. Live output re-verified against the roadmap's already-cited
+figures before writing a sentence about it -- if the wind-onshore/offshore
+fix or the metadata fix from the last review pass changed the numbers even
+slightly, the site must show the real re-run number, not the old prose.
+
+**Acceptance:** every number added is either read live from a committed
+table (the site's own existing pattern) or a citation already verified
+against its primary source (matching the P3 citation discipline); nothing
+in `data/experiments/current.json` or the published frozen release changes;
+`gpa export --check`, full `pytest`/`ruff`/`mypy`, and a real-browser
+`npm run build` + `npm run test:browser` pass before any commit.
 
 ### DE-LU capacity/renewables/storage scenario study (P3) — recorded before implementation, rethought before coding
 
