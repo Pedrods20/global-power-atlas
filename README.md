@@ -36,14 +36,14 @@ Operator data → validated Parquet → walk-forward forecast → battery dispat
 The current release is a frozen, content-addressed DE-LU backtest
 (`data/experiments/`, committed alongside the site data it produced), not a
 live recompute that would silently drift as the historical store grows.
-Ridge's day-ahead price MAE is EUR 21.04/MWh over 8,971 scored clock-hour
-cells, a 27.0% reduction against the best naive baseline (EUR 28.80/MWh,
-previous day). On the resulting 368-day common sample, a 1 MW / 4 MWh battery
-captures 94.5% of the constrained perfect-foresight value with Ridge (94.2%
-with LightGBM). Ridge adds **EUR 5,578/MW (4.3%)** over similar-day dispatch,
+Ridge's day-ahead price MAE is EUR 22.07/MWh over 58,645 scored clock-hour
+cells, a 24.3% reduction against the best naive baseline (EUR 29.14/MWh,
+previous day). On the resulting 2,404-day common sample, a 1 MW / 4 MWh battery
+captures 90.1% of the constrained perfect-foresight value with Ridge (81.8%
+with LightGBM). Ridge adds **EUR 29,014/MW (4.8%)** over similar-day dispatch,
 the strongest of all three fixed naive comparators in this observed sample.
-The exploratory paired 95% interval is EUR 3,810-7,571/MW; removing the five
-largest positive incremental days still leaves EUR 4,114/MW. These are
+The exploratory paired 95% interval is EUR 22,515-35,347/MW; removing the five
+largest positive incremental days still leaves EUR 26,093/MW. These are
 sample-period figures, not annualized returns.
 
 These are retrospective development results from a reproducible release, not
@@ -51,8 +51,8 @@ prospective trading returns. The published base case has zero asset-specific
 operating and degradation cost; both costs are explicit optimizer inputs, and
 the site reports both illustrative non-zero cost cases and fixed efficiency,
 signal-attenuation and calendar-downtime stresses. The combined case leaves
-EUR 5,498/MW incremental margin, not a forecast of future profit. All five
-models are compared at 1/2/4h; LightGBM underperforms the best naive by EUR 60/MW
+EUR 18,623/MW incremental margin, not a forecast of future profit. All five
+models are compared at 1/2/4h; LightGBM underperforms the best naive by EUR 14,573/MW
 at 1h in the zero-cost case. Higher model complexity is not automatically more
 valuable, and larger absolute battery margin does not establish the best
 investment duration without CAPEX and fixed/lifetime costs.

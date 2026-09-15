@@ -1,0 +1,173 @@
+{
+  "zone": "DE-LU",
+  "zone_name": "Germany-Luxembourg",
+  "currency": "EUR",
+  "timezone": "Europe/Berlin",
+  "target": "Day-ahead price for one market-local hour, as the duration-weighted mean of the intervals the auction published for that hour.",
+  "gate": "12:00 market time on the day before delivery, when the day-ahead auction closes for the following delivery day.",
+  "train_start": "2019-01-08",
+  "validation_start": "2019-10-05",
+  "test_start": "2020-01-03",
+  "test_end": "2026-09-12",
+  "test_days": 2445,
+  "scored_hours": 58645,
+  "alpha": 0.1,
+  "reference": "naive_similar_day",
+  "features": [
+    "price_d1",
+    "price_d2",
+    "price_d3",
+    "price_d7",
+    "price_d1_mean",
+    "price_d1_min",
+    "price_d1_max",
+    "price_d1_end",
+    "price_d7_mean",
+    "residual_d2",
+    "residual_d2_mean",
+    "dow_2",
+    "dow_3",
+    "dow_4",
+    "dow_5",
+    "dow_6",
+    "dow_7",
+    "year_sin",
+    "year_cos"
+  ],
+  "models": [
+    "naive_previous_day",
+    "naive_previous_week",
+    "naive_similar_day",
+    "ridge",
+    "lightgbm"
+  ],
+  "best_model": "ridge",
+  "baselines": [
+    "naive_previous_day",
+    "naive_previous_week",
+    "naive_similar_day"
+  ],
+  "best_mae": 22.06684943929983,
+  "best_skill_pct": 27.561319958585873,
+  "best_skill_vs_best_baseline_pct": 24.27079240199945,
+  "quantile_levels": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "conformal_window_days": 56,
+  "evaluation": "retrospective development benchmark; not an untouched holdout",
+  "data_vintages": "latest revised observations; publication-time vintages unavailable",
+  "benchmark_end": "2026-09-12",
+  "input_sha256": "a890dacd4555e2ffcf597f051ec88842c7d0a10692ac34200c5bd04a267cdfc1",
+  "eligible_hours": 58673,
+  "min_train_days": 270,
+  "validation_days": 90,
+  "window": null,
+  "lightgbm_parameters": {
+    "num_leaves": 31,
+    "learning_rate": 0.03,
+    "min_data_in_leaf": 48,
+    "lambda_l2": 2.0,
+    "refit_every_days": 1,
+    "num_boost_round": 100
+  },
+  "lightgbm_search": [
+    {
+      "num_leaves": 31,
+      "learning_rate": 0.03,
+      "min_data_in_leaf": 48,
+      "lambda_l2": 2.0,
+      "n": 2160,
+      "mae": 6.392159246073443
+    },
+    {
+      "num_leaves": 15,
+      "learning_rate": 0.05,
+      "min_data_in_leaf": 48,
+      "lambda_l2": 1.0,
+      "n": 2160,
+      "mae": 6.453620332639014
+    },
+    {
+      "num_leaves": 63,
+      "learning_rate": 0.02,
+      "min_data_in_leaf": 64,
+      "lambda_l2": 4.0,
+      "n": 2160,
+      "mae": 6.476946864476206
+    }
+  ],
+  "lightgbm_refit_days": 1,
+  "lightgbm_features": [
+    "price_d1",
+    "price_d2",
+    "price_d3",
+    "price_d7",
+    "price_d1_mean",
+    "price_d1_min",
+    "price_d1_max",
+    "price_d1_end",
+    "price_d7_mean",
+    "residual_d2",
+    "residual_d2_mean",
+    "dow_2",
+    "dow_3",
+    "dow_4",
+    "dow_5",
+    "dow_6",
+    "dow_7",
+    "year_sin",
+    "year_cos",
+    "local_hour"
+  ],
+  "target_convention": "complete UTC hours; repeated autumn clock hour averaged; each clock-hour cell scored equally",
+  "feature_mode": "lagged actual load/generation",
+  "source_sha256": "2e0dc4e8b3fe474fde7e7478c1d5c73a0b0fb79ad5930bc4ddf8893d7cf0c44e",
+  "alpha_search": [
+    {
+      "alpha": 0.01,
+      "n": 2155,
+      "mae": 6.553233931727438
+    },
+    {
+      "alpha": 0.03,
+      "n": 2155,
+      "mae": 6.459704088300598
+    },
+    {
+      "alpha": 0.1,
+      "n": 2155,
+      "mae": 6.340952248404462
+    },
+    {
+      "alpha": 0.3,
+      "n": 2155,
+      "mae": 6.341884282694603
+    },
+    {
+      "alpha": 1.0,
+      "n": 2155,
+      "mae": 6.64720988192793
+    },
+    {
+      "alpha": 3.0,
+      "n": 2155,
+      "mae": 7.241096221774435
+    },
+    {
+      "alpha": 10.0,
+      "n": 2155,
+      "mae": 8.065372123779971
+    }
+  ],
+  "experiment_id": "b0e69bf47f6e230be9b5",
+  "checksums": {
+    "predictions.parquet": "2d01abe4407a6752d7086e2974ed10e1cb4d694dd94cabe471d931dc98aa338c",
+    "scores.parquet": "5d1b2d7a6edc44c5c8ab42cc9d647e0bb5ee9786519174255377a99545240f2a",
+    "daily.parquet": "dd7640eff1231ed86957a0f49da0fc8ff805ba0865353aa9cb79285f3a97b372",
+    "coefficients.parquet": "406a6c19d98a19c537ba67b93e2b5c1a5d21b99764e96a6028f35034693680fc",
+    "alpha_search.parquet": "dc15d2820ce9a54837a6e53d89cc05ac19aee29ae21814f2628c556b3a336916",
+    "input_panel.parquet": "577e91725f89e03c066ef956dac8c3cb794e97e8cdd5b58e0e9e04eac2b8a0dd"
+  }
+}

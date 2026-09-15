@@ -16,6 +16,7 @@ from gpa.export import (
     _battery_tables,
     _daily_load,
     _drop_incomplete_trailing_day,
+    _forecast_page_predictions,
     _json_values_close,
     _overview,
     export_all,
@@ -185,6 +186,15 @@ def test_battery_page_gets_monthly_margins_and_one_dispatch_day_not_every_interv
         expected.dispatch.filter(pl.col("local_date") == second),
         check_row_order=False,
     )
+
+
+def test_forecast_page_predictions_are_bounded_to_representative_weeks():
+    frame = predictions(days=tuple(DAY + dt.timedelta(days=7 * i) for i in range(20)))
+    bounded = _forecast_page_predictions(frame)
+
+    assert bounded["local_date"].dt.truncate("1w").n_unique() == 12
+    assert set(bounded["model"].unique()) == set(frame["model"].unique())
+    assert bounded.height < frame.height
 
 
 def test_battery_costs_table_covers_the_illustrative_scenarios():

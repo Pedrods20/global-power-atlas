@@ -50,6 +50,7 @@ richer research tables, all from the one frozen forecast snapshot."""
 
 _BATTERY_MODEL_NAMES: tuple[str, ...] = DEFAULT_MODELS
 _BATTERY_DURATIONS_MWH: tuple[float, ...] = (1.0, 2.0, 4.0)
+_FORECAST_PAGE_WEEKS = 12
 
 log = logging.getLogger(__name__)
 
@@ -104,13 +105,16 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         )
     metadata, frames = saved
     runs = {"runs": [metadata]}
+    full_predictions = pl.DataFrame()
     for suffix in ("scores", "daily", "predictions", "coefficients"):
         result = frames[suffix]
         if suffix == "predictions":
             result = result.drop("ts_utc").with_columns(pl.col(pl.Float64).round(2))
+            full_predictions = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
+            result = _forecast_page_predictions(full_predictions)
         tables[f"forecast_{suffix}"] = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
 
-    tables.update(_battery_tables(tables.get("forecast_predictions", pl.DataFrame())))
+    tables.update(_battery_tables(full_predictions))
 
     written: dict[str, int] = {}
     for name, frame in tables.items():
@@ -363,6 +367,33 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
         "battery_costs": costs.with_columns(tag),
         "battery_sensitivities": sensitivities.with_columns(tag),
     }
+
+
+def _forecast_page_predictions(predictions: pl.DataFrame) -> pl.DataFrame:
+    """Keep a small, representative week sample for the browser page.
+
+    The full prediction table remains the input to the battery study above;
+    this bounded table only serves the interactive week inspector. Selecting
+    evenly spaced Monday weeks preserves coverage across the benchmark while
+    avoiding a multi-megabyte browser download on a multi-year release.
+    """
+    if predictions.is_empty():
+        return predictions
+
+    weeks = (
+        predictions.select(pl.col("local_date").dt.truncate("1w").alias("week"))
+        .unique()
+        .sort("week")
+    )
+    if weeks.height <= _FORECAST_PAGE_WEEKS:
+        return predictions
+
+    indices = {
+        round(index * (weeks.height - 1) / (_FORECAST_PAGE_WEEKS - 1))
+        for index in range(_FORECAST_PAGE_WEEKS)
+    }
+    selected = weeks.gather(sorted(indices)).get_column("week").to_list()
+    return predictions.filter(pl.col("local_date").dt.truncate("1w").is_in(selected))
 
 
 def _freshness() -> pl.DataFrame:

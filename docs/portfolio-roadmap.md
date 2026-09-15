@@ -19,13 +19,11 @@ its cumulative battery chart was blank despite smoke tests; all three are
 fixed and verified below. The battery engine, forecast snapshot, ledger and
 ingestion core were not reopened. The English executive case (site/index.md)
 is also implemented and verified below. No push, public deploy, real
-issuance or live pilot is authorized. **Partly done: DE-LU history now starts
-2019-01-01 in the committed store (`544d961`), but the forecast/battery
-release has not yet been re-frozen on it** — the site's forecast and battery
-pages, the homepage findings and README still describe the one-year release
-`5e3c9f1a256ec73c62e2` (test 2025-09-04 to 2026-09-12), while the homepage's
-historical charts already show 2019 onward. Resume at step 1 of "Session close
-— seventh checkpoint (history extended, release not yet re-frozen)" below.
+issuance or live pilot is authorized. **The DE-LU history extension is now
+re-frozen and reconciled** in release `b0e69bf47f6e230be9b5`; the prior
+`5e3c9f1a256ec73c62e2` release remains for provenance. The current headline
+pages and README now use the 2019-onward benchmark. The old session-close
+instructions below are retained as historical handoff evidence.
 
 ### DE-LU history from 2019-01-01 and a re-frozen release — recorded before implementation
 
@@ -150,14 +148,11 @@ format clean; mypy strict clean (35 files); `npm run build` (4 pages, 6 links);
 including the battery-page assertions (7-line cumulative chart, every evidence
 table, duration selector).
 
-**Deliberately not changed yet, and why:** `README.md`, the homepage findings
-and the battery page prose still quote the one-year release. That is still
-true of what the site computes; rewriting it before the re-freeze would put
-numbers in prose that nothing produces. The one visible mismatch is intentional
-and temporary: the homepage's historical charts now start in 2019, while the
-evaluated release starts in September 2025.
+**Historical handoff note:** At that checkpoint, `README.md`, the homepage
+findings and the battery page prose still quoted the one-year release. The
+re-freeze and reconciliation below supersede that temporary mismatch.
 
-### Session close — 15 September 2026 (seventh checkpoint, history extended, release not yet re-frozen)
+### Session close — 15 September 2026 (seventh checkpoint, superseded)
 
 To resume safely in a new session:
 
@@ -189,11 +184,55 @@ To resume safely in a new session:
    isolated store from `data/curated`, so its first `gpa issue` will train on
    2019 onward and write provenance blobs for those months once.
 
-Suggested resume request:
+Suggested resume request (superseded):
 
 > Leia `docs/portfolio-roadmap.md`. O histórico DE-LU desde 2019-01-01 está
 > commitado, mas o release ainda não foi re-congelado. Continue do passo 2 do
 > "Session close — seventh checkpoint". Não publique no GitHub sem eu pedir.
+
+### DE-LU release re-freeze and reconciliation — completed
+
+The seventh checkpoint is complete. The unchanged protocol was rerun with
+`gpa backtest --zone DE-LU --scope all --save-snapshot`, producing snapshot
+`b0e69bf47f6e230be9b5` and retaining `5e3c9f1a256ec73c62e2` as the prior
+release. Ridge selected `alpha 0.1`, matching the prospective issuance policy.
+The benchmark covers 2,445 test days from 2020-01-03 to 2026-09-12, with
+58,645 scored clock-hour cells. `gpa export` and `gpa export --check` then
+recomputed the site and battery tables from that snapshot.
+
+The regenerated headline figures are:
+
+- Ridge MAE EUR 22.07/MWh versus EUR 29.14/MWh for the previous-day baseline,
+  a 24.3% reduction.
+- On 2,404 common battery days, Ridge 4h captures 90.1% of constrained
+  perfect foresight and adds EUR 29,014/MW over retrospective best-naive
+  similar-day dispatch; the exploratory paired interval is EUR
+  22,515–35,347/MW. Removing the five largest positive incremental days leaves
+  EUR 26,093/MW.
+- Across the seven Ridge 4h stresses, incremental margin ranges from EUR
+  18,623 to EUR 33,703/MW. The combined 2/3 cost + 85% efficiency + 50%
+  signal + downtime case leaves EUR 18,623/MW. At 1h, LightGBM trails its
+  best naive by EUR 14,573/MW in the zero-cost case.
+
+The full forecast table reached 3.70 MB and the unbounded Forecast page reached
+3.840 MB, so the browser export now retains the battery study's complete
+in-memory prediction input but publishes twelve evenly spaced benchmark weeks
+for the interactive week inspector. The final site export contains 19 files
+and 520 KB; the Forecast page has 895 KB of shared files plus 268 KB of route
+data, while the Battery page has 895 KB plus 112 KB of route data. Direct
+Forecast navigation measured about 1.69 s at 1440 px and 1.59 s at 390 px.
+This bound is a presentation optimization only: scores, metadata and battery
+economics still use the complete frozen prediction sample.
+
+The hand-written README figures and the existing dynamic homepage and battery
+prose were reconciled from the regenerated tables. The conclusions changed in
+magnitude but not direction: Ridge still beats the strongest price-error naive,
+the Ridge 4h increment remains positive across every fixed stress, and
+LightGBM still loses to its best naive at 1h. The old one-year figures remain
+only in earlier handoff records as historical release evidence. Verification
+passed with 347 tests, ruff check/format, mypy, `gpa export --check`, the site
+build and browser smoke in both viewports, with no errors or overflow. This is
+still a local, unpushed increment.
 
 ### English executive case — recorded before implementation
 

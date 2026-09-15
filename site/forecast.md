@@ -131,6 +131,10 @@ The nominal 80% interval is an empirical target, not a coverage guarantee under 
 
 ## Inspect a week
 
+The week selector uses twelve evenly spaced weeks from the benchmark so the
+browser stays responsive as the historical release grows. Forecast scores and
+the downloadable research snapshot retain the complete evaluation sample.
+
 ```js
 const weeks = [...new Set(predictions.map((d) => d3.utcMonday(new Date(d.local_date)).toISOString().slice(0, 10)))].sort();
 const week = view(Inputs.select(weeks, {label: "Week beginning", value: weeks[Math.floor(weeks.length / 2)]}));
