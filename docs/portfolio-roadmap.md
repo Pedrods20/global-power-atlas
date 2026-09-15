@@ -10,14 +10,15 @@ written plan before code changes. No GitHub publication is authorized by this
 request. This section is the single implementation log; do not create parallel
 STATE/TODO/handoff documents.
 
-**Current state: A/B/C/D implemented, tested and committed locally on `main`
-(commits `c893fa7`, `f2bb495`, `c594b75`); E/F/G pending.**
+**Current state: A/B/C/D/E implemented, tested and committed locally on
+`main` (E is `55e7543`); F/G pending, plus one pre-push blocker.**
 P0 and P1 are not complete as whole priorities. Nothing has been pushed to a
-remote; no public export, data ingestion or prospective issuance occurred.
-Resume at **E — input availability/history** below. Do not reopen or
-reimplement the battery engine or the ledger/provenance/attempts core: they
-are committed and green (311 tests, ruff check/format and mypy strict clean,
-87.25% coverage).
+remote; no public export, committed data ingestion or prospective issuance
+occurred. Before any push, resolve the **issue-snapshot size blocker** in "E
+handoff evidence" below; then continue at F. Do not reopen the battery engine,
+the ledger/provenance/attempts core or the ingestion checkpoint: they are
+committed and green (325 tests, ruff check/format and mypy strict clean,
+87.32% coverage).
 
 ### D execution plan — recorded before implementation
 
@@ -153,9 +154,11 @@ Final validation (Windows, Python 3.13.9):
 | Mypy strict | Passed, 34 source files |
 | Coverage | 87.25% (floor 75%) |
 
-### E execution plan — recorded before implementation, not yet started
+### E execution plan — recorded before implementation
 
-The user asked to scope E now without implementing it. Scope: local
+The user asked to scope E first and then authorized implementation; the
+outcome and the deviations from this plan are in "E handoff evidence" below.
+The plan text is kept as it was agreed. Scope: local
 ingestion-window and checkpoint logic only. No publication, live pilot start,
 or change to `ingest.yml`'s/`forecast.yml`'s cron schedules is part of this
 increment. Grounded in a read of the current code, cited below file:line.
@@ -237,37 +240,108 @@ publication-timestamp gap stays honestly labelled "unknown" rather than
 invented. Integration tests cover a missed-run gap, a same-day truncation
 scenario and the existing D-1/D-7 completeness guard.
 
-### Session close — 14 September 2026 (third checkpoint, D done, E scoped)
+### E handoff evidence — done, committed as `55e7543`
 
-The user asked to commit and continue the roadmap, then — once D was done —
-asked only to scope E, not implement it yet. Nothing in this session's E work
-touched code: "E execution plan" above is a plan grounded in reading
-`pipeline.py`, `energy_charts.py`, `sources/base.py`, `store.py`,
-`panel.py`, `ingest.yml` and `forecast.yml`, not yet implemented.
+Changed files: `src/gpa/pipeline.py`, `src/gpa/store.py`, `src/gpa/cli.py`
+(`gpa ingest` help and `--days` semantics), `.github/workflows/ingest.yml`
+and `forecast.yml` (comments and input description only; schedules and
+commands unchanged), `tests/test_pipeline.py`, `tests/test_store.py`,
+`tests/test_cli.py`. No dependency, schema or source-adapter change.
+
+What was built:
+
+- **Checkpoint.** `store.last_ingested(dataset, zone)` returns the latest
+  stored `ts_utc` for one zone, read from its partitions (interrupted
+  `.gpa-*.tmp` writes are ignored). `pipeline.resolve_window` derives each
+  target's window from it; `pipeline.ingest` resolves the window per zone and
+  dataset and reports it on every result line, e.g. `[2026-05-21 08:00 to
+  2026-06-30 08:00 UTC]`.
+- **Publication horizon.** `pipeline.PUBLISHED_AHEAD_DAYS = {"price": 2}`:
+  prices are requested to now + 2 days; load and generation still stop at now.
+  `energy_charts._window()` is unchanged — it now clips at the later ceiling.
+- **Workflows.** Both keep `--days 7`, which now means revision overlap. The
+  monthly `ingest.yml` run resumes each series from its committed checkpoint;
+  `forecast.yml`'s isolated store catches up from its monthly seed's checkpoint.
+
+Deviations from the plan, each deliberate:
+
+- Item 2 said `start = last_ingested - overlap`. Implemented as
+  `min(ceiling, last_ingested) - lookback_days`, because after the D-1 auction
+  the price checkpoint is tomorrow; counting back from it would shrink the
+  revision overlap behind now. `ceiling` is now, or an explicit `end`.
+- Item 3 said drop `--days` or keep it as a floor. It is kept, redefined as the
+  overlap behind the checkpoint; nothing else needed to change in the workflow.
+- The plan's "persist the isolated forecasting history" is not a new cache:
+  with checkpoint catch-up the monthly seed is always brought current, and D's
+  per-issue snapshots already preserve the exact inputs each issue used.
+
+Open questions, resolved:
+
+- **Energy-Charts on unpublished hours.** Checked live, read-only, at
+  2026-09-15 00:54 UTC. Price with `end=now` returned 192 quarter-hours ending
+  00:45 UTC although the whole 15 September delivery day was already public;
+  `now+2d` and `now+4d` both returned 276 rows ending 21:45 UTC (end of the
+  local day) with no error. Load requested two days ahead returned only
+  measured rows (last 23:30 UTC on 14 September).
+- **Horizon size.** Two days covers the next local delivery day at any run hour;
+  a longer request returned nothing more.
+- **ONS/SMARD cadence.** Moot: the horizon applies only to `price`, which no
+  ONS zone declares, and SMARD is not a pipeline zone source.
+- **Committed store.** `data/curated` has no internal price gaps, but DE-LU
+  price ends 2026-09-13 14:00 UTC — the last run's clock — although the rest of
+  13 September and all of 14 September were already published.
+
+Verification:
+
+| Check | Result |
+|---|---|
+| New regressions | Checkpoint (empty store, 90-day gap in one call, recent checkpoint overlap, price checkpoint ahead of now), horizon only for prices, explicit bounds bypass, negative lookback, `last_ingested` across partitions and interrupted writes |
+| Same-morning panel | At 10:00 Berlin on D-1, D's `price_d1`, `price_d1_mean`, `price_d1_end` are all present; negative control with `end=now` leaves `price_d1_mean` null on all 24 hours |
+| End-to-end CLI | `gpa ingest --dataset price` then `gpa issue` on the same morning: 24 forecasts, 0 abstentions. Re-run with the horizon disabled (scratch store, not a committed test): 24 abstentions — the pre-E daily workflow could not issue |
+| Full suite | **325 passed, 0 failed** |
+| Ruff check / format, mypy strict | Passed; 34 source files |
+| Coverage | 87.32% (pipeline 98%, store 97%; floor 75%) |
+
+Limits and follow-ups:
+
+- The checkpoint is the latest stored instant. A hole older than the overlap
+  behind it is not detected; `gpa backfill` or the existing structural-coverage
+  audit in `ingest.yml` remain the repair path.
+- **Pre-push blocker, found while testing E (a D follow-up).** `gpa issue`
+  snapshots the full stored price, load and generation history for the zone
+  (`cli.py` `sources[dataset] = store.read(...)`, written by
+  `provenance.save_snapshot`). For DE-LU that is about 4 MB per issue, and
+  `forecast.yml` commits `data/forecast_issues` daily: roughly 1.5 GB of git
+  history a year. Fix before pushing — for example snapshot only the rows the
+  panel actually used, or keep snapshots out of git — without weakening
+  `read_snapshot`'s checksum verification.
+- **For F.** The export's `data_as_of` is the maximum `last_ts_utc` across all
+  datasets, so after the next ingest it will show the next delivery day's
+  prices as the "as of" date. Label price coverage as "prices through delivery
+  day" or compute `data_as_of` from measured datasets.
+
+### Session close — 15 September 2026 (fourth checkpoint, E done)
+
+The user authorized implementing E after it was scoped. E is committed; no
+push, committed ingestion, public export or prospective issuance occurred. The
+only network access was the read-only Energy-Charts check above.
 
 To resume safely in a new session:
 
-1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas`
-   and run `git log --oneline -5` / `git status --short`. Expect a clean
-   working tree with `7e94fb3` (docs), `c594b75` (D done), `f2bb495` and
-   `c893fa7` as the four most recent commits on `main`, all unpushed.
-2. Read "D handoff evidence" for what D actually built, then implement "E
-   execution plan" above item by item — it already cites exact file:line
-   locations and the open questions to resolve (Energy-Charts' behaviour on
-   undelivered future hours, a safe forward-horizon size, ONS's different
-   publication cadence) before relying on them.
-3. Keep the existing studies under `.gpa/battery-studies/`; nothing this
-   session touched them. Do not clean this directory or overwrite a saved study.
-4. After E, continue with F (frozen release/presentation) and G (remaining
-   sensitivities). Do not treat P0/P1 as complete or start a prospective pilot
-   yet — a real pilot needs E's end-to-end tests passing first.
+1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas` and
+   run `git log --oneline -8` / `git status --short`. Expect a clean tree with
+   the E docs commit, `55e7543` (E), `ceaeac6` and `7e94fb3` (docs),
+   `c594b75`, `f2bb495` and `c893fa7` on `main`, all unpushed.
+2. Resolve the issue-snapshot size blocker before any push.
+3. Then F (frozen release and presentation, including the `data_as_of` label),
+   then G. Keep `.gpa/battery-studies/`; do not clean or overwrite it. Do not
+   start a prospective pilot until F's frozen release and the blocker are done.
 
 Suggested resume request:
 
-> Leia `docs/portfolio-roadmap.md` e implemente o plano do item E já
-> registrado ali (disponibilidade/histórico de entradas), com os testes
-> descritos. Atualize este mesmo arquivo com os resultados; não publique no
-> GitHub sem eu pedir.
+> Leia `docs/portfolio-roadmap.md`. A/B/C/D/E estão commitados. Resolva primeiro
+> o bloqueio do tamanho dos snapshots de emissão, depois registre o plano do
+> item F antes de alterar código. Não publique no GitHub sem eu pedir.
 
 **First implementation increment:** make the battery accounting trustworthy and
 build the P1 economic-comparison layer on that corrected engine. This increment
@@ -280,7 +354,7 @@ research outputs must be frozen and reviewed before replacing public headlines.
 | B — Comparable strategies (P1) | Battery backtest adapter and tests | All five existing forecast models plus no trade and perfect foresight; 1/2/4 MWh; exactly the same complete settled days for every strategy; consistent actuals; no-trade keeps initial SOC | Done locally; common-sample and coverage tests passed |
 | C — Economic evidence (P1) | `src/gpa/battery_study.py`, tests and a local `battery-study` CLI | Daily margin, cost accounting, incremental value versus each fixed naive, downside/concentration, deterministic paired calendar-block bootstrap; costs explicitly labelled assumptions | Done locally; three historical studies saved and zero-cost study replayed |
 | D — Issuance provenance (P0) | `forecast/ledger.py`, `forecast/provenance.py`, `forecast/attempts.py`, `cli.py`, workflow/tests | Target-day feature hash, model parameters/version, input snapshot, late/failure/abstention policy, canonical issuance | **Done and committed** locally (`c893fa7`, `f2bb495`, `c594b75`); not pushed |
-| E — Input availability/history (P0) | Pipeline, sources, ingest/forecast workflows and tests | Full already-published curve, no unavailable targets, checkpoint catch-up and isolated persistent history | Pending after first increment |
+| E — Input availability/history (P0) | Pipeline, sources, ingest/forecast workflows and tests | Full already-published curve, no unavailable targets, checkpoint catch-up and isolated persistent history | **Done and committed** locally (`55e7543`); not pushed. Snapshot-size blocker open before push |
 | F — Frozen release and presentation (P0/P1) | Snapshot/export, existing site pages, README/tests | Reproducible corrected release; honest date/coverage/cost labels; separate units; concise commercial summary | Pending after engine and provenance checks |
 | G — Remaining P1 sensitivities | Analysis/configuration/tests | Sourced/calibrated cost assumptions, availability/error stresses, model-selection/evaluation separation and a qualified duration recommendation | Pending after comparison layer |
 
@@ -319,13 +393,11 @@ Validation commands (PowerShell, repository root):
 npm run build
 ```
 
-**Next action — D is done; implement E's availability-aware price retrieval
-and checkpoint catch-up.** All six items of D's plan are complete and
-committed (see "D handoff evidence" above: `provenance.input_hash`/`sanitized`
-for the fingerprint, `ledger.timing_reason` plus `forecast/attempts.py` for
-late/failure eligibility, `ledger.canonical` for snapshot-verified selection,
-`provenance.save_snapshot`/`read_snapshot` for manifests, and the CLI/workflow
-wiring). Do not start a real pilot before E's end-to-end tests pass.
+**Next action — D and E are done; fix the issue-snapshot size blocker, then F.**
+D's provenance core and E's checkpoint catch-up and publication horizon are
+committed (see their handoff evidence above). The blocker is recorded under
+"E handoff evidence": each daily issue snapshots the zone's full stored
+history into git. Do not push or start a real pilot until it is resolved.
 
 Then finish F's full-precision frozen research release and public presentation,
 and G's calibrated costs/availability/error stresses. The current C snapshots
