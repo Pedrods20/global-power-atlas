@@ -30,10 +30,134 @@ fundamentals (B) is done as an ablation, not adopted**: Ridge MAE 22.07 →
 sample, driven mostly by a reversal in the negative-price regime; the
 scarcity regime gets worse for LightGBM. Full evidence below. The published
 release, README and site are unchanged; adopting this as a new frozen release
-is an explicitly separate, undone decision. **Next:** the capacity/renewables/
-storage scenario study, per "Portfolio direction adopted from the review"
-(further below) — or, first, a decision on whether to act on the fundamentals
-ablation.
+is an explicitly separate, undone decision. User chose (15 September 2026) to
+proceed straight to the capacity/renewables/storage scenario study (P3), full
+scope as written in the roadmap, not a bounded version, and to leave the
+fundamentals-adoption decision open for later. **Next:** implement the P3
+plan recorded immediately below.
+
+### DE-LU capacity/renewables/storage scenario study (P3) — recorded before implementation
+
+Full P3 scope, per user decision on 15 September 2026 (not the bounded
+alternative considered and rejected). This is the roadmap's own P3 deliverable:
+"a DE-LU 2027-2030 scenario brief on renewable build-out, battery competition
+and the durability of arbitrage opportunities, within the battery page." Two
+new external data sources, read-only research done before writing this plan:
+
+- **Marktstammdatenregister (MaStR) Gesamtdatenexport**: the official German
+  unit registry's full public dump, a 1GB+ ZIP of one XML file per object type,
+  regenerated daily, under `Datenlizenz Deutschland - Namensnennung - Version
+  2.0` (open, attribution required). It covers units registered in Germany
+  only — Luxembourg's share of DE-LU capacity is not in this registry and will
+  be excluded and disclosed as excluded, not estimated or assumed negligible
+  without a cited source. Relevant fields per the registry's own field
+  documentation: gross/net capacity (`Bruttoleistung`/`Nettonennleistung`),
+  commissioning date (`Inbetriebnahmedatum`), location (`Bundesland`/`PLZ`),
+  and operating status (`Betriebsstatus`: in Betrieb / vorläufig stillgelegt /
+  endgültig stillgelegt / geplant) — the status field is what lets operating
+  capacity be distinguished from planned or decommissioned capacity, which the
+  roadmap's own acceptance criteria already require.
+- **BNetzA auction results**: rather than paging through dozens of per-round
+  result pages, each technology publishes one consolidated statistics
+  workbook covering its full history — confirmed live: "Statistiken:
+  Windenergieanlagen an Land – Ausschreibungen" (xlsx, ~1MB) and "Statistiken:
+  Solaranlagen Freifläche – Ausschreibungen" (xlsx, ~3MB), both spanning
+  2015-2026; a third exists for the rooftop/noise-barrier solar segment
+  (Solaranlagen2). Confirm the exact sheet layout of each workbook (round
+  date, awarded capacity, volume-weighted award price, realization rate) by
+  opening one before writing a parser, not from this description alone.
+
+1. **Parsing approach, decided before code.** Do not add the `open-mastr`
+   package. This project has zero pandas/SQLAlchemy dependencies today
+   (`pyproject.toml`: httpx, polars, duckdb, pyarrow, typer, pandera[polars],
+   lightgbm, scikit-learn, numpy) and is deliberately polars-only;
+   `open-mastr` pulls in pandas and a full local SQL database layer to serve
+   a general-purpose interface to the entire registry (units, grids, market
+   participants), when this study needs exactly three unit tables. Parse the
+   Gesamtdatenexport XML directly with the standard library's
+   `xml.etree.ElementTree.iterparse` (a streaming reader — the file is too
+   large to hold as a full DOM), extracting only the solar, wind and storage
+   unit tables into polars DataFrames. Verify the exact XML table/element
+   names against `Dokumentation MaStR Gesamtdatenexport.pdf` (linked from the
+   registry's download page) before writing the parser; do not guess them
+   from the field documentation alone. Read the BNetzA workbooks with
+   `polars.read_excel` (confirm the `openpyxl`/`fastexcel` engine it needs is
+   available or add it as one small new dependency — not a new DataFrame
+   library).
+2. **New storage shape, not forced into the interval-series contract.**
+   Capacity and auction data are asset registries with irregular event dates
+   (a commissioning date, an award date), not a `(zone, ts_utc,
+   resolution_min)` interval series like price/load/generation/fundamentals.
+   Do not extend `store.write`'s zone/month partitioning or `schema.SCHEMAS`
+   for this. Add a separate module (e.g. `gpa.capacity`) with its own schema
+   (decide during implementation whether to keep unit-level rows or
+   pre-aggregate to monthly installed-MW-by-technology — whichever the
+   scenario model in step 5 actually consumes) and its own path under
+   `data/reference/` (e.g. `data/reference/capacity/<technology>.parquet`,
+   `data/reference/auctions/<technology>.parquet|xlsx`), separate from
+   `data/curated/`. Keep the two source tables (registry ledger vs. auction
+   awards) distinct even in storage: an award is not commissioned capacity,
+   and the roadmap explicitly forbids conflating them.
+3. **Monthly capacity ledger.** From `Betriebsstatus = in Betrieb` units only,
+   build monthly installed-MW series for solar, wind (onshore + offshore
+   combined, matching the existing residual-load wind convention), and
+   battery storage, 2019-01 through the most recent reliable month.
+   Registrations lag real commissioning; find and cite the registry's own
+   documented reporting-lag guidance (there is a "Hinweise zur Registrierung
+   des Inbetriebnahmedatums" document on the registry site) to decide how many
+   trailing months to drop as unreliable, rather than picking a cutoff by eye.
+4. **Auction pipeline, kept separate.** Consolidate the three workbooks into
+   one awards table per technology: round date, awarded capacity, volume-
+   weighted award price, realization rate where published. This is a leading
+   indicator of future capacity only; never merge it into the operating-
+   capacity ledger.
+5. **Scenario paths.** Define reference / faster-renewable / faster-battery
+   paths as explicit annual capacity-growth ranges with commissioning-delay
+   assumptions, each sourced either from the ledger's own recent observed
+   build rate (step 3) or a named, cited public target — never an unsourced
+   guess. Write the actual ranges only after the ledger exists and has been
+   read, matching this project's standing discipline of reading real numbers
+   before writing prose about them (used for part A of the fundamentals work).
+6. **Price-shape mechanism — the core novel analysis, least specified here on
+   purpose.** The roadmap requires "a documented, calibrated scenario model,
+   not an arbitrary revenue haircut or an out-of-distribution extrapolation of
+   the short-term ML model." Candidate approach: fit a relationship between
+   observed monthly renewable capacity/share and observed price-shape metrics
+   (spread, negative-price frequency, capture price) on the DE-LU 2019-2026
+   history already in the store, then apply that fitted historical
+   relationship to each scenario path's future capacity trajectory. This
+   necessarily extrapolates beyond the capacity range the model was fit on for
+   any 2027-2030 path with meaningfully more capacity than today; that
+   extrapolation must be stated as a named limitation with the fitted range
+   disclosed, not buried in a caveat list. Finalize the exact method once the
+   ledger (step 3) exists and its actual shape is known — do not lock in a
+   specific model form before seeing the real monthly capacity series.
+7. **Battery margin by duration under each path.** Reuse the existing
+   `battery_sensitivity`/`battery_study` machinery built for the bounded G
+   sensitivity study rather than building a new engine; apply it against each
+   scenario path's implied future price shape rather than only realized
+   history.
+8. **Asset-screening sheet.** Sourced CAPEX/OPEX/degradation/availability/
+   discount-rate figures for battery (and solar/wind if it stays in scope),
+   each with an explicit citation to a named public source (an auction result,
+   a published project cost, an industry report) in the table itself, never a
+   number without a traceable source. This section carries the most scrutiny
+   risk in the whole study; do not soften the citation requirement under time
+   pressure.
+9. **Verification.** Full pytest/ruff/mypy; every scenario reproducible from
+   the dated capacity and assumption tables it was built from; the base case
+   reconciles to realized 2019-2026 history; the writeup states what could
+   make the currently-preferred battery case unattractive, per the roadmap's
+   own P3 acceptance criteria. Record data volumes, excluded intervals/months
+   and the new dependency footprint here once implemented.
+
+**Not in this item:** intraday or ancillary-market modeling beyond a
+discussion paragraph (P3's own text already limits this to a discussion);
+wiring capacity data into the short-term price forecast panel (a fundamentally
+different, monthly-cadence signal, not a day-ahead feature — out of scope
+unless a separate plan is written for it); adopting the pre-auction
+fundamentals ablation as a new frozen release (a separate, still-open decision
+from the previous item); any live/pilot inference.
 
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 
