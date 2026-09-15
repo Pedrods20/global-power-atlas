@@ -17,9 +17,112 @@ clean. The review found that F's export omitted two available naive
 comparators, its README promised cost tables not displayed by the site, and
 its cumulative battery chart was blank despite smoke tests; all three are
 fixed and verified below. The battery engine, forecast snapshot, ledger and
-ingestion core were not reopened. No push, public deploy, real issuance, new
-provider ingestion or live pilot is authorized. Resume at the **English
-executive case** (next in "Portfolio direction adopted from the review" above).
+ingestion core were not reopened. The English executive case (site/index.md)
+is also implemented and verified below. No push, public deploy, real
+issuance, new provider ingestion or live pilot is authorized. Resume at
+**historical market regimes and pre-auction fundamentals** (next in "Portfolio
+direction adopted from the review" above).
+
+### English executive case — recorded before implementation
+
+User authorized proceeding ("go for it"); author-link scope confirmed
+separately (GitHub profile only — `github.com/Pedrods20`, already public via
+this repo's own CI/Deploy badge URLs, not a new fabricated link — and "sole
+developer, solo portfolio project" as the contribution framing). Grounded in
+the baseline finding that the live site's first screen ("the preview") leads
+with historical charts and has no personal positioning or decision-oriented
+conclusion, and P4's acceptance bar: a reader identifies the market,
+candidate contribution, commercial finding and principal caveat in under a
+minute. Scope: `site/index.md` only, a light consistency pass on `README.md`
+if its existing "Portfolio case"/"Featured result" text does not already
+match; no new pages, markets, models or backend.
+
+1. Add a compact, English-language executive-case block above the existing
+   historical charts on `site/index.md` (today: zero narrative, pure charts —
+   the exact gap the baseline finding named), covering, in this order:
+   question, three qualified findings, implication, limitations, personal
+   contribution. Every number cited must be read from the committed
+   `site/data/*` tables at build time (via `FileAttachment`, matching every
+   other page's convention), never hand-typed, so `gpa export --check` keeps
+   catching drift the same way it already does for the rest of the site.
+2. Question: does a validated day-ahead price forecast create measurable,
+   stress-tested battery value, and where does it fail. Three findings,
+   each qualified with its sample and caveat: (a) forecast skill — Ridge's
+   MAE reduction vs. the best naive baseline, read from `forecast.json`/
+   `forecast_scores.parquet`, explicitly noting LightGBM's shortfall at 1h
+   duration so the finding is not one-sided; (b) battery translation — the
+   4h capture-vs-perfect and incremental-margin-with-interval, read from
+   `battery_summary.parquet`/`battery_sensitivities.parquet`; (c) robustness —
+   the incremental margin's stability across the seven cost/efficiency/
+   signal/downtime stresses, same source. Implication: one or two sentences
+   connecting (a)-(c) to a commercial reading without overclaiming past what
+   the data supports. Limitations: retrospective/development evidence, zero
+   CAPEX/financing, illustrative (not sourced) cost/efficiency stresses,
+   hourly not quarter-hour execution, no prospective pilot yet — reuse the
+   exact qualifiers already established on the forecast/battery pages rather
+   than inventing new phrasing for the same facts.
+3. Personal contribution: one short paragraph — solo-built end-to-end
+   (ingestion across two providers, leakage-safe walk-forward forecasting,
+   the constrained battery-dispatch and stress-testing engine, this site) —
+   with a single link to the GitHub profile. No other personal/contact
+   information; nothing fabricated or guessed.
+4. De-emphasize, do not remove, the historical charts: keep them below the
+   new block, unchanged in content, per "keep monthly history superficial."
+5. Reconcile `README.md`'s "Portfolio case"/"Featured result" only if reading
+   the two side by side shows an actual inconsistency (a number, a claim, a
+   qualifier) with the new site text; do not rewrite prose that already
+   agrees just to make the two files textually identical.
+6. Verification: `npm run build`, the full `npm run test:browser` smoke suite
+   (index page keeps a visible chart per the existing assertion, no new
+   errors/overflow at either viewport), and a manual read confirming every
+   cited figure traces to a committed `site/data/*` file. Record results,
+   the final numbers used and any limits here before calling this done.
+
+### English executive case handoff evidence — done, committed
+
+Changed files: `site/index.md` only. `README.md`'s "Portfolio case"/"Featured
+result" was read side by side with the new text and found already consistent
+— every figure matched exactly, so nothing there was rewritten, per item 5.
+
+What was built: a new executive-case block above the H1's existing historical
+charts, all five elements from the plan (question, three findings,
+implication, limitations, personal contribution), every number read live from
+`data/forecast.json`, `data/forecast_scores.parquet`, `data/battery_summary.parquet`
+and `data/battery_sensitivities.parquet` via `FileAttachment` — none hand-typed.
+The existing three chart sections moved under one new "## Historical context"
+heading with a short lead-in sentence, demoted to `###` subheadings, content
+unchanged. The H1 changed from "Historical dashboard" to a decision-oriented
+question; the page's frontmatter `title:` (browser tab / `<title>`) was left
+as "Historical dashboard" since it is not referenced by `observablehq.config.js`'s
+`pages` array (index is the implicit home page) and changing it was not part
+of the plan. The personal-contribution line links only
+`https://github.com/Pedrods20`, per the user's explicit scope confirmation;
+no other contact information was added or invented.
+
+Rendered figures, verified against a live headless-browser read of the built
+page rather than assumed from the source: forecast skill 27.0% (EUR 21.04 vs
+28.80/MWh, previous day, 8,971 scored hours, 2025-09-04 to 2026-09-12);
+battery translation 94.5% capture, EUR 5,578/MW increment (95% interval EUR
+3,810–7,571/MW) on the 368-day base-scenario sample, with the LightGBM 1h
+shortfall (EUR 60/MW) stated as the same finding's own qualifier rather than
+a separate caveat; robustness range EUR 5,017–5,820/MW across the seven
+stresses (`d3.extent` over all seven `battery_sensitivities` rows for
+Ridge/4 MWh, so this is exact, not copied from README's own two named
+endpoints). All match README's already-published numbers exactly.
+
+Verification:
+
+| Check | Result |
+|---|---|
+| `npm run build` | 4 pages rendered, 6 links validated |
+| `npm run test:browser` | Both viewports, all 4 routes, zero errors/overflow; index still reports a visible chart per the existing assertion |
+| Headless render of `/` | Zero page errors; full executive-case text and all three historical charts confirmed present via `page.locator("main").innerText()` |
+| GitHub link | `href="https://github.com/Pedrods20"` confirmed in the built HTML |
+| Figure cross-check | Every cited number in the rendered page matches `README.md`'s existing "Featured result" exactly |
+
+No Python source changed in this item, so `pytest`/`ruff`/`mypy` were not
+rerun; they were last verified clean for the current `src/gpa` state in G's
+handoff evidence above and nothing there was touched.
 
 ### Portfolio steps 1-2 / bounded G plan — recorded before code changes
 
