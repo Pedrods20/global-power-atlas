@@ -73,6 +73,17 @@ shock entirely, but it stops the correlation from mostly just measuring gas
 prices.
 """
 
+_BATTERY_COMPETITION_STRATEGIES: Final[tuple[str, ...]] = ("perfect_foresight", "ridge", "lightgbm")
+"""Strategies correlated against the German battery fleet in step 4.
+
+``perfect_foresight`` isolates the market-structural arbitrage opportunity --
+the maximum spread extractable that period -- from forecast skill, which
+matters specifically because the question here is whether competition is
+shrinking the opportunity itself, not whether either model got better or
+worse at capturing it. ``ridge`` and ``lightgbm`` sit alongside it so the
+realistic, forecast-dependent margin is visible too, not only the ceiling.
+"""
+
 _PLANNED_TO_REALISED_TECHNOLOGY: Final[dict[str, tuple[str, ...]]] = {
     "Solar planned (EEG 2023)": ("Solar AC", "Solar DC"),
     "Wind onshore planned (EEG 2023)": ("Wind onshore",),
@@ -154,7 +165,13 @@ def export_all(output: Path | None = None) -> dict[str, int]:
             result = _forecast_page_predictions(full_predictions)
         tables[f"forecast_{suffix}"] = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
 
-    tables.update(_battery_tables(full_predictions))
+    battery_tables = _battery_tables(full_predictions)
+    tables.update(battery_tables)
+    battery_margin_yearly = _battery_margin_yearly(battery_tables["battery_monthly"])
+    tables["battery_margin_yearly"] = battery_margin_yearly
+    tables["battery_competition_correlation"] = _battery_competition_correlation(
+        battery_margin_yearly
+    )
 
     written: dict[str, int] = {}
     for name, frame in tables.items():
@@ -580,6 +597,102 @@ def _capacity_extrapolation_flags() -> pl.DataFrame:
         )
         .sort(["planned_technology", "technology"])
     )
+
+
+def _battery_margin_yearly(monthly: pl.DataFrame) -> pl.DataFrame:
+    """One row per (year, strategy, duration): arbitrage margin paired with the German battery fleet.
+
+    Reuses ``battery_monthly`` -- already built once from the frozen forecast
+    snapshot for the site's own battery page -- rather than re-running the
+    dispatch engine. Aggregated to yearly and normalised to EUR/MW/day
+    (``power_mw`` is always 1.0 in that table, so ``profit_eur`` is already
+    per rated MW; dividing by days controls for a partial year), for the same
+    reason step 3 fitted yearly rather than monthly: the German battery
+    fleet's growth is a smooth trend, but monthly arbitrage profit carries its
+    own weather- and price-driven seasonality unrelated to fleet size, and
+    untangling that properly needs a seasonal control this step does not
+    build.
+    """
+    if monthly.is_empty():
+        return pl.DataFrame()
+
+    from gpa import capacity as capacity_module
+
+    fleet_raw = capacity_module.read().filter(
+        (pl.col("time_step") == "yearly")
+        & (~pl.col("is_planned"))
+        & pl.col("technology").is_in(["Battery storage (power)", "Battery storage (capacity)"])
+    )
+    if fleet_raw.is_empty():
+        return pl.DataFrame()
+
+    fleet = fleet_raw.pivot(on="technology", index="period", values="value")
+    for technology in ("Battery storage (power)", "Battery storage (capacity)"):
+        if technology not in fleet.columns:
+            fleet = fleet.with_columns(pl.lit(None, dtype=pl.Float64).alias(technology))
+    fleet = fleet.rename(
+        {
+            "period": "year",
+            "Battery storage (power)": "battery_power_gw",
+            "Battery storage (capacity)": "battery_energy_gwh",
+        }
+    )
+
+    margin = (
+        monthly.filter(pl.col("strategy").is_in(_BATTERY_COMPETITION_STRATEGIES))
+        .with_columns(pl.col("month").str.slice(0, 4).alias("year"))
+        .group_by(["year", "strategy", "energy_mwh"])
+        .agg(pl.col("profit_eur").sum(), pl.col("days").sum())
+        .with_columns((pl.col("profit_eur") / pl.col("days")).alias("eur_per_mw_day"))
+    )
+
+    combined = margin.join(fleet, on="year", how="inner").sort(["year", "strategy", "energy_mwh"])
+    if combined.is_empty():
+        return combined
+    return combined.with_columns(pl.lit("DE-LU").alias("zone"))
+
+
+def _battery_competition_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
+    """Pearson correlation between the German battery fleet and DE-LU arbitrage margin.
+
+    Same discipline as :func:`_capacity_price_correlation`: the current,
+    still-partial year is excluded from the fit, and every row carries its
+    exact fitted range and point count rather than leaving the small sample
+    size implicit.
+    """
+    if yearly.is_empty():
+        return pl.DataFrame()
+    complete = yearly.filter(pl.col("year") != str(dt.datetime.now(dt.UTC).year))
+    if complete.is_empty():
+        return pl.DataFrame()
+    fitted_min, fitted_max = complete["year"].min(), complete["year"].max()
+
+    rows: list[dict[str, object]] = []
+    for strategy in _BATTERY_COMPETITION_STRATEGIES:
+        for duration in _BATTERY_DURATIONS_MWH:
+            pair = (
+                complete.filter(
+                    (pl.col("strategy") == strategy) & (pl.col("energy_mwh") == duration)
+                )
+                .select("battery_power_gw", "eur_per_mw_day")
+                .drop_nulls()
+            )
+            if pair.height < 3:
+                continue
+            r = pair.select(pl.corr("battery_power_gw", "eur_per_mw_day")).item()
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "energy_mwh": duration,
+                    "n": pair.height,
+                    "pearson_r": r,
+                    "fitted_year_min": fitted_min,
+                    "fitted_year_max": fitted_max,
+                }
+            )
+    if not rows:
+        return pl.DataFrame()
+    return pl.DataFrame(rows).with_columns(pl.lit("DE-LU").alias("zone"))
 
 
 def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:

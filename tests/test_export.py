@@ -13,6 +13,8 @@ from gpa.calendar import hours_in_local_day
 from gpa.export import (
     _BATTERY_DURATIONS_MWH,
     _BATTERY_MODEL_NAMES,
+    _battery_competition_correlation,
+    _battery_margin_yearly,
     _battery_tables,
     _cannibalisation,
     _capacity,
@@ -386,6 +388,142 @@ def test_capacity_extrapolation_excludes_the_current_partial_year_from_realised_
     result = _capacity_extrapolation_flags()
     assert result["realised_max_gw"][0] == 9.0
     assert result["realised_max_year"][0] == "2023"
+
+
+def _fleet_rows(period: str, *, power_gw: float, energy_gwh: float) -> pl.DataFrame:
+    return pl.concat(
+        [
+            _capacity_rows(period=period, technology="Battery storage (power)", value=power_gw),
+            _capacity_rows(period=period, technology="Battery storage (capacity)", value=energy_gwh),
+        ]
+    )
+
+
+def _monthly_row(
+    *, strategy: str, energy_mwh: float, month: str, days: int, profit_eur: float
+) -> dict[str, object]:
+    return {
+        "strategy": strategy,
+        "power_mw": 1.0,
+        "energy_mwh": energy_mwh,
+        "month": month,
+        "days": days,
+        "profit_eur": profit_eur,
+        "zone": "DE-LU",
+    }
+
+
+def test_battery_margin_yearly_joins_the_fleet_and_normalises_to_eur_per_mw_day(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    from gpa import capacity as capacity_module
+
+    capacity_module.write(_fleet_rows("2020", power_gw=1.5, energy_gwh=2.3))
+    monthly = pl.DataFrame(
+        [
+            _monthly_row(
+                strategy="perfect_foresight", energy_mwh=2.0, month="2020-01", days=31, profit_eur=310.0
+            ),
+            _monthly_row(
+                strategy="perfect_foresight", energy_mwh=2.0, month="2020-02", days=29, profit_eur=290.0
+            ),
+        ]
+    )
+    result = _battery_margin_yearly(monthly)
+    row = result.row(0, named=True)
+    assert row["year"] == "2020"
+    assert row["days"] == 60
+    assert row["profit_eur"] == pytest.approx(600.0)
+    assert row["eur_per_mw_day"] == pytest.approx(10.0)
+    assert row["battery_power_gw"] == 1.5
+    assert row["battery_energy_gwh"] == 2.3
+
+
+def test_battery_margin_yearly_only_keeps_the_competition_strategies(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    from gpa import capacity as capacity_module
+
+    capacity_module.write(_fleet_rows("2020", power_gw=1.5, energy_gwh=2.3))
+    monthly = pl.DataFrame(
+        [
+            _monthly_row(strategy="no_trade", energy_mwh=2.0, month="2020-01", days=31, profit_eur=0.0),
+            _monthly_row(
+                strategy="ridge", energy_mwh=2.0, month="2020-01", days=31, profit_eur=100.0
+            ),
+        ]
+    )
+    result = _battery_margin_yearly(monthly)
+    assert result["strategy"].to_list() == ["ridge"]
+
+
+def test_battery_margin_yearly_drops_a_year_the_fleet_has_no_data_for(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    from gpa import capacity as capacity_module
+
+    capacity_module.write(_fleet_rows("2020", power_gw=1.5, energy_gwh=2.3))
+    monthly = pl.DataFrame(
+        [
+            _monthly_row(
+                strategy="ridge", energy_mwh=2.0, month="2020-01", days=31, profit_eur=100.0
+            ),
+            _monthly_row(
+                strategy="ridge", energy_mwh=2.0, month="2021-01", days=31, profit_eur=200.0
+            ),
+        ]
+    )
+    assert _battery_margin_yearly(monthly)["year"].to_list() == ["2020"]
+
+
+def test_battery_margin_yearly_is_empty_without_fleet_data(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    monthly = pl.DataFrame(
+        [_monthly_row(strategy="ridge", energy_mwh=2.0, month="2020-01", days=31, profit_eur=100.0)]
+    )
+    assert _battery_margin_yearly(monthly).is_empty()
+
+
+def _battery_yearly_fixture(years: list[str], power_gw: list[float], margin: list[float]) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "year": years,
+            "strategy": ["perfect_foresight"] * len(years),
+            "energy_mwh": [2.0] * len(years),
+            "battery_power_gw": power_gw,
+            "eur_per_mw_day": margin,
+        }
+    )
+
+
+def test_battery_competition_correlation_matches_a_known_relationship():
+    years = [str(y) for y in range(2015, 2022)]
+    yearly = _battery_yearly_fixture(
+        years, power_gw=[1.0 + i for i in range(7)], margin=[50.0 - 5 * i for i in range(7)]
+    )
+    result = _battery_competition_correlation(yearly)
+    row = result.filter(
+        (pl.col("strategy") == "perfect_foresight") & (pl.col("energy_mwh") == 2.0)
+    ).row(0, named=True)
+    assert row["pearson_r"] == pytest.approx(-1.0, abs=1e-9)
+    assert row["n"] == 7
+
+
+def test_battery_competition_correlation_excludes_the_current_partial_year():
+    current_year = str(dt.datetime.now(dt.UTC).year)
+    years = [str(y) for y in range(2015, 2021)] + [current_year]
+    power_gw = [1.0 + i for i in range(6)] + [1000.0]
+    margin = [50.0 - 5 * i for i in range(6)] + [50.0]
+    yearly = _battery_yearly_fixture(years, power_gw, margin)
+
+    result = _battery_competition_correlation(yearly)
+    row = result.row(0, named=True)
+    assert row["n"] == 6
+    assert current_year not in (row["fitted_year_min"], row["fitted_year_max"])
+
+
+def test_battery_competition_correlation_is_empty_with_fewer_than_three_points():
+    yearly = _battery_yearly_fixture(["2015", "2016"], power_gw=[1.0, 2.0], margin=[50.0, 40.0])
+    assert _battery_competition_correlation(yearly).is_empty()
 
 
 def test_export_all_raises_without_a_frozen_snapshot(tmp_path, monkeypatch):

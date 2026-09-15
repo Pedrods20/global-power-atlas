@@ -161,11 +161,11 @@ paragraph; wiring capacity data into the short-term day-ahead forecast panel
 fundamentals ablation as a new frozen release (a separate, still-open
 decision); any live/pilot inference.
 
-### P3 handoff evidence — partial (steps 1-3 of 8), committed and run
+### P3 handoff evidence — partial (steps 1-4 of 8), committed and run
 
-Steps 1 (capacity data), 2 (cannibalisation) and 3 (capacity-to-price-shape
-correlation) of the plan above; steps 4-7 (battery-competition, cost context,
-citations, site narrative) are not started.
+Steps 1 (capacity data), 2 (cannibalisation), 3 (capacity-to-price-shape
+correlation) and 4 (battery competition vs. arbitrage margin) of the plan
+above; steps 5-7 (cost context, citations, site narrative) are not started.
 
 **Step 1.** `EnergyChartsSource.fetch_installed_power(zone, *, time_step)` in
 `src/gpa/sources/energy_charts.py`, and `gpa.capacity` (`reference_root`,
@@ -257,17 +257,56 @@ EEG 2023/WindSeeG target — e.g. wind offshore's realised ceiling is 9.7 GW
 targets is confirmed, from real data rather than assumption, to be an
 extrapolation beyond anything this project's correlation is fitted on.
 
-**Verification run:** `pytest` (extended `tests/test_export.py`, full suite),
-`ruff check`, `mypy` all clean. `gpa export` regenerates `capacity.parquet`,
-`cannibalisation.parquet`, `capacity_price_yearly.parquet`,
-`capacity_price_correlation.parquet` and `capacity_extrapolation_flags.parquet`
-alongside the existing tables, checked into `site/data/` as with every other
-export table so `gpa export --check` keeps passing, even though no site page
-reads them yet.
+**Step 4.** Two new `gpa.export` tables reusing `battery_monthly` -- already
+built once from the frozen forecast snapshot for the site's own battery page,
+no new dispatch run -- rather than the interval store: `battery_margin_yearly`
+(profit summed to the year and normalised to EUR/MW/day, since `power_mw` is
+always 1.0 in that table, inner-joined onto the German battery fleet's yearly
+power/energy series) and `battery_competition_correlation` (Pearson r for
+three strategies -- `perfect_foresight`, `ridge`, `lightgbm` -- at each of the
+three durations, current partial year excluded as in step 3).
+`perfect_foresight` was chosen alongside the two real forecasters
+deliberately: it isolates the market-structural arbitrage opportunity (the
+maximum spread extractable that period) from either model's own forecast
+skill, which matters because the question is whether competition is shrinking
+the opportunity itself, not whether a model got better at capturing it.
 
-**Not done in this increment, deliberately:** battery-competition analysis
-(step 4), cost context (step 5), auction citations (step 6), or site
-narrative (step 7).
+Run live against the real store, `energy_mwh=2.0`:
+
+| strategy | n | pearson_r | fitted years |
+|---|---|---|---|
+| perfect_foresight | 6 | +0.388 | 2020-2025 |
+| ridge | 6 | +0.487 | 2020-2025 |
+| lightgbm | 6 | +0.675 | 2020-2025 |
+
+The sign is positive, not negative: as Germany's battery fleet grew roughly
+tenfold (1.6 GW to 17 GW power rating, 2020-2025), this project's own
+per-MW arbitrage margin rose alongside it rather than being competed away.
+**This is not evidence that fleet growth does not compress margin.** The same
+2020-2025 window is dominated by the 2021-2022 fuel-price shock and the
+accelerating solar cannibalisation step 3 already measured, both of which
+expand the arbitrage opportunity itself (bigger price swings to trade around)
+far more than a few gigawatts of added competition could currently compress
+it. A genuine competition effect, if one exists yet, is not detectable above
+that much larger co-moving trend with n=6 annual points -- stated here
+plainly rather than read as "no competition effect," which the data does not
+support either.
+
+**Verification run:** `pytest` (extended `tests/test_export.py`, full suite),
+`ruff check`, `mypy` all clean; one real bug caught before committing --
+`_battery_margin_yearly` checked `fleet.is_empty()` after the
+`pivot().rename()` call instead of before, so an empty filtered input raised
+`ColumnNotFoundError` (pivot never creates the named columns from zero rows)
+instead of returning the documented empty frame; a test written for exactly
+that case caught it immediately. `gpa export` regenerates `capacity.parquet`,
+`cannibalisation.parquet`, `capacity_price_yearly.parquet`,
+`capacity_price_correlation.parquet`, `capacity_extrapolation_flags.parquet`,
+`battery_margin_yearly.parquet` and `battery_competition_correlation.parquet`
+alongside the existing tables, checked into `site/data/` so `gpa export
+--check` keeps passing, even though no site page reads any of them yet.
+
+**Not done in this increment, deliberately:** cost context (step 5), auction
+citations (step 6), or site narrative (step 7).
 
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 
