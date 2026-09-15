@@ -11,7 +11,8 @@ benchmark, not a forecast of each traded quarter-hour or a complete asset valuat
 
 ```js
 const summary = [...await FileAttachment("data/battery_summary.parquet").parquet()];
-const dispatch = [...await FileAttachment("data/battery_dispatch.parquet").parquet()];
+const monthlyMargins = [...await FileAttachment("data/battery_monthly.parquet").parquet()];
+const dispatchExample = [...await FileAttachment("data/battery_dispatch_example.parquet").parquet()];
 const risk = [...await FileAttachment("data/battery_risk.parquet").parquet()];
 const comparisons = [...await FileAttachment("data/battery_comparisons.parquet").parquet()];
 const costs = [...await FileAttachment("data/battery_costs.parquet").parquet()];
@@ -54,17 +55,13 @@ const batteryDays = headline.days;
 const selectedRisk = risk.filter((d) => asset(d) && fitted(d));
 const selectedPairs = comparisons.filter((d) => asset(d) && fitted(d));
 const baselineValue = summary.find((d) => asset(d) && d.strategy === headline.best_naive).profit_eur;
-const monthly = d3.rollups(
-  dispatch.filter(asset), (values) => d3.sum(values, (d) => d.profit_eur),
-  (d) => d.strategy, (d) => String(d.local_date).slice(0, 7),
-).flatMap(([strategy, months]) => months.map(([month, profit]) => ({strategy, month, profit})));
+const monthly = monthlyMargins.filter(asset).map((d) => ({strategy: d.strategy, month: String(d.month), profit: d.profit_eur}));
 const cumulative = d3.groups(monthly, (d) => d.strategy).flatMap(([strategy, values]) => {
   let total = 0;
   return values.sort((a, b) => a.month.localeCompare(b.month)).map((d) => ({...d, total: total += d.profit}));
 });
-const ridgeDispatch = dispatch.filter((d) => asset(d) && d.strategy === "ridge");
-const sampleDate = d3.max(ridgeDispatch, (d) => String(d.local_date));
-const sample = ridgeDispatch.filter((d) => String(d.local_date) === sampleDate);
+const sample = dispatchExample.filter((d) => asset(d) && d.strategy === "ridge");
+const sampleDate = d3.max(sample, (d) => String(d.local_date));
 ```
 
 ## Decision in brief

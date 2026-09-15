@@ -152,13 +152,39 @@ def test_battery_tables_match_battery_study_evaluate_bit_for_bit():
     )
 
     for name, table in (
-        ("battery_dispatch", expected.dispatch),
         ("battery_summary", expected.summary),
         ("battery_risk", expected.risk),
         ("battery_comparisons", expected.comparisons),
         ("battery_coverage", expected.coverage),
     ):
         assert_frame_equal(tables[name].drop("zone"), table, check_row_order=False)
+
+
+def test_battery_page_gets_monthly_margins_and_one_dispatch_day_not_every_interval():
+    # Every interval of every strategy, duration and day is far more than the
+    # page draws, and the browser would have to materialize all of it.
+    first, second = dt.date(2025, 1, 31), dt.date(2025, 2, 1)
+    frame = predictions(days=(first, second))
+    tables = _battery_tables(frame)
+    expected = evaluate(
+        frame, model_names=_BATTERY_MODEL_NAMES, durations_mwh=_BATTERY_DURATIONS_MWH
+    )
+    assert "battery_dispatch" not in tables
+
+    monthly = tables["battery_monthly"]
+    assert set(monthly["month"]) == {"2025-01", "2025-02"}
+    assert set(monthly["days"]) == {1}
+    assert_frame_equal(
+        monthly.group_by("strategy", "energy_mwh").agg(pl.col("profit_eur").sum()),
+        expected.summary.select("strategy", "energy_mwh", "profit_eur"),
+        check_row_order=False,
+    )
+
+    assert_frame_equal(
+        tables["battery_dispatch_example"].drop("zone"),
+        expected.dispatch.filter(pl.col("local_date") == second),
+        check_row_order=False,
+    )
 
 
 def test_battery_costs_table_covers_the_illustrative_scenarios():

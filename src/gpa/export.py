@@ -36,7 +36,8 @@ from gpa.zones import ZONES, Zone
 __all__ = ["DEFAULT_OUTPUT", "export_all", "site_root"]
 
 _BATTERY_TABLES: tuple[str, ...] = (
-    "battery_dispatch",
+    "battery_monthly",
+    "battery_dispatch_example",
     "battery_summary",
     "battery_risk",
     "battery_comparisons",
@@ -341,8 +342,20 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
         predictions, base, model_names=_BATTERY_MODEL_NAMES, durations_mwh=_BATTERY_DURATIONS_MWH
     )
 
+    # The page draws monthly cumulative margin and one example day; shipping
+    # every interval of every strategy, duration and day would make the browser
+    # materialize over a million rows on a multi-year sample.
+    monthly = base.daily.group_by(
+        "strategy",
+        "power_mw",
+        "energy_mwh",
+        pl.col("local_date").dt.strftime("%Y-%m").alias("month"),
+    ).agg(pl.len().cast(pl.UInt32).alias("days"), pl.col("profit_eur").sum())
+    example = base.dispatch.filter(pl.col("local_date") == pl.col("local_date").max())
+
     return {
-        "battery_dispatch": base.dispatch.with_columns(tag),
+        "battery_monthly": monthly.with_columns(tag),
+        "battery_dispatch_example": example.with_columns(tag),
         "battery_summary": base.summary.with_columns(tag),
         "battery_risk": base.risk.with_columns(tag),
         "battery_comparisons": base.comparisons.with_columns(tag),
