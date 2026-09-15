@@ -19,9 +19,181 @@ its cumulative battery chart was blank despite smoke tests; all three are
 fixed and verified below. The battery engine, forecast snapshot, ledger and
 ingestion core were not reopened. The English executive case (site/index.md)
 is also implemented and verified below. No push, public deploy, real
-issuance, new provider ingestion or live pilot is authorized. Resume at
-**historical market regimes and pre-auction fundamentals** (next in "Portfolio
-direction adopted from the review" above).
+issuance or live pilot is authorized. **Partly done: DE-LU history now starts
+2019-01-01 in the committed store (`544d961`), but the forecast/battery
+release has not yet been re-frozen on it** — the site's forecast and battery
+pages, the homepage findings and README still describe the one-year release
+`5e3c9f1a256ec73c62e2` (test 2025-09-04 to 2026-09-12), while the homepage's
+historical charts already show 2019 onward. Resume at step 1 of "Session close
+— seventh checkpoint (history extended, release not yet re-frozen)" below.
+
+### DE-LU history from 2019-01-01 and a re-frozen release — recorded before implementation
+
+The user found the history too short ("2024") and asked to go back to 2018,
+then chose **1 January 2019** after learning the constraint below. This
+extends history for the study market only and re-runs the already-registered
+protocol on it; it is not a methodology change.
+
+1. **Start date and its floor.** Checked live, read-only, on 15 September
+   2026: Energy-Charts returns DE-LU day-ahead prices from 1 October 2018 and
+   "no content available" before it. That is the real bidding-zone split —
+   the joint DE-AT-LU zone became DE-LU and AT — not an API gap, so earlier
+   DE-AT-LU prices are a different product and will not be spliced in as
+   DE-LU. Load and generation (`public_power`, country `de`) are available
+   back to at least 2015. The store will begin at **2019-01-01 00:00
+   Europe/Berlin (2018-12-31T23:00Z)** for all three DE-LU datasets. The
+   backfill already running fetched from 2018-09-27; the September–December
+   2018 overshoot is this session's own output and will be trimmed with
+   `store.atomic_parquet`, keeping that final UTC hour of the 2018-12
+   partition. Other zones (FR, ES, BR-SIN) keep their current windows: they
+   are cross-market context, not the study sample.
+2. **Validate before modelling.** `gpa validate`; per-dataset coverage and the
+   existing quality report; check for internal gaps, duplicates, DST days,
+   resolution changes and that wind and solar are reported throughout (the
+   residual-load features require both). Record any exclusions rather than
+   repairing or imputing them.
+3. **Protocol unchanged.** Keep `MIN_TRAIN_DAYS = 270`, `VALIDATION_DAYS = 90`,
+   `BENCHMARK_END = 2026-09-12`, expanding windows, the existing alpha and
+   LightGBM grids selected on the validation window only, daily LightGBM
+   refits and seed 42. With the new start, validation falls in late 2019 and
+   the test period runs from about January 2020 to 12 September 2026 —
+   COVID, the 2021–22 energy crisis and the 2025 quarter-hour transition
+   included. Constants will not be adjusted after seeing results. The
+   2020–mid-2024 portion was never in this project's store, but it is public
+   history the author already knows in broad strokes, so the label stays
+   "retrospective development benchmark", not an untouched holdout.
+4. **New release, old one kept.** `gpa backtest --zone DE-LU --save-snapshot`
+   writes a new content-addressed experiment and repoints `current.json`;
+   the previous `5e3c9f1a256ec73c62e2` directory stays as committed, for
+   provenance. D's prospective issuance policy (Ridge alpha 0.1) is not
+   changed by this retrospective re-selection: if the new validation window
+   selects a different alpha, record the divergence here instead.
+5. **Test isolation (required, not optional).** `tests/test_cli.py` promises
+   it never touches committed repository data, yet its three export tests
+   read the real `data/experiments/` release through the repository-relative
+   `snapshot.ROOT` — about 397 s of the last 419 s suite. At roughly 6.5×
+   the evaluation days they would take on the order of 40 minutes. Isolate
+   `snapshot.ROOT`/`CURRENT` in the CLI autouse fixture and give the export
+   tests a tiny valid release written through `snapshot.save`.
+6. **Browser weight, decided from measurements.** The battery page loads the
+   full `battery_dispatch` table and the forecast page the full
+   `forecast_predictions` table into the browser. After regenerating, measure
+   both; if they grow past a few MB, export what the pages actually draw
+   (monthly cumulative margin, a bounded dispatch sample, bounded prediction
+   weeks) instead of every row. Measure `data/curated` growth for the
+   committed store too.
+7. **Regenerate and reconcile.** `gpa export`, then `gpa export --check`;
+   update every hand-written figure and date in `README.md`, site prose and
+   this file from the regenerated tables; full pytest/ruff/mypy, build and
+   browser smoke; commit locally without pushing.
+
+### DE-LU history extension — partial handoff evidence (items 1, 2, 5 and half of 6)
+
+The user asked to wrap up the session before the re-freeze. Done and
+committed: `9fbf056` (test isolation), `544d961` (history extension),
+`db8973c` (battery page data). Not done: items 3, 4, the forecast half of 6,
+and 7's reconciliation.
+
+**Item 1 — backfill and trim.** `gpa backfill --zone DE-LU --days 2910`
+(2018-09-27 to 2026-09-15, 60-day chunks) finished with `written 3 | failed 0`
+after many HTTP 429 responses, all absorbed by the existing retry/backoff.
+Energy-Charts's first DE-LU price row is 2018-09-30T22:00Z (1 October 2018
+Berlin), confirming the bidding-zone floor. The overshoot was trimmed in place:
+2018-09 to 2018-11 partitions removed, 2018-12 kept only from 23:00Z. All
+three datasets now begin 2018-12-31T23:00Z (2019-01-01 00:00 Berlin). Only
+DE-LU changed: 207 new monthly partitions (69 months × 3) plus refreshed
+2026-09 ones. Store size, DE-LU: price 0.8 MB, load 1.9 MB, generation 11.4 MB
+(3.7 MB before); all of `data/curated` is 19.6 MB.
+
+**Item 2 — validation, measured before any modelling.** `gpa validate`: 482
+partitions valid. No duplicates in any dataset. Zero incomplete local days
+for price or load through `BENCHMARK_END` (duration-weighted hours against
+`hours_in_local_day`, so DST days count correctly). Zero days missing wind or
+solar. `quality.report()`: every DE-LU series 100% coverage, 0 gap hours,
+0 invalid intervals; `quality.require_integrity()` passed. Resolution: price
+hourly until the day-ahead market's move to quarter-hours on 1 October 2025,
+15-minute after; load and generation 15-minute throughout. Nuclear generation
+ends 2023-04-15, the German phase-out — a real fuel ending, not a gap.
+What the unchanged harness will see: 2,805 usable panel days (every calendar
+day from 2019-01-08; the first week is D-7 lag warm-up), `train_start`
+2019-01-08, `validation_start` 2019-10-05, `test_start` 2020-01-03,
+`test_end` 2026-09-12 — about 2,445 test days against 374 in the current
+release. No exclusions were needed.
+
+**Item 5 — test isolation.** The CLI autouse fixture now monkeypatches
+`snapshot.ROOT`/`CURRENT` into the temporary directory, and a `release`
+fixture writes a tiny valid release (two days, all five forecasts) through
+`snapshot.save`. The export tests also assert that the first export succeeds,
+so the stale-table test can no longer pass because the export itself failed.
+Export tests: ~397 s → ~6 s. Full suite: 346 passed in 26.7 s (was 419 s).
+
+**Item 6, battery half — measured, then changed.** `battery_dispatch.parquet`
+was 840 KB and 185,472 rows for 368 days, which projects to about 5.5 MB and
+1.2 million browser rows at ~2,400 days — far past "a few MB". The page only
+draws monthly cumulative margin and one example day, so `_battery_tables` now
+exports `battery_monthly` (strategy × asset × local month: days, profit) and
+`battery_dispatch_example` (every strategy and duration on the last common
+day) instead. Test first:
+`test_battery_page_gets_monthly_margins_and_one_dispatch_day_not_every_interval`
+failed on the old export, then passed. On the current release: all of
+`site/data` 1,563 KB → 832 KB even with the longer historical tables; the
+battery page's files 927 kB → 102 kB. The forecast half is not decided:
+`forecast_predictions.parquet` is 539 KB now and should reach roughly 3.5 MB
+after the re-freeze; measure the forecast page then, before changing anything.
+It is also the documented battery-study input, so bound only what the page
+loads, not the table the battery study reads.
+
+**Verified at `db8973c`:** `gpa export --check` passes (release unchanged,
+historical tables from the extended store); pytest 346 passed; ruff check and
+format clean; mypy strict clean (35 files); `npm run build` (4 pages, 6 links);
+`npm run test:browser` in both viewports with zero errors or overflow,
+including the battery-page assertions (7-line cumulative chart, every evidence
+table, duration selector).
+
+**Deliberately not changed yet, and why:** `README.md`, the homepage findings
+and the battery page prose still quote the one-year release. That is still
+true of what the site computes; rewriting it before the re-freeze would put
+numbers in prose that nothing produces. The one visible mismatch is intentional
+and temporary: the homepage's historical charts now start in 2019, while the
+evaluated release starts in September 2025.
+
+### Session close — 15 September 2026 (seventh checkpoint, history extended, release not yet re-frozen)
+
+To resume safely in a new session:
+
+1. Open this roadmap and run `git log --oneline -6` / `git status --short`.
+   Expect a clean tree with the docs commit recording this checkpoint on top
+   of `db8973c`, `544d961`, `9fbf056` and `c422172`, all unpushed (local agent
+   tooling is gitignored).
+2. Re-freeze (item 4): `.venv\Scripts\gpa.exe backtest --zone DE-LU --scope all
+   --save-snapshot`. Run it in the background: ~2,445 test days with daily
+   LightGBM refits will take far longer than the previous run. Constants stay
+   as in item 3. If the new validation window (2019-10-05 onward) selects an
+   alpha other than 0.1, record it; do not change D's issuance policy.
+3. `gpa export` (the battery study re-runs 7 scenarios × 7 strategies × 3
+   durations over ~2,400 days; the old sample took ~80 s, so expect ~9 min),
+   then `gpa export --check`. Measure `forecast_predictions.parquet` and the
+   forecast page's load time in both viewports; bound what the page loads
+   only if needed (item 6).
+4. Reconcile from the regenerated tables, not from memory: every figure in
+   `README.md`'s "Featured result"; the homepage findings, whose wording
+   encodes conclusions that could flip on a 2020–2026 sample (LightGBM
+   "trails" its best naive at 1h, the robustness range, "a bigger model is not
+   automatically a better dispatch signal"); and the battery page prose ("Ridge
+   adds", "Treat 4h as a candidate"). If a conclusion no longer holds, say so.
+   Note the downtime calendar is anchored at 2025-01-01 and extends backwards
+   on the same 20-day phase, which `calendar_outages` already does.
+5. Full checks (pytest, ruff, mypy, build, browser smoke), record results here,
+   commit locally. Not in scope: FR/ES/BR-SIN history, pushing, deploys.
+6. Known side effect to note, not fix: the prospective `forecast.yml` seeds its
+   isolated store from `data/curated`, so its first `gpa issue` will train on
+   2019 onward and write provenance blobs for those months once.
+
+Suggested resume request:
+
+> Leia `docs/portfolio-roadmap.md`. O histórico DE-LU desde 2019-01-01 está
+> commitado, mas o release ainda não foi re-congelado. Continue do passo 2 do
+> "Session close — seventh checkpoint". Não publique no GitHub sem eu pedir.
 
 ### English executive case — recorded before implementation
 
