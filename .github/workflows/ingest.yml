@@ -1,10 +1,11 @@
 name: Ingest
 
-# The engine that accumulates history. Runs monthly, refetches a trailing window
-# rather than only yesterday because providers publish on a lag and revise
-# afterwards, and commits the resulting Parquet. The store upserts on each
-# dataset's natural key, so overlapping runs converge on the restated figures
-# instead of duplicating them.
+# The engine that accumulates history. Runs monthly; each zone and dataset
+# resumes from the latest instant already committed, so a skipped month is
+# recovered by the next run instead of leaving a permanent gap. A few days
+# behind that checkpoint are refetched because providers publish on a lag and
+# revise afterwards. The store upserts on each dataset's natural key, so
+# overlapping runs converge on the restated figures instead of duplicating them.
 
 on:
   schedule:
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: "Trailing days to refetch"
+        description: "Revision overlap: days refetched behind the stored checkpoint"
         required: false
         default: "7"
 

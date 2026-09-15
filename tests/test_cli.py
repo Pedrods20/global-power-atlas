@@ -453,6 +453,47 @@ def test_issue_reconcile_and_battery_agree_on_the_canonical_forecast(
     assert "ridge" in battery_result.stdout.lower()
 
 
+def test_a_same_morning_ingest_lets_issue_forecast_every_hour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scheduled order: refresh, then issue before the gate. With prices
+    capped at the refresh instant, D-1 was incomplete and every hour abstained."""
+    from gpa import pipeline
+    from tests.test_pipeline import PublishedPrices
+
+    now = dt.datetime(2026, 6, 30, 8, tzinfo=dt.UTC)
+    monkeypatch.setattr(pipeline, "now_utc", lambda: now)
+    monkeypatch.setattr(pipeline, "get_source", lambda name: PublishedPrices(now))
+    monkeypatch.setattr("gpa.forecast.ledger.now_utc", lambda: now)
+    monkeypatch.setattr("gpa.forecast.provenance.MIN_TRAIN_ROWS", 5)
+    ledger_root = tmp_path / "ledger"
+
+    ingested = runner.invoke(
+        app, ["ingest", "--zone", "DE-LU", "--dataset", "price", "--days", "40"]
+    )
+    assert ingested.exit_code == 0, ingested.stdout
+    assert store.last_ingested("price", "DE-LU") == dt.datetime(2026, 6, 30, 21, tzinfo=dt.UTC)
+
+    issued = runner.invoke(
+        app,
+        [
+            "issue",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--delivery-date",
+            "2026-07-01",
+            "--attempt-id",
+            "att-same-morning",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+    assert issued.exit_code == 0, issued.stdout
+    assert "issued, 24 forecasts, 0 abstentions" in issued.stdout
+
+
 # --- ingest and backfill ----------------------------------------------------
 
 

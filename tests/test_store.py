@@ -189,6 +189,29 @@ def test_coverage_reports_range_and_size() -> None:
     assert row["bytes"] > 0
 
 
+def test_last_ingested_is_none_for_an_empty_store() -> None:
+    assert store.last_ingested("price", "DE-LU") is None
+
+
+def test_last_ingested_is_the_latest_instant_across_partitions_for_that_zone() -> None:
+    store.write(
+        price_rows([1.0, 2.0, 3.0], start=dt.datetime(2026, 6, 30, 22, tzinfo=dt.UTC)), "price"
+    )
+    store.write(price_rows([3.0], start=dt.datetime(2026, 5, 1, tzinfo=dt.UTC)), "price")
+    store.write(price_rows([4.0], zone="FR", start=dt.datetime(2026, 8, 1, tzinfo=dt.UTC)), "price")
+
+    assert store.last_ingested("price", "DE-LU") == dt.datetime(2026, 7, 1, 0, tzinfo=dt.UTC)
+    assert store.last_ingested("load", "DE-LU") is None
+
+
+def test_last_ingested_ignores_an_interrupted_write(temporary_store: Path) -> None:
+    store.write(price_rows([1.0]), "price")
+    zone_dir = temporary_store / "price" / "zone=DE-LU"
+    (zone_dir / ".gpa-interrupted.tmp").write_bytes(b"partial")
+
+    assert store.last_ingested("price", "DE-LU") == dt.datetime(2026, 6, 15, tzinfo=dt.UTC)
+
+
 def test_duckdb_view_exposes_the_partition_key_as_a_column() -> None:
     store.write(price_rows([10.0, 20.0], zone="DE-LU"), "price")
     store.write(price_rows([30.0], zone="FR"), "price")

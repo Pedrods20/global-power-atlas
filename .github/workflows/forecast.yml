@@ -24,10 +24,12 @@ jobs:
     timeout-minutes: 30
     env:
       # The public store and monthly site exports stay untouched. The forecast
-      # run receives the committed history as a seed and refreshes a private
-      # trailing window before reconciliation and issuance.
+      # run receives the committed history as a seed and catches it up from
+      # the seed's own checkpoint before reconciliation and issuance, so a
+      # stale monthly seed is recovered rather than capped at a fixed window.
       GPA_DATA_ROOT: /tmp/gpa-curated
       FORECAST_MODEL: ridge
+      # Revision overlap behind that checkpoint, not the length of the refresh.
       FORECAST_LOOKBACK: "7"
       FORECAST_DELIVERY_DATE: ""
 
@@ -66,6 +68,8 @@ jobs:
           cp -a data/curated/. "$GPA_DATA_ROOT/"
 
       - name: Refresh the DE-LU forecast inputs
+        # Prices are requested past now: D-1's whole curve is public before
+        # this morning run, and the panel drops an incomplete D-1 entirely.
         run: gpa ingest --zone DE-LU --days "$FORECAST_LOOKBACK"
 
       - name: Validate the isolated inputs

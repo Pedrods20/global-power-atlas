@@ -13,17 +13,20 @@ credential is not a failure.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
 
 from gpa import pipeline, store
+from gpa.forecast.panel import build_panel
 from gpa.pipeline import Outcome
 from gpa.schema import empty_frame
 from gpa.sources.base import MissingCredential, UpstreamError
-from gpa.zones import BR_PONTA, Region, Zone
+from gpa.zones import BR_PONTA, Region, Zone, get_zone
 
 START = dt.datetime(2026, 6, 1, tzinfo=dt.UTC)
 END = dt.datetime(2026, 6, 8, tzinfo=dt.UTC)
@@ -85,6 +88,56 @@ class FakeSource:
                 pl.lit("not a number").alias("load_mw")
             )
         return load_rows(zone.code, start, end)
+
+
+class PublishedPrices:
+    """Day-ahead prices as an auction releases them.
+
+    Each local delivery day becomes available whole at 13:00 market time on the
+    day before, after the noon gate, and nothing later than ``now`` exists.
+    """
+
+    name: str = "published"
+    datasets: tuple[str, ...] = ("price",)
+    max_window_days: int | None = None
+
+    def __init__(self, now: dt.datetime) -> None:
+        self.now = now
+        self.calls: list[tuple[dt.datetime, dt.datetime]] = []
+
+    def fetch(self, zone: Zone, dataset: str, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
+        self.calls.append((start, end))
+        market = ZoneInfo(zone.timezone)
+        stamps = pl.datetime_range(start, end, "1h", time_zone="UTC", eager=True, closed="left")
+        published = [
+            stamp
+            for stamp in stamps.to_list()
+            if dt.datetime.combine(
+                stamp.astimezone(market).date() - dt.timedelta(days=1), dt.time(13), market
+            )
+            <= self.now
+        ]
+        if not published:
+            return empty_frame("price")
+        hours = [int(stamp.timestamp()) // 3600 for stamp in published]
+        return pl.DataFrame(
+            {
+                "zone": [zone.code] * len(published),
+                "ts_utc": published,
+                "resolution_min": [60] * len(published),
+                "price": [30.0 + hour % 24 + 0.1 * (hour // 24) for hour in hours],
+                "currency": ["EUR"] * len(published),
+                "source": [self.name] * len(published),
+            },
+            schema={
+                "zone": pl.String,
+                "ts_utc": pl.Datetime("us", "UTC"),
+                "resolution_min": pl.Int16,
+                "price": pl.Float64,
+                "currency": pl.String,
+                "source": pl.String,
+            },
+        )
 
 
 def fake_zone(code: str = "ZZ-TEST", source: str = "fake") -> Zone:
@@ -337,6 +390,172 @@ def test_an_inverted_window_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None
 
     with pytest.raises(ValueError, match="must precede"):
         pipeline.ingest(start=END, end=START)
+
+
+def test_a_negative_lookback_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    install(monkeypatch, [fake_zone()], {"fake": FakeSource()})
+
+    with pytest.raises(ValueError, match="negative"):
+        pipeline.ingest(lookback_days=-1)
+
+
+# --- Checkpoint and publication horizon -------------------------------------
+
+NOW = dt.datetime(2026, 6, 30, 8, tzinfo=dt.UTC)  # 10:00 in Berlin, before the D-1 gate
+
+
+def pin_clock(monkeypatch: pytest.MonkeyPatch, now: dt.datetime = NOW) -> None:
+    monkeypatch.setattr(pipeline, "now_utc", lambda: now)
+
+
+def delivery_features(zone: Zone, delivery: dt.date) -> pl.DataFrame:
+    prepared = build_panel(store.read("price", zone.code), zone, delivery_date=delivery)
+    return prepared.frame.filter(pl.col("local_date") == delivery)
+
+
+def test_a_cold_store_starts_the_lookback_before_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = FakeSource()
+    install(monkeypatch, [fake_zone()], {"fake": source})
+    pin_clock(monkeypatch)
+
+    [result] = pipeline.ingest(lookback_days=7)
+
+    assert source.calls == [(NOW - dt.timedelta(days=7), NOW)]
+    assert (result.start, result.end) == (NOW - dt.timedelta(days=7), NOW)
+    assert "2026-06-23 08:00 to 2026-06-30 08:00 UTC" in str(result)
+
+
+def test_a_run_after_missed_schedules_resumes_from_the_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three months without a run are recovered in one call. A fixed trailing
+    window would have fetched the last week and left the rest missing forever."""
+    zone = fake_zone()
+    seeded_until = NOW - dt.timedelta(days=90)
+    store.write(load_rows(zone.code, seeded_until - dt.timedelta(days=3), seeded_until), "load")
+    source = FakeSource()
+    install(monkeypatch, [zone], {"fake": source})
+    pin_clock(monkeypatch)
+
+    pipeline.ingest(lookback_days=7)
+
+    resume = seeded_until - dt.timedelta(hours=1) - dt.timedelta(days=7)
+    assert source.calls[0][0] == resume
+    assert source.calls[-1][1] == NOW
+    assert all(first[1] == second[0] for first, second in pairwise(source.calls))
+    stamps = store.read("load", zone.code)["ts_utc"]
+    assert stamps.min() == resume
+    assert stamps.max() == NOW - dt.timedelta(hours=1)
+    assert stamps.diff().drop_nulls().unique().to_list() == [dt.timedelta(hours=1)]
+
+
+def test_a_recent_checkpoint_still_refetches_the_revision_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    zone = fake_zone()
+    store.write(
+        load_rows(zone.code, NOW - dt.timedelta(days=1), NOW - dt.timedelta(hours=2)), "load"
+    )
+    source = FakeSource()
+    install(monkeypatch, [zone], {"fake": source})
+    pin_clock(monkeypatch)
+
+    pipeline.ingest(lookback_days=7)
+
+    assert source.calls == [(NOW - dt.timedelta(hours=3) - dt.timedelta(days=7), NOW)]
+
+
+def test_only_datasets_published_before_delivery_extend_past_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    zone = replace(fake_zone(), sources={"load": "fake", "price": "published"})
+    load, prices = FakeSource(), PublishedPrices(NOW)
+    install(monkeypatch, [zone], {"fake": load, "published": prices})
+    pin_clock(monkeypatch)
+
+    pipeline.ingest(lookback_days=1)
+
+    assert load.calls[-1][1] == NOW
+    assert prices.calls[-1][1] == NOW + dt.timedelta(days=pipeline.PUBLISHED_AHEAD_DAYS["price"])
+
+
+def test_prices_published_ahead_of_now_do_not_move_the_overlap_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the D-1 auction the store holds delivery day D, which is later than
+    now. The overlap must still count back from now, not from tomorrow."""
+    afternoon = NOW + dt.timedelta(hours=6)  # 16:00 in Berlin, after publication
+    zone = get_zone("DE-LU")
+    prices = PublishedPrices(afternoon)
+    install(monkeypatch, [zone], {"energy_charts": prices})
+    pin_clock(monkeypatch, afternoon)
+
+    pipeline.ingest(["DE-LU"], ["price"], lookback_days=2)
+    assert store.last_ingested("price", "DE-LU") == dt.datetime(2026, 7, 1, 21, tzinfo=dt.UTC)
+
+    pipeline.ingest(["DE-LU"], ["price"], lookback_days=2)
+    assert prices.calls[-1] == (
+        afternoon - dt.timedelta(days=2),
+        afternoon + dt.timedelta(days=2),
+    )
+
+
+def test_explicit_bounds_ignore_the_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    zone = fake_zone()
+    store.write(load_rows(zone.code, END, END + dt.timedelta(days=30)), "load")
+    source = FakeSource()
+    install(monkeypatch, [zone], {"fake": source})
+
+    pipeline.ingest(start=START, end=END)
+
+    assert source.calls == [(START, END)]
+
+
+def test_an_explicit_end_on_an_empty_store_counts_back_the_lookback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = FakeSource()
+    install(monkeypatch, [fake_zone()], {"fake": source})
+
+    pipeline.ingest(end=END, lookback_days=7)
+
+    assert source.calls == [(START, END)]
+
+
+def test_a_morning_run_keeps_the_previous_days_already_published_prices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At 10:00 on D-1 the whole of D-1 has been public since the day before.
+    Its daily aggregates are features for delivery day D, and the panel drops
+    an incomplete day entirely, so a request capped at now left D without them."""
+    zone = get_zone("DE-LU")
+    install(monkeypatch, [zone], {"energy_charts": PublishedPrices(NOW)})
+    pin_clock(monkeypatch)
+
+    pipeline.ingest(["DE-LU"], ["price"], lookback_days=10)
+
+    target = delivery_features(zone, dt.date(2026, 7, 1))
+    assert target.height == 24
+    assert target.select("price_d1", "price_d1_mean", "price_d1_end").null_count().row(0) == (
+        0,
+        0,
+        0,
+    )
+    assert target["price"].null_count() == 24
+
+
+def test_capping_prices_at_now_reproduces_the_missing_previous_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control for the test above: the old ceiling starves day D."""
+    zone = get_zone("DE-LU")
+    install(monkeypatch, [zone], {"energy_charts": PublishedPrices(NOW)})
+
+    pipeline.ingest(["DE-LU"], ["price"], start=NOW - dt.timedelta(days=10), end=NOW)
+
+    target = delivery_features(zone, dt.date(2026, 7, 1))
+    assert target["price_d1_mean"].null_count() == 24
+    assert target["price_d1"].null_count() > 0
 
 
 # --- Reporting --------------------------------------------------------------

@@ -136,15 +136,24 @@ def zones(
 def ingest(
     zone: ZoneOption = None,
     dataset: DatasetOption = None,
-    days: Annotated[int, typer.Option(help="Trailing days to refetch.")] = 7,
+    days: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Revision overlap: days refetched behind the stored checkpoint, or behind "
+            "now when nothing is stored yet.",
+        ),
+    ] = 7,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Fetch but write nothing.")] = False,
     verbose: VerboseOption = False,
 ) -> None:
-    """Fetch a recent window and upsert it into the store.
+    """Catch up from each target's stored checkpoint and upsert into the store.
 
-    Refetching a trailing window rather than only yesterday is deliberate:
-    providers publish on a lag and revise afterwards, and the store upserts, so
-    overlapping runs converge on the restated figures.
+    Each zone and dataset resumes from the latest instant it already holds, so
+    a run after missed schedules recovers the whole gap. ``--days`` of overlap
+    are refetched because providers publish on a lag and revise afterwards, and
+    the store upserts. Day-ahead prices are requested past now, because the
+    next delivery day is published before it starts.
     """
     _configure_logging(verbose)
     results = pipeline.ingest(zone, dataset, lookback_days=days, dry_run=dry_run)

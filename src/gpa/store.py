@@ -36,6 +36,7 @@ __all__ = [
     "coverage",
     "curated_root",
     "dataset_dir",
+    "last_ingested",
     "partition_path",
     "read",
     "write",
@@ -165,6 +166,20 @@ def available_months(dataset: str, zone: str) -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(p.stem for p in directory.glob("*.parquet"))
+
+
+def last_ingested(dataset: str, zone: str) -> dt.datetime | None:
+    """Latest stored instant for a zone, or ``None`` when nothing is stored.
+
+    This is the ingestion checkpoint. It is read from the partitions themselves,
+    so it can never claim data the store does not hold.
+    """
+    directory = dataset_dir(dataset) / f"zone={zone}"
+    files = sorted(directory.glob("*.parquet")) if directory.is_dir() else []
+    if not files:
+        return None
+    latest = pl.scan_parquet(files).select(pl.col("ts_utc").max()).collect().item()
+    return latest.astimezone(dt.UTC) if isinstance(latest, dt.datetime) else None
 
 
 def read(

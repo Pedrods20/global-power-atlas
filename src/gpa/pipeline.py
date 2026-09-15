@@ -17,20 +17,41 @@ import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 
 from gpa import store
 from gpa.schema import SchemaError, SchemaErrors, validate
 from gpa.sources import MissingCredential, SourceError, get_source
 from gpa.zones import ZONES, Zone, get_zone
 
-__all__ = ["IngestResult", "Outcome", "ingest", "resolve_targets", "summarise"]
+__all__ = [
+    "PUBLISHED_AHEAD_DAYS",
+    "IngestResult",
+    "Outcome",
+    "ingest",
+    "now_utc",
+    "resolve_targets",
+    "resolve_window",
+    "summarise",
+]
 
 log = logging.getLogger(__name__)
 
-# Providers publish on a lag and revise afterwards, so a daily run re-fetches a
-# trailing window rather than only yesterday. The store upserts, so overlapping
-# runs converge instead of duplicating.
+# Providers publish on a lag and revise afterwards, so every run re-fetches this
+# many days behind the earlier of now and the stored checkpoint. The store
+# upserts, so overlapping runs converge instead of duplicating.
 DEFAULT_LOOKBACK_DAYS = 7
+
+PUBLISHED_AHEAD_DAYS: dict[str, int] = {"price": 2}
+"""Days past now worth requesting for datasets cleared before delivery.
+
+A day-ahead auction publishes the whole next delivery day at once, so capping a
+request at the current instant drops prices that are already public. Two days
+covers the next local delivery day whatever hour a run starts. Providers return
+only what is published: Energy-Charts answered a request four days ahead with
+the same rows as two days ahead (checked 15 September 2026). Load and
+generation are measurements, so they never extend past now.
+"""
 
 # Requesting several years in one call times out on most providers and produces
 # an unhelpfully large failure. Backfills are cut into chunks and each chunk is
@@ -58,6 +79,8 @@ class IngestResult:
     outcome: Outcome
     rows: int = 0
     detail: str = ""
+    start: dt.datetime | None = None
+    end: dt.datetime | None = None
 
     @property
     def ok(self) -> bool:
@@ -67,8 +90,12 @@ class IngestResult:
     def __str__(self) -> str:
         head = f"{self.zone:9s} {self.dataset:11s} via {self.source:16s} {self.outcome.value:8s}"
         if self.outcome is Outcome.WRITTEN:
-            return f"{head} {self.rows:>8,d} rows"
-        return f"{head} {self.detail}" if self.detail else head
+            body = f"{head} {self.rows:>8,d} rows"
+        else:
+            body = f"{head} {self.detail}" if self.detail else head
+        if self.start is not None and self.end is not None:
+            body = f"{body} [{self.start:%Y-%m-%d %H:%M} to {self.end:%Y-%m-%d %H:%M} UTC]"
+        return body
 
 
 def resolve_targets(
@@ -100,6 +127,42 @@ def resolve_targets(
     return targets
 
 
+def now_utc() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
+
+
+def resolve_window(
+    zone: Zone,
+    dataset: str,
+    *,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    now: dt.datetime | None = None,
+) -> tuple[dt.datetime, dt.datetime]:
+    """The window one target should fetch.
+
+    ``end`` defaults to now plus :data:`PUBLISHED_AHEAD_DAYS` for the dataset.
+    ``start`` defaults to ``lookback_days`` before the earliest of the ceiling
+    and the last stored instant, so a run after missed schedules resumes from
+    what the store actually holds instead of stopping at a fixed trailing
+    window. An empty store starts ``lookback_days`` before the ceiling.
+
+    The checkpoint is the latest stored instant, derived from the Parquet files
+    rather than a separate watermark that could disagree with them. It cannot
+    see holes older than the lookback behind it; ``gpa backfill`` repairs those.
+    """
+    reference = now or now_utc()
+    ceiling = end if end is not None else reference
+    if end is None:
+        end = reference + dt.timedelta(days=PUBLISHED_AHEAD_DAYS.get(dataset, 0))
+    if start is None:
+        last = store.last_ingested(dataset, zone.code)
+        anchor = ceiling if last is None else min(ceiling, last)
+        start = anchor - dt.timedelta(days=lookback_days)
+    return start, end
+
+
 def ingest(
     zones: Sequence[str] | None = None,
     datasets: Sequence[str] | None = None,
@@ -115,10 +178,11 @@ def ingest(
     Args:
         zones: Zone codes, or ``None`` for all.
         datasets: Dataset names, or ``None`` for all a zone declares.
-        start: Inclusive UTC-aware lower bound. Defaults to ``lookback_days``
-            before ``end``.
-        end: Exclusive UTC-aware upper bound. Defaults to now.
-        lookback_days: Window length when ``start`` is not given.
+        start: Inclusive UTC-aware lower bound for every target. Defaults to a
+            per-target checkpoint; see :func:`resolve_window`.
+        end: Exclusive UTC-aware upper bound for every target. Defaults to now,
+            extended for datasets published ahead of delivery.
+        lookback_days: Revision overlap behind the checkpoint.
         chunk_days: Maximum days fetched per request.
         dry_run: Fetch and validate but write nothing. Used to prove an adapter
             works without touching the repository.
@@ -127,18 +191,19 @@ def ingest(
         One result per target, in the order they were attempted.
 
     Raises:
-        ValueError: If the window is empty or a bound is naive.
+        ValueError: If the window is empty, a bound is naive or the lookback is
+            negative.
         KeyError: If a requested zone is not registered.
     """
-    end = end or dt.datetime.now(dt.UTC)
-    start = start or end - dt.timedelta(days=lookback_days)
-
     for name, bound in (("start", start), ("end", end)):
-        if bound.tzinfo is None:
+        if bound is not None and bound.tzinfo is None:
             raise ValueError(f"{name} must be timezone-aware")
-    if start >= end:
+    if start is not None and end is not None and start >= end:
         raise ValueError(f"start {start.isoformat()} must precede end {end.isoformat()}")
+    if lookback_days < 0:
+        raise ValueError("lookback_days cannot be negative")
 
+    reference = now_utc()
     results: list[IngestResult] = []
 
     for zone, dataset, source_name in resolve_targets(zones, datasets):
@@ -150,43 +215,34 @@ def ingest(
             )
             continue
 
+        window_start, window_end = resolve_window(
+            zone, dataset, start=start, end=end, lookback_days=lookback_days, now=reference
+        )
+        record = partial(
+            IngestResult, zone.code, dataset, source_name, start=window_start, end=window_end
+        )
+
+        if window_start >= window_end:
+            results.append(record(Outcome.FAILED, detail="resolved window is empty"))
+            continue
+
         try:
-            rows = _ingest_one(source, zone, dataset, start, end, chunk_days, dry_run)
+            rows = _ingest_one(source, zone, dataset, window_start, window_end, chunk_days, dry_run)
         except MissingCredential as exc:
             log.warning("skipping %s %s: %s", zone.code, dataset, exc)
-            results.append(
-                IngestResult(zone.code, dataset, source_name, Outcome.SKIPPED, detail=str(exc))
-            )
+            results.append(record(Outcome.SKIPPED, detail=str(exc)))
         except (SchemaError, SchemaErrors) as exc:
             log.error("%s %s failed validation: %s", zone.code, dataset, exc)
-            results.append(
-                IngestResult(
-                    zone.code,
-                    dataset,
-                    source_name,
-                    Outcome.FAILED,
-                    detail=f"schema violation: {_first_line(exc)}",
-                )
-            )
+            results.append(record(Outcome.FAILED, detail=f"schema violation: {_first_line(exc)}"))
         except SourceError as exc:
             log.error("%s %s failed: %s", zone.code, dataset, exc)
-            results.append(
-                IngestResult(zone.code, dataset, source_name, Outcome.FAILED, detail=str(exc))
-            )
+            results.append(record(Outcome.FAILED, detail=str(exc)))
         except Exception as exc:
             log.exception("%s %s raised an unexpected error", zone.code, dataset)
-            results.append(
-                IngestResult(
-                    zone.code,
-                    dataset,
-                    source_name,
-                    Outcome.FAILED,
-                    detail=f"{type(exc).__name__}: {exc}",
-                )
-            )
+            results.append(record(Outcome.FAILED, detail=f"{type(exc).__name__}: {exc}"))
         else:
             outcome = Outcome.WRITTEN if rows else Outcome.EMPTY
-            results.append(IngestResult(zone.code, dataset, source_name, outcome, rows=rows))
+            results.append(record(outcome, rows=rows))
 
     return results
 
