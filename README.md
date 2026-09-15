@@ -70,6 +70,13 @@ Reproduce with `gpa export --check` against the committed snapshot.
 - **Battery:** explicit power, energy, efficiency, SOC, terminal SOC and
   one-cycle-per-day constraints. Forecast-guided dispatch is settled against
   observed prices; perfect foresight is an upper bound under the same physics.
+- **Market structure:** the battery page also correlates DE-LU's own
+  renewable and storage capacity (Energy-Charts, including Germany's official
+  2030 targets) against solar's capture-rate erosion (0.93 to 0.51,
+  2019-2026), the on/off-peak spread going negative, and this project's own
+  arbitrage margin. Competition from Germany's fast-growing battery fleet is
+  not yet visibly compressing that margin, stated as "not detectable against
+  a larger co-moving trend," not "no effect."
 - **Time and units:** UTC-aware source timestamps are interpreted through each
   market's local clock. Interval duration is carried explicitly, including the
   European hourly-to-quarter-hour transition.

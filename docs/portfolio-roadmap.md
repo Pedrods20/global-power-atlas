@@ -39,8 +39,18 @@ to a market-mechanism study (cannibalisation via the already-built,
 never-wired `capture_rate`; capacity from Energy-Charts' `/installed_power`,
 which already carries the government's own EEG2023/WindSeeG targets) once
 research showed the heavier approach added engineering risk without adding
-market-analytical signal. **Next:** implement the plan recorded immediately
-below.
+market-analytical signal. **P3 is now done, all 8 steps**, committed and
+verified in a real browser: solar's capture rate fell 0.93 -> 0.51 (2019-2026)
+as capacity grew, correlated with the price-shape metrics (r=-0.89 to -0.91);
+every 2030 policy target already exceeds anything realised; battery-fleet
+competition is not yet visibly compressing this project's own arbitrage
+margin (a positive, not negative, correlation so far); two real sourced
+citations (BNEF battery pricing, a BNetzA auction result) and a new
+"Is this margin durable" section on `site/battery.md`. Full evidence below.
+**Next:** no further task has been requested; the open items are the
+capacity/renewables portfolio direction's own next natural step (P4,
+packaging the evidence) or the still-undecided fundamentals-adoption
+question from part B above -- present both as an open choice, do not assume.
 
 ### DE-LU capacity/renewables/storage scenario study (P3) — recorded before implementation, rethought before coding
 
@@ -161,11 +171,12 @@ paragraph; wiring capacity data into the short-term day-ahead forecast panel
 fundamentals ablation as a new frozen release (a separate, still-open
 decision); any live/pilot inference.
 
-### P3 handoff evidence — partial (steps 1-4 of 8), committed and run
+### P3 handoff evidence — done (all 8 steps), committed and run
 
-Steps 1 (capacity data), 2 (cannibalisation), 3 (capacity-to-price-shape
-correlation) and 4 (battery competition vs. arbitrage margin) of the plan
-above; steps 5-7 (cost context, citations, site narrative) are not started.
+All eight steps of the plan above are complete: capacity data, cannibalisation,
+capacity-to-price-shape correlation, battery competition vs. arbitrage margin,
+light cost context, an auction citation, the site narrative and final
+verification.
 
 **Step 1.** `EnergyChartsSource.fetch_installed_power(zone, *, time_step)` in
 `src/gpa/sources/energy_charts.py`, and `gpa.capacity` (`reference_root`,
@@ -305,8 +316,72 @@ that case caught it immediately. `gpa export` regenerates `capacity.parquet`,
 alongside the existing tables, checked into `site/data/` so `gpa export
 --check` keeps passing, even though no site page reads any of them yet.
 
-**Not done in this increment, deliberately:** cost context (step 5), auction
-citations (step 6), or site narrative (step 7).
+**Steps 5-6 (cost context and auction citation), sourced and verified before
+writing a sentence.** Two real, dated, primary-sourced figures, each fetched
+and independently confirmed against the primary page rather than trusted from
+a search summary:
+
+- BloombergNEF's 2025 Lithium-Ion Battery Price Survey (published 9 December
+  2025): utility-scale stationary-storage battery pack prices fell 45% in a
+  single year, to $70/kWh in 2025 — the sharpest drop of any segment BNEF
+  tracks. Used only as qualitative context (a falling barrier to adding
+  competing capacity), not converted into a derived EUR/MWh cycling-cost
+  figure: that would have needed an unsourced cycle-life assumption stacked
+  on an unsourced FX rate, compounding uncertainty into something that reads
+  as more precise than it is. An academic-paper degradation-cost estimate
+  found earlier (~$6-17/MWh) was deliberately **not** cited: its PDF could not
+  be parsed to verify the number against its primary source, and this
+  project's own standing rule is not to cite a figure it could not verify.
+- Bundesnetzagentur's most recent onshore wind auction (1 May 2026): average
+  reference value 5.06 ct/kWh (EUR 50.6/MWh), from the consolidated
+  per-technology auction statistics found during the original planning
+  research — no xlsx parser, no pipeline, looked up and cited by hand as
+  planned. Verified the EEG sliding-market-premium mechanism (reference value
+  minus monthly market value, zero premium in negative-price hours) before
+  writing the comparison sentence, so the auction figure is not presented as
+  a fixed offtake price it is not.
+
+**Step 7 (site narrative), added to `site/battery.md`.** A new "Is this
+margin durable as the market changes?" section, placed before "Dispatch and
+study boundaries" per the roadmap's original placement ("within the battery
+page"), grounded only in the six tables built in steps 1-4 plus the two
+citations above -- every number in it is either a live JS computation off a
+loaded Parquet table or one of the two hand-verified citations, none
+hand-typed. Also fixed a real, unrelated bug found while editing this file: an
+existing citation link to "NREL ATB 2024" pointed at `atb.nlr.gov` (a typo),
+not the real `atb.nrel.gov`.
+
+Verified in a real browser, not just a static build: `npm run build` (catches
+template/JS syntax errors) and `npm run test:browser` (Playwright against a
+live `observable preview` server) both pass at both viewports, with two new
+assertions added to `scripts/browser-smoke.mjs` for the new section (heading
+text present, no leaked `NaN`/`undefined`). The rendered prose was read
+directly out of the live DOM (not assumed from source) and matches the
+real computed figures, e.g. solar capture rate "92.8% ... to 51.1%", the
+spread "EUR 11/MWh ... to EUR -14/MWh", and the default 4h battery's
+competition correlation "r=0.35, n=6 years, 2020-2025".
+
+**Step 8 (final verification).** Added a closing paragraph stating explicitly
+what could make the currently-selected duration's case less attractive as the
+market keeps changing, per the roadmap's own acceptance criteria -- reactive
+to the page's own duration selector, not a fixed claim about one duration.
+One drafting error this caught in itself: an early version claimed the
+battery fleet was "an order of magnitude away from its 2030 target," but no
+such target exists in the `/installed_power` data (EEG sets auction targets
+for solar and wind, not batteries) -- caught before committing and replaced
+with the real, verified figure (rated power grew roughly tenfold, 2020-2025).
+Full `pytest`/`ruff check`/`mypy` clean on the whole repository. `gpa export
+--check` passes against the committed `site/data/`. README.md's Research
+design section gained one summary bullet for this work, per this project's
+standing practice of refreshing README and this roadmap together when a piece
+of work finishes.
+
+**What P3 is, in the end, versus the original roadmap text:** a market-
+mechanism study (cannibalisation, capacity-price correlation, battery
+competition, sourced context), not the original capacity-ledger-plus-
+asset-screening scenario brief with three named growth paths. That
+reframing was a deliberate, recorded decision (see above), not scope lost
+along the way.
 
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 

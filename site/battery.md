@@ -18,6 +18,12 @@ const comparisons = [...await FileAttachment("data/battery_comparisons.parquet")
 const costs = [...await FileAttachment("data/battery_costs.parquet").parquet()];
 const stresses = [...await FileAttachment("data/battery_sensitivities.parquet").parquet()];
 const coverage = [...await FileAttachment("data/battery_coverage.parquet").parquet()];
+const cannibalisation = [...await FileAttachment("data/cannibalisation.parquet").parquet()];
+const capacityYearly = [...await FileAttachment("data/capacity_price_yearly.parquet").parquet()];
+const capacityCorrelation = [...await FileAttachment("data/capacity_price_correlation.parquet").parquet()];
+const extrapolationFlags = [...await FileAttachment("data/capacity_extrapolation_flags.parquet").parquet()];
+const competitionCorrelation = [...await FileAttachment("data/battery_competition_correlation.parquet").parquet()];
+const gw = (value) => value == null ? "n/a" : value.toFixed(1);
 const labels = new Map([
   ["ridge", "Ridge"], ["lightgbm", "LightGBM"],
   ["naive_previous_day", "Previous day"], ["naive_previous_week", "Previous week"],
@@ -159,7 +165,7 @@ renderTable("battery-sensitivities", stresses.filter((d) => asset(d) && d.strate
 ```
 
 The **85% efficiency** case uses a technical reference from
-[NREL ATB 2024](https://atb.nlr.gov/electricity/2024/utility-scale_battery_storage),
+[NREL ATB 2024](https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage),
 not a claim about this hypothetical asset. The **50% signal** case halves each
 fitted forecast's deviation from the previous-day forecast, without using
 realised prices. It need not worsen MAE or profit: this is a signal-dependence
@@ -217,6 +223,98 @@ do not choose an investment simply because its gross margin is larger.
 Treat 4h as a candidate for a follow-up asset business case, not the proven
 optimal duration. Project CAPEX, fixed OPEX, availability terms, lifetime
 degradation and additional revenues are required before ranking investments.
+
+## Is this margin durable as the market changes?
+
+```js
+const solarCannibal = cannibalisation.filter((d) => d.fuel === "solar").sort((a, b) => a.period.localeCompare(b.period));
+const windCannibal = cannibalisation.filter((d) => d.fuel === "wind").sort((a, b) => a.period.localeCompare(b.period));
+const firstSolar = solarCannibal[0];
+const lastSolar = solarCannibal[solarCannibal.length - 1];
+const lastWind = windCannibal[windCannibal.length - 1];
+const yearlyByYear = new Map(capacityYearly.map((d) => [d.year, d]));
+const firstSolarYear = yearlyByYear.get(firstSolar.period);
+const lastSolarYear = yearlyByYear.get(lastSolar.period);
+const solarCapacityMultiple = lastSolarYear.solar_capacity_gw / firstSolarYear.solar_capacity_gw;
+const solarCaptureCorr = capacityCorrelation.find((d) => d.x === "solar_capacity_gw" && d.y === "solar_capture_rate");
+const spreadCorr = capacityCorrelation.find((d) => d.x === "solar_capacity_gw" && d.y === "spread_pct_of_price");
+const windCaptureCorr = capacityCorrelation.find((d) => d.x === "wind_capacity_gw" && d.y === "wind_capture_rate");
+const solarTarget = extrapolationFlags.find((d) => d.technology === "Solar AC");
+const windOnshoreTarget = extrapolationFlags.find((d) => d.technology === "Wind onshore");
+const windOffshoreTarget = extrapolationFlags.find((d) => d.technology === "Wind offshore");
+const foresightCompetition = competitionCorrelation.find((d) => d.strategy === "perfect_foresight" && d.energy_mwh === duration);
+```
+
+Solar's own capture rate — what a solar generator actually earns, divided by
+the flat average price — fell from **${pct(firstSolar.capture_rate)}** in
+${firstSolar.period} to **${pct(lastSolar.capture_rate)}** in ${lastSolar.period},
+while DE-LU's installed solar capacity grew roughly **${solarCapacityMultiple.toFixed(1)}×**
+(correlation ${solarCaptureCorr.pearson_r.toFixed(2)}, n=${solarCaptureCorr.n}
+complete years, ${solarCaptureCorr.fitted_year_min}-${solarCaptureCorr.fitted_year_max}).
+The on/off-peak spread moved with it, from **EUR ${euro(firstSolarYear.spread)}/MWh**
+in ${firstSolar.period} to **EUR ${euro(lastSolarYear.spread)}/MWh** in
+${lastSolar.period} (correlation ${spreadCorr.pearson_r.toFixed(2)}) — on-peak
+hours are now, on average, *cheaper* than off-peak, the textbook signature of
+solar cannibalisation. Wind shows no comparable trend
+(correlation ${windCaptureCorr.pearson_r.toFixed(2)}): its flatter daily and
+seasonal output self-cannibalises far less than solar's midday concentration.
+
+This is a real, already-visible co-movement, not a fitted causal model: with
+only ${solarCaptureCorr.n} complete annual points, most series that both trend
+over the period will correlate whether or not one drives the other.
+
+Government targets assume this trend continues, and then some. DE-LU's
+realised solar capacity has never exceeded **${gw(solarTarget.realised_max_gw)} GW**
+(${solarTarget.realised_max_year}); Germany's EEG 2023 target for 2030 is
+**${gw(solarTarget.planned_2030_gw)} GW**. Onshore wind's realised ceiling is
+**${gw(windOnshoreTarget.realised_max_gw)} GW** against a ${gw(windOnshoreTarget.planned_2030_gw)} GW
+target; offshore wind's is **${gw(windOffshoreTarget.realised_max_gw)} GW**
+against **${gw(windOffshoreTarget.planned_2030_gw)} GW**. Every one of these
+targets is an extrapolation beyond anything this project's own correlation is
+fitted on — a real gap to weigh against the trend above, not a forecast of it.
+
+Does competition from other batteries already show up as compressed arbitrage
+margin? Not yet, in this sample. For the selected ${duration}h battery,
+perfect-foresight margin correlates **positively** with Germany's own battery
+fleet (r=${foresightCompetition.pearson_r.toFixed(2)}, n=${foresightCompetition.n}
+years, ${foresightCompetition.fitted_year_min}-${foresightCompetition.fitted_year_max};
+the same sign holds for the forecast-driven strategies too) — not negatively.
+The same years saw the 2021-2022 fuel-price shock and the cannibalisation
+above expand the arbitrage opportunity faster than a still-small competing
+fleet could compress it. **This is not evidence that competition does not
+erode margin**, only that, so far, a much larger co-moving trend swamps
+whatever effect it may already be having.
+
+That fleet is growing fast, and batteries just got a lot cheaper: utility-scale
+stationary-storage pack prices fell 45% in a single year, to $70/kWh in 2025
+([BloombergNEF, 2025 Lithium-Ion Battery Price Survey](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/),
+published 9 December 2025) — the sharpest drop of any segment BNEF tracks. A
+falling barrier to adding competing capacity is exactly the condition under
+which the "not yet" above would be expected to change.
+
+Auction results add one more data point, with a caveat attached. Germany's
+most recent onshore wind auction (1 May 2026) cleared at an average reference
+value of 5.06 ct/kWh — EUR 50.6/MWh
+([Bundesnetzagentur, consolidated onshore wind auction statistics](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html)),
+well below DE-LU's realised ${lastWind.period} wind capture price of
+**EUR ${euro(lastWind.capture_price)}/MWh**. This is not a fixed offtake price:
+EEG's sliding market premium tops a project up to the reference value only
+when the wholesale price is below it, and pays nothing in negative-price hours
+— so a reference value under today's capture price does not by itself mean new
+wind is unprofitable at the margin, only that its guaranteed floor sits well
+under what the market has recently paid.
+
+**What would make the ${duration}h case above less attractive.** Its margin
+is currently earned in a market where volatility has been growing faster than
+competition — reverse either half of that and the case weakens. A calmer
+price shape (the gas-crisis premium unwinding) or storage finally growing past
+the point where it visibly compresses spreads rather than just riding them
+would shrink the spread this battery is paid to exploit, not just this
+project's forecast advantage over a naive strategy. None of the correlations
+above are strong enough, at n=${foresightCompetition.n} years, to say when
+that turn arrives — only that a battery fleet whose own rated power grew
+roughly tenfold in five years, now getting markedly cheaper to add to, makes
+it a real possibility within this decade rather than a remote one.
 
 ## Dispatch and study boundaries
 

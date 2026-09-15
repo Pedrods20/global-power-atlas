@@ -46,6 +46,10 @@ try {
           await expect(cumulative.locator('g[aria-label="line"] path')).toHaveCount(7);
           await page.locator('main select').first().selectOption({index: 2});
           await expect(cumulative).toContainText('4h battery');
+          await expect(page.locator('main')).toContainText('Is this margin durable as the market changes?');
+          await expect(page.locator('main')).toContainText('solar cannibalisation');
+          await expect(page.locator('main')).not.toContainText('NaN');
+          await expect(page.locator('main')).not.toContainText('undefined');
         } catch (error) {
           errors.push(JSON.stringify({route, width: viewport.width, error: `Battery evidence: ${error.message}`}));
         }
