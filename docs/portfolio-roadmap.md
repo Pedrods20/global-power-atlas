@@ -11,14 +11,13 @@ request. This section is the single implementation log; do not create parallel
 STATE/TODO/handoff documents.
 
 **Current state: A/B/C/D/E implemented, tested and committed locally on
-`main` (E is `55e7543`); F/G pending, plus one pre-push blocker.**
+`main` (E is `55e7543`; its snapshot-size follow-up is `bb33212`); F/G pending.**
 P0 and P1 are not complete as whole priorities. Nothing has been pushed to a
 remote; no public export, committed data ingestion or prospective issuance
-occurred. Before any push, resolve the **issue-snapshot size blocker** in "E
-handoff evidence" below; then continue at F. Do not reopen the battery engine,
-the ledger/provenance/attempts core or the ingestion checkpoint: they are
-committed and green (325 tests, ruff check/format and mypy strict clean,
-87.32% coverage).
+occurred. Resume at **F**. Do not reopen the battery engine, the
+ledger/provenance/attempts core or the ingestion checkpoint: they are
+committed and green (328 tests, ruff check/format and mypy strict clean,
+87.45% coverage).
 
 ### D execution plan — recorded before implementation
 
@@ -307,41 +306,63 @@ Limits and follow-ups:
 - The checkpoint is the latest stored instant. A hole older than the overlap
   behind it is not detected; `gpa backfill` or the existing structural-coverage
   audit in `ingest.yml` remain the repair path.
-- **Pre-push blocker, found while testing E (a D follow-up).** `gpa issue`
-  snapshots the full stored price, load and generation history for the zone
-  (`cli.py` `sources[dataset] = store.read(...)`, written by
-  `provenance.save_snapshot`). For DE-LU that is about 4 MB per issue, and
-  `forecast.yml` commits `data/forecast_issues` daily: roughly 1.5 GB of git
-  history a year. Fix before pushing — for example snapshot only the rows the
-  panel actually used, or keep snapshots out of git — without weakening
-  `read_snapshot`'s checksum verification.
 - **For F.** The export's `data_as_of` is the maximum `last_ts_utc` across all
   datasets, so after the next ingest it will show the next delivery day's
   prices as the "as of" date. Label price coverage as "prices through delivery
   day" or compute `data_as_of` from measured datasets.
 
-### Session close — 15 September 2026 (fourth checkpoint, E done)
+### Snapshot-size follow-up — done, committed as `bb33212`
 
-The user authorized implementing E after it was scoped. E is committed; no
-push, committed ingestion, public export or prospective issuance occurred. The
-only network access was the read-only Energy-Charts check above.
+Found while testing E, fixed the same session, before any push. `gpa issue`
+was snapshotting the zone's full stored price/load/generation history and the
+package's source code as plain per-issue files. Measured on real DE-LU
+history in a scratch git repository (not this one): about 4.6 MB per issue,
+projecting to roughly 1.6 GB of working-tree growth a year from
+`forecast.yml`'s daily commit — confirmed by simulating 30 real daily issues
+end to end, each verified through `read_snapshot`.
+
+The fix has two parts, both in `provenance.py`: large artifacts (source
+frames, the input panel, the source code) are now split by month (or by
+filename for code) and each part is written once to `root/blobs/<sha256>`,
+shared across every issue instead of copied into each one; and generation is
+filtered to `panel.RESIDUAL_LOAD_FUELS` (`wind`, `solar` — the only fuels
+`hourly_residual_load` reads) before it is stored, with an explicit check
+(comparing residual-load features computed from the full and the reduced
+generation, when load is also supplied) that fails the issue rather than
+archiving quietly if a future change ever makes that filter incomplete. Only
+`issued.parquet` and a small manifest remain per issue.
+
+Re-running the same 30-day simulation with the fix: **82 MB projected per
+year, about 20x smaller**, with every one of the 30 issues independently
+re-verified through `read_snapshot` (blob checksums, the code hash and the
+input fingerprint). Full suite 328 passed; ruff check/format and mypy strict
+clean; coverage 87.45%. No production data or git history was touched by
+either simulation — both ran in a scratch directory under a temporary git
+repository, deleted afterwards.
+
+### Session close — 15 September 2026 (fourth checkpoint, E and snapshot-size fix done)
+
+The user asked for the snapshot-size problem to be thought through, then to
+proceed. Both are committed; no push, committed ingestion, public export or
+prospective issuance occurred.
 
 To resume safely in a new session:
 
 1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas` and
-   run `git log --oneline -8` / `git status --short`. Expect a clean tree with
-   the E docs commit, `55e7543` (E), `ceaeac6` and `7e94fb3` (docs),
-   `c594b75`, `f2bb495` and `c893fa7` on `main`, all unpushed.
-2. Resolve the issue-snapshot size blocker before any push.
-3. Then F (frozen release and presentation, including the `data_as_of` label),
-   then G. Keep `.gpa/battery-studies/`; do not clean or overwrite it. Do not
-   start a prospective pilot until F's frozen release and the blocker are done.
+   run `git log --oneline -9` / `git status --short`. Expect a clean tree with
+   `bb33212` (snapshot size), `04dc377` (E docs), `55e7543` (E), `ceaeac6` and
+   `7e94fb3` (docs), `c594b75`, `f2bb495` and `c893fa7` on `main`, all unpushed.
+2. Start F: frozen release and presentation, including the `data_as_of` label
+   noted above. Write F's execution plan into this file before editing code,
+   the same way D's and E's plans were recorded before those increments.
+3. Then G. Keep `.gpa/battery-studies/`; do not clean or overwrite it. Do not
+   start a prospective pilot before F's frozen release exists.
 
 Suggested resume request:
 
-> Leia `docs/portfolio-roadmap.md`. A/B/C/D/E estão commitados. Resolva primeiro
-> o bloqueio do tamanho dos snapshots de emissão, depois registre o plano do
-> item F antes de alterar código. Não publique no GitHub sem eu pedir.
+> Leia `docs/portfolio-roadmap.md`. A/B/C/D/E e a correção do tamanho dos
+> snapshots estão commitados. Registre o plano do item F antes de alterar
+> código, depois implemente. Não publique no GitHub sem eu pedir.
 
 **First implementation increment:** make the battery accounting trustworthy and
 build the P1 economic-comparison layer on that corrected engine. This increment
@@ -354,7 +375,7 @@ research outputs must be frozen and reviewed before replacing public headlines.
 | B — Comparable strategies (P1) | Battery backtest adapter and tests | All five existing forecast models plus no trade and perfect foresight; 1/2/4 MWh; exactly the same complete settled days for every strategy; consistent actuals; no-trade keeps initial SOC | Done locally; common-sample and coverage tests passed |
 | C — Economic evidence (P1) | `src/gpa/battery_study.py`, tests and a local `battery-study` CLI | Daily margin, cost accounting, incremental value versus each fixed naive, downside/concentration, deterministic paired calendar-block bootstrap; costs explicitly labelled assumptions | Done locally; three historical studies saved and zero-cost study replayed |
 | D — Issuance provenance (P0) | `forecast/ledger.py`, `forecast/provenance.py`, `forecast/attempts.py`, `cli.py`, workflow/tests | Target-day feature hash, model parameters/version, input snapshot, late/failure/abstention policy, canonical issuance | **Done and committed** locally (`c893fa7`, `f2bb495`, `c594b75`); not pushed |
-| E — Input availability/history (P0) | Pipeline, sources, ingest/forecast workflows and tests | Full already-published curve, no unavailable targets, checkpoint catch-up and isolated persistent history | **Done and committed** locally (`55e7543`); not pushed. Snapshot-size blocker open before push |
+| E — Input availability/history (P0) | Pipeline, sources, ingest/forecast workflows and tests | Full already-published curve, no unavailable targets, checkpoint catch-up and isolated persistent history | **Done and committed** locally (`55e7543`, snapshot-size fix `bb33212`); not pushed |
 | F — Frozen release and presentation (P0/P1) | Snapshot/export, existing site pages, README/tests | Reproducible corrected release; honest date/coverage/cost labels; separate units; concise commercial summary | Pending after engine and provenance checks |
 | G — Remaining P1 sensitivities | Analysis/configuration/tests | Sourced/calibrated cost assumptions, availability/error stresses, model-selection/evaluation separation and a qualified duration recommendation | Pending after comparison layer |
 
@@ -393,11 +414,11 @@ Validation commands (PowerShell, repository root):
 npm run build
 ```
 
-**Next action — D and E are done; fix the issue-snapshot size blocker, then F.**
-D's provenance core and E's checkpoint catch-up and publication horizon are
-committed (see their handoff evidence above). The blocker is recorded under
-"E handoff evidence": each daily issue snapshots the zone's full stored
-history into git. Do not push or start a real pilot until it is resolved.
+**Next action — D and E are done; start F.** D's provenance core, E's
+checkpoint catch-up and publication horizon, and the content-addressed
+snapshot fix are all committed (see their handoff evidence above). Write F's
+execution plan into this file before editing code, the same discipline D and
+E followed.
 
 Then finish F's full-precision frozen research release and public presentation,
 and G's calibrated costs/availability/error stresses. The current C snapshots
