@@ -23,10 +23,17 @@ issuance or live pilot is authorized. **The DE-LU history extension is now
 re-frozen and reconciled** in release `b0e69bf47f6e230be9b5`; the prior
 `5e3c9f1a256ec73c62e2` release remains for provenance. The current headline
 pages and README now use the 2019-onward benchmark. The old session-close
-instructions below are retained as historical handoff evidence. **Next:**
-historical market regimes and pre-auction fundamentals (plan below), the step
-"Portfolio direction adopted from the review" (further below) names before the
-capacity/renewables/storage scenario study.
+instructions below are retained as historical handoff evidence. **Historical
+market regimes (A) is done** (`edb79d8`, forecast page narrative). **Pre-auction
+fundamentals (B) is done as an ablation, not adopted**: Ridge MAE 22.07 →
+~19.17 EUR/MWh, LightGBM 25.56 → ~20.55 EUR/MWh on the identical frozen test
+sample, driven mostly by a reversal in the negative-price regime; the
+scarcity regime gets worse for LightGBM. Full evidence below. The published
+release, README and site are unchanged; adopting this as a new frozen release
+is an explicitly separate, undone decision. **Next:** the capacity/renewables/
+storage scenario study, per "Portfolio direction adopted from the review"
+(further below) — or, first, a decision on whether to act on the fundamentals
+ablation.
 
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 
@@ -117,6 +124,94 @@ relabelled as a forecast.
 (D's live pilot boundary stays closed); outages, cross-border availability or
 fuel/carbon inputs (P2's own text defers those); adopting the ablation's
 result as the new frozen release (a later, separate decision).
+
+### Pre-auction fundamentals handoff evidence — done, committed and run
+
+Committed: `54c80a2` (engine wiring), `986c985` (hourly-aggregation fix, found
+before running the real ablation — see below), `b261455` (a performance fix
+to the same new code). The ablation itself ran clean but was **not saved as a
+snapshot**, per item 5: `data/experiments/b0e69bf47f6e230be9b5` is unchanged
+and still the published release.
+
+**Backfill.** `gpa backfill --zone DE-LU --dataset fundamentals --days 2810`
+(rate-limited, absorbed by the existing retry/backoff, same as history's own
+backfill) wrote 809,280 rows, 2019-01-05 to 2026-09-15, quarter-hourly
+throughout — Energy-Charts' forecast endpoint has never changed resolution,
+unlike `price`/`load`/`generation`. `gpa validate`: 575/575 partitions valid.
+`quality.report()`: 100% coverage, 0 gap hours, 0 invalid intervals, 0
+duplicate `(ts_utc, series)` keys, all three series. `store.read` size: DE-LU
+`fundamentals` adds a few MB to the committed store (measured, not yet
+finalized for commit — see below).
+
+**A real bug found before it reached the ablation.** `attach()` keys on
+`(local_date, local_hour)` and was only ever tested against synthetic
+hourly fixtures; real Energy-Charts fundamentals are quarter-hourly, so
+without a fix, three of every four quarter-hour forecast values would have
+been silently dropped by `attach()`'s `unique(keep="last")` tie-break rather
+than averaged. Caught by rewriting the tests with realistic quarter-hour
+fixtures (the artificial hourly ones used at first hid it completely) before
+running anything against real data. `from_store()` now averages sub-hourly
+rows into one duration-weighted hourly value per series and drops a clock
+hour outright rather than averaging a partial one.
+
+**Ablation.** `gpa backtest --zone DE-LU --scope all --include-fundamentals`,
+otherwise identical settings to the frozen release (`min_train_days=270`,
+`validation_days=90`, `lightgbm_refit_days=1`, same `end`), so both runs share
+the *exact* same 2,445-day test sample (2020-01-03 to 2026-09-12) and the
+same 58,645 scored cells. Feature count: 19 → 24 (the 5
+`FUNDAMENTAL_FEATURES`), confirming the new inputs were genuinely included.
+Ridge's validation-selected penalty moved from 0.1 to 0.3 — a real
+re-selection on the same validation protocol, not a confound to control away.
+Not saved as a snapshot; figures below are read from the run's console output
+plus one derivation (see note).
+
+| | MAE without (`b0e69bf...`) | MAE with fundamentals | Skill vs. best baseline, without → with |
+|---|---:|---:|---|
+| Ridge | 22.07 EUR/MWh | ~19.17 EUR/MWh | 24.3% → 34.2% |
+| LightGBM | 25.56 EUR/MWh | ~20.55 EUR/MWh | 12.3% → 29.5% |
+
+*Note:* the ablation's console table truncated `mae` at terminal width;
+`~19.17`/`~20.55` are derived from the printed `skill_pct` against
+`naive_similar_day`'s MAE (30.4628 EUR/MWh, read from the frozen release's own
+exported `forecast_scores.parquet` — identical in both runs because naive
+baselines use no features) and cross-checked against `skill_vs_best_baseline_pct`
+using `naive_previous_day`'s MAE (29.1392); both derivations agree to three
+decimal places.
+
+**Where it helps, and where it does not — the mechanistically interesting
+part.** In the **negative-price regime**, both models reverse from a loss to
+their strongest regime: Ridge -3.9% → **+38.1%**, LightGBM -35.1% → **+47.3%**
+skill vs. best baseline. This is coherent, not just a bigger number: German
+negative prices are driven by renewable output exceeding demand, which is
+exactly what a same-day wind/solar forecast predicts directly, unlike the
+frozen release's two-day-lagged residual load. The **scarcity regime** (top 5%
+prices, driven more by tight dispatchable supply and outages than by
+renewables) does not improve the same way and gets *worse* for LightGBM:
+Ridge 16.0% → 12.9%, LightGBM -56.7% → **-65.6%** (MAE 123.36, the single
+worst-margin bucket in this run). By year, 2021's outright LightGBM loss
+(-9.4%) becomes marginally positive (+0.1%); 2022's -2.0% becomes +9.6%.
+
+**What this is not.** Not a new frozen release — the published site, README
+and `data/experiments/current.json` are untouched. Not a claim the
+improvement is guaranteed to hold prospectively: it is measured on the same
+already-inspected development sample every other figure in this project uses.
+Not evidence the scarcity-regime degradation is acceptable — it is recorded
+here precisely so a future decision to adopt fundamentals does not quietly
+drop it.
+
+**If a new frozen release is warranted, that decision needs, at minimum:**
+reviewing whether the alpha-0.3/24-feature model should also change D's
+prospective issuance policy (currently alpha 0.1, 19 features); re-running
+the seven battery sensitivity scenarios and README/site reconciliation exactly
+as F and the history extension did; and deciding whether the scarcity-regime
+result is disclosed prominently enough that "fundamentals help" does not read
+as "fundamentals help unconditionally." None of that is done here.
+
+Verification: full pytest (352 passed), ruff check/format, mypy strict (still
+clean after this item — no further changes since the last full run), `gpa
+validate` (575/575), `quality.require_integrity()` (passed). `gpa export
+--check` was not re-run since nothing in `export.py` or the frozen snapshot
+changed in this item.
 
 ### DE-LU history from 2019-01-01 and a re-frozen release — recorded before implementation
 
