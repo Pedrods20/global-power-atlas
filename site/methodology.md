@@ -62,7 +62,36 @@ The scorecard reports MAE, RMSE, bias, pinball loss and empirical interval
 coverage. Results are also broken down by market block, price regime, calendar
 year and hour so aggregate skill cannot hide a weak operating regime.
 
+Day-ahead load/wind/solar forecasts (Energy-Charts) are backfilled from
+2019-01-05 for DE-LU, but are not part of the published information set above.
+The provider exposes no publication timestamp for the historical archive, so
+every backfilled row is assigned the D-1 noon market gate as a research-policy
+vintage rather than an observed retrieval instant; a prospective run would
+instead record its real fetch time. An ablation adding these features is
+shown as a labelled diagnostic on the [Forecasting page](./forecast), not
+folded into the published baseline: adopting it as a new frozen release is a
+separate decision this project has not made.
+
 See the complete result on the [Forecasting page](./forecast).
+
+## Capacity and market structure
+
+The Battery page also correlates DE-LU price-shape metrics (capture rate,
+on/off-peak spread, negative-price frequency) against Germany's installed
+solar, wind and battery-storage capacity from Energy-Charts'
+`/installed_power` endpoint, including the government's own EEG
+2023/WindSeeG 2030 targets. This is a country series (Germany), not a DE-LU
+bidding-zone series; Luxembourg's small share of DE-LU capacity is not in
+this data and is not estimated. Every correlation is annual with roughly
+seven complete-year points, excludes the current partial year using the
+underlying data's own last observed interval (not the day the site happens
+to be rebuilt), and is reported with its exact fitted range: this is a
+real, small-sample co-movement, not a fitted causal model, and none of it
+identifies whether battery-fleet growth is separately compressing this
+project's own arbitrage margin. Two figures on that page are external
+citations verified against their primary source rather than computed from
+this project's data: a BloombergNEF battery-price survey and a Bundesnetzagentur
+onshore-wind auction result, both dated.
 
 ## Battery valuation
 
@@ -132,9 +161,11 @@ the site are reproducible.
 ## Limitations
 
 The forecast is retrospective until a separately recorded four-to-six-week
-prospective period is complete. Operator forecast vintages are not yet stored
-for the retrospective history, so lagged realised fundamentals are used rather
-than claiming unavailable publication-time data. The study is zonal, not nodal;
+prospective period is complete. The published information set uses lagged
+realised fundamentals, not operator forecasts: day-ahead load/wind/solar
+forecasts are backfilled but carry an assigned, not observed, publication
+vintage, so they inform only the labelled ablation on the Forecasting page,
+not the published baseline. The study is zonal, not nodal;
 congestion, basis and transmission constraints are outside scope. Brazilian
 data is a national system comparison, not a wholesale price market.
 

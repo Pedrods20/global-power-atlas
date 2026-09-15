@@ -20,6 +20,9 @@ try {
     for (const route of routes) {
       const response = await page.goto(new URL(route, base).href, {waitUntil: 'networkidle'});
       if (!response?.ok()) errors.push(JSON.stringify({route, width: viewport.width, status: response?.status()}));
+      // Disclosures hide their content (and any inputs inside it) until opened;
+      // a collapsed default state must not exempt that content from testing.
+      await page.evaluate(() => document.querySelectorAll('details').forEach((d) => { d.open = true; }));
       if (!textOnlyRoutes.has(route)) {
         try {
           await expect(page.locator(chartSelector).first()).toBeVisible({timeout: 10000});

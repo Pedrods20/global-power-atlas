@@ -112,7 +112,10 @@ In the scarcest 5% of hours, Ridge still beats the baseline
 (${percent(scarcity.skill_vs_best_baseline_pct)}) but LightGBM loses badly
 (${percent(regimeOf("scarcity", "lightgbm").skill_vs_best_baseline_pct)}).
 A tree model's accuracy in typical hours does not carry over to the tails,
-where the euros actually are — explore both breakdowns below.
+where the euros actually are.
+
+<details>
+<summary>Explore the full breakdown by market block, price regime, calendar year and hour of day</summary>
 
 ```js
 const scope = view(Inputs.select(new Map([["Price regime", "regime"], ["Market block", "block"], ["Calendar year", "year"], ["Hour of day", "hour"]]), {label: "Break down by", value: "regime"}));
@@ -156,7 +159,10 @@ Plot.plot({
 })
 ```
 
-## Predictive intervals
+</details>
+
+<details>
+<summary>Predictive intervals</summary>
 
 Each model uses quantiles of its own previous 56 observed errors at the same clock hour. Current-day errors never enter calibration. With gaps, these are 56 observations rather than necessarily 56 consecutive calendar days. Opening observations have no interval and remain in point-error scoring.
 
@@ -172,24 +178,28 @@ Inputs.table(intervalRows, {format: {"Observed coverage": percent, "Nominal cove
 
 The nominal 80% interval is an empirical target, not a coverage guarantee under changing market conditions. Pinball loss and mean interval width are reported alongside coverage because an excessively wide interval can cover prices while offering little useful precision. These metrics use full-precision predictions before the chart export rounds values to cents.
 
-## Inspect a week
+</details>
+
+<details>
+<summary>Inspect a week</summary>
 
 The week selector uses twelve evenly spaced weeks from the benchmark so the
 browser stays responsive as the historical release grows. Forecast scores and
 the downloadable research snapshot retain the complete evaluation sample.
 
 ```js
+const weekModel = view(Inputs.select(new Map([["LightGBM", "lightgbm"], ["Ridge", "ridge"]]), {label: "Inspect model", value: "lightgbm"}));
 const weeks = [...new Set(predictions.map((d) => d3.utcMonday(new Date(d.local_date)).toISOString().slice(0, 10)))].sort();
 const week = view(Inputs.select(weeks, {label: "Week beginning", value: weeks[Math.floor(weeks.length / 2)]}));
 const begin = new Date(week);
 const end = d3.utcDay.offset(begin, 7);
-const weekRows = predictions.filter((d) => d.model === selectedModel && new Date(d.local_date) >= begin && new Date(d.local_date) < end);
+const weekRows = predictions.filter((d) => d.model === weekModel && new Date(d.local_date) >= begin && new Date(d.local_date) < end);
 const stamp = (d) => d3.utcHour.offset(new Date(d.local_date), d.local_hour);
 ```
 
 ```js
 Plot.plot({
-  title: `${label(selectedModel)} against realised hourly price`,
+  title: `${label(weekModel)} against realised hourly price`,
   subtitle: "Clock-hour benchmark, with the empirical 80% interval.",
   width, height: 320, marginLeft: 55,
   x: {type: "utc", label: "market-local clock hour (displayed on a synthetic axis)"},
@@ -202,6 +212,8 @@ Plot.plot({
   ],
 })
 ```
+
+</details>
 
 ## Reproduce and inspect the experiment
 

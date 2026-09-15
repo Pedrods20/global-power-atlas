@@ -31,6 +31,11 @@ in the research design and the audit trail, not in a large collection of charts.
 Operator data → validated Parquet → walk-forward forecast → battery dispatch → static site
 ```
 
+Designed and built end to end, solo: ingestion pipelines across two public
+system operators, leakage-safe walk-forward forecasting, the constrained
+battery-dispatch and stress-testing engine, and this site.
+[github.com/Pedrods20](https://github.com/Pedrods20).
+
 ## Featured result
 
 The current release is a frozen, content-addressed DE-LU backtest
