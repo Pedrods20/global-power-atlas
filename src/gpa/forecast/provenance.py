@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import io
 import json
+import os
 import platform
+import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from importlib.metadata import PackageNotFoundError, version
@@ -16,7 +20,7 @@ import polars as pl
 
 from gpa.forecast.boosting import LightGBM
 from gpa.forecast.models import Model, Naive, Ridge
-from gpa.forecast.panel import Panel
+from gpa.forecast.panel import RESIDUAL_LOAD_FUELS, Panel, hourly_residual_load
 from gpa.zones import get_zone
 
 POLICY_ID = "de-lu-development-v1-ridge-a0.1-train270"
@@ -126,6 +130,64 @@ def _dependencies() -> dict[str, str]:
     return result
 
 
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _write_blob(root: Path, data: bytes) -> str:
+    """Store ``data`` once under its own hash; a second write of the same
+    bytes is a no-op. This is what lets a year of daily issues share one copy
+    of each month that has not changed, instead of each carrying its own.
+    """
+    digest = hashlib.sha256(data).hexdigest()
+    blobs = Path(root) / "blobs"
+    target = blobs / digest
+    if not target.exists():
+        blobs.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(prefix=".gpa-", suffix=".tmp", dir=blobs)
+        os.close(descriptor)
+        temporary = Path(name)
+        try:
+            temporary.write_bytes(data)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return digest
+
+
+def _read_blob(root: Path, digest: str) -> bytes:
+    if not _DIGEST_RE.fullmatch(digest):
+        raise ValueError("invalid snapshot blob reference")
+    data = (Path(root) / "blobs" / digest).read_bytes()
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError(f"snapshot blob checksum mismatch: {digest}")
+    return data
+
+
+def _write_partitioned(root: Path, frame: pl.DataFrame, column: str) -> dict[str, str]:
+    """Split ``frame`` by the UTC month of ``column`` and blob each part.
+
+    Months are immutable once the calendar month ends, so re-issuing the next
+    day reuses every month but the current (and any recently revised) one.
+    """
+    if frame.is_empty():
+        return {}
+    labeled = frame.with_columns(pl.col(column).dt.strftime("%Y-%m").alias("_month"))
+    parts = labeled.partition_by("_month", as_dict=True, maintain_order=True)
+    written: dict[str, str] = {}
+    for month, part in parts.items():
+        buffer = io.BytesIO()
+        part.drop("_month").write_parquet(buffer, compression="zstd")
+        written[month[0]] = _write_blob(root, buffer.getvalue())
+    return written
+
+
+def _read_partitioned(root: Path, manifest: dict[str, str]) -> pl.DataFrame:
+    parts = [
+        pl.read_parquet(io.BytesIO(_read_blob(root, manifest[month]))) for month in sorted(manifest)
+    ]
+    return pl.concat(parts, how="vertical") if parts else pl.DataFrame()
+
+
 def save_snapshot(
     root: Path,
     panel: Panel,
@@ -137,6 +199,21 @@ def save_snapshot(
     observed_at: dict[str, dt.datetime] | None = None,
 ) -> pl.DataFrame:
     """Write inputs first, then sample recording time and finalize evidence.
+
+    Large artifacts (source frames, the input panel, this package's code) are
+    content-addressed under ``root/blobs`` and shared across every issue: a
+    month of history that has not changed since yesterday's issue costs
+    nothing today, instead of each issue carrying its own full copy. Only
+    ``issued.parquet`` and a small manifest live under this issue's own
+    directory.
+
+    Generation is archived as only the fuels :data:`RESIDUAL_LOAD_FUELS` names
+    (:func:`gpa.forecast.panel.hourly_residual_load` reads no others), which is
+    most of what a raw generation snapshot otherwise costs. If load is also
+    supplied, the residual-load features computed from the full and the
+    reduced generation are compared and must match exactly, so a future fuel
+    added to that function without updating this constant fails loudly here
+    rather than silently archiving an incomplete snapshot.
 
     Caller-supplied observation times describe local reads, not provider release
     times. Evidence is local; it is not a cryptographic external timestamp.
@@ -150,26 +227,35 @@ def save_snapshot(
     issued_at = frame["issued_at"][0]
     if any(utc(stamp) > frame["input_as_of"][0] for stamp in observations.values()):
         raise ValueError("source observation is later than the input cutoff")
+
+    stored_sources = dict(sources)
+    if "generation" in stored_sources:
+        full_generation = stored_sources["generation"]
+        minimal_generation = full_generation.filter(pl.col("fuel").is_in(RESIDUAL_LOAD_FUELS))
+        if "load" in stored_sources:
+            load = stored_sources["load"]
+            if not hourly_residual_load(load, full_generation, panel.zone).equals(
+                hourly_residual_load(load, minimal_generation, panel.zone)
+            ):
+                raise ValueError(
+                    "residual-load fuels changed; RESIDUAL_LOAD_FUELS no longer covers "
+                    "every fuel the panel reads, so a minimal snapshot would not "
+                    "reproduce it. Widen RESIDUAL_LOAD_FUELS in panel.py to match."
+                )
+        stored_sources["generation"] = minimal_generation
+
     identifier = frame["issue_id"][0]
     path = Path(root) / "issues" / identifier
     path.mkdir(parents=True, exist_ok=False)
-    checksums: dict[str, str] = {}
 
-    def track(name: str) -> None:
-        checksums[name] = hashlib.sha256((path / name).read_bytes()).hexdigest()
-
-    panel.frame.write_parquet(path / "input_panel.parquet", compression="zstd")
-    track("input_panel.parquet")
-    for name, values in sources.items():
-        filename = f"source_{name}.parquet"
-        values.write_parquet(path / filename, compression="zstd")
-        track(filename)
-    for name, data in _SOURCE_FILES.items():
-        filename = f"code/{name}"
-        file = path / filename
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_bytes(data)
-        track(filename)
+    artifacts: dict[str, dict[str, str]] = {
+        "input_panel": _write_partitioned(root, panel.frame, "local_date"),
+        **{
+            f"source_{name}": _write_partitioned(root, values, "ts_utc")
+            for name, values in stored_sources.items()
+        },
+        "code": {name: _write_blob(root, data) for name, data in _SOURCE_FILES.items()},
+    }
 
     recorded = utc(clock())
     if recorded < issued_at:
@@ -190,7 +276,7 @@ def save_snapshot(
             .alias("status")
         )
     final.write_parquet(path / "issued.parquet", compression="zstd")
-    track("issued.parquet")
+    issued_checksum = hashlib.sha256((path / "issued.parquet").read_bytes()).hexdigest()
     metadata = {
         "issue_id": identifier,
         "input_sha256": input_hash(panel),
@@ -204,10 +290,14 @@ def save_snapshot(
         "target": panel.target,
         "similar_day": panel.similar_day,
         "source_availability": "local_read_observations_only" if sources else "not_supplied",
+        "generation_fuels_stored": (
+            list(RESIDUAL_LOAD_FUELS) if "generation" in stored_sources else None
+        ),
         "observed_at": {name: utc(stamp).isoformat() for name, stamp in observations.items()},
         "provider_publication_times": "unknown; availability-aware ingestion remains P0/E",
         "timestamp_basis": "local_clock_not_external_attestation",
-        "checksums": checksums,
+        "issued_checksum": issued_checksum,
+        "artifacts": artifacts,
     }
     (path / "manifest.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
@@ -222,31 +312,38 @@ def read_snapshot(root: Path, identifier: str) -> tuple[dict[str, Any], Panel, M
     metadata = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
     if metadata["issue_id"] != identifier:
         raise ValueError("snapshot identity mismatch")
-    checksums = metadata["checksums"]
-    if not {"input_panel.parquet", "issued.parquet"}.issubset(checksums):
-        raise ValueError("missing snapshot checksum")
-    for name, expected in checksums.items():
-        file = (path / name).resolve()
-        if not file.is_relative_to(path.resolve()):
-            raise ValueError("unsafe snapshot artifact path")
-        if hashlib.sha256(file.read_bytes()).hexdigest() != expected:
-            raise ValueError(f"snapshot checksum mismatch: {name}")
-    code = sorted(name.removeprefix("code/") for name in checksums if name.startswith("code/"))
+    artifacts = metadata["artifacts"]
+    if not {"input_panel", "code"}.issubset(artifacts):
+        raise ValueError("missing snapshot artifacts")
+
+    issued_bytes = (path / "issued.parquet").read_bytes()
+    if hashlib.sha256(issued_bytes).hexdigest() != metadata["issued_checksum"]:
+        raise ValueError("snapshot checksum mismatch: issued.parquet")
+
+    input_frame = _read_partitioned(root, artifacts["input_panel"])
+    for name, parts in artifacts.items():
+        if name in ("code", "input_panel"):
+            continue
+        for digest in parts.values():
+            _read_blob(root, digest)  # raw source evidence: verified, not reconstructed
+
+    code_bytes = {name: _read_blob(root, digest) for name, digest in artifacts["code"].items()}
     code_hash = hashlib.sha256(
-        b"".join(name.encode() + (path / "code" / name).read_bytes() for name in code)
+        b"".join(name.encode() + code_bytes[name] for name in sorted(code_bytes))
     ).hexdigest()
     if code_hash != metadata["source_sha256"]:
         raise ValueError("snapshot source checksum mismatch")
+
     panel = Panel(
         get_zone(metadata["zone"]),
-        pl.read_parquet(path / "input_panel.parquet"),
+        input_frame,
         tuple(metadata["features"]),
         metadata["target"],
         metadata["similar_day"],
     )
     if input_hash(panel) != metadata["input_sha256"]:
         raise ValueError("snapshot input fingerprint mismatch")
-    frame = pl.read_parquet(path / "issued.parquet")
+    frame = pl.read_parquet(io.BytesIO(issued_bytes))
     if (
         frame["issue_id"].unique().to_list() != [identifier]
         or frame["input_sha256"].unique().to_list() != [metadata["input_sha256"]]

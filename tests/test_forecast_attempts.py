@@ -3,12 +3,12 @@
 import datetime as dt
 import json
 
-import polars as pl
 import pytest
 from typer.testing import CliRunner
 
 from gpa.cli import app
 from gpa.forecast import attempts, ledger, provenance
+from gpa.schema import empty_frame
 from tests.test_ledger import DAY, STAMP, full_panel, record
 
 
@@ -118,7 +118,10 @@ def test_cli_persists_all_abstentions_and_nonzero_exit(tmp_path, monkeypatch):
     from gpa.forecast import panel
 
     monkeypatch.setattr(ledger, "now_utc", lambda: STAMP)
-    monkeypatch.setattr(store, "read", lambda *args, **kwargs: pl.DataFrame())
+    # store.read guarantees the dataset's real schema even when empty; a bare
+    # pl.DataFrame() would violate that contract and hide a real regression
+    # (save_snapshot reading the "fuel" column) behind a mismatched fixture.
+    monkeypatch.setattr(store, "read", lambda dataset, *args, **kwargs: empty_frame(dataset))
     monkeypatch.setattr(panel, "build_panel", lambda *args, **kwargs: full_panel())
     # The frozen 270-row training floor exceeds this small fixture's history.
     result = CliRunner().invoke(

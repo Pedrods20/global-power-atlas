@@ -54,6 +54,7 @@ __all__ = [
     "ACTUALS_LAG_DAYS",
     "CALENDAR_FEATURES",
     "PRICE_LAG_DAYS",
+    "RESIDUAL_LOAD_FUELS",
     "Panel",
     "build_panel",
     "hourly_mean",
@@ -71,6 +72,16 @@ Two rather than one. Actual load and generation are published within hours, so
 most of D-1 is in fact known at a midday gate, but not the evening, and a
 feature that is available for some hours of the training set and not others is
 worse than one that is uniformly late.
+"""
+
+RESIDUAL_LOAD_FUELS: Final[tuple[str, ...]] = ("wind", "solar")
+"""The only generation fuels the panel ever reads.
+
+Named here, once, so a snapshot can archive just these rows rather than every
+fuel the store holds and still reproduce this panel exactly. Widening this
+tuple is a modelling change; it must be paired with widening what a snapshot
+keeps, and :func:`gpa.forecast.provenance.save_snapshot` checks that pairing
+rather than assuming it.
 """
 
 CALENDAR_FEATURES: Final[tuple[str, ...]] = (
@@ -243,7 +254,7 @@ def hourly_residual_load(load: pl.DataFrame, generation: pl.DataFrame, zone: Zon
     if load.is_empty() or generation.is_empty():
         return pl.DataFrame(schema=schema)
 
-    variable = generation.filter(pl.col("fuel").is_in(["wind", "solar"]))
+    variable = generation.filter(pl.col("fuel").is_in(RESIDUAL_LOAD_FUELS))
     if variable.is_empty():
         return pl.DataFrame(schema=schema)
 

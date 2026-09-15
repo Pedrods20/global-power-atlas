@@ -1,6 +1,7 @@
 """Prospective evidence must survive retries, late completion and reconciliation."""
 
 import datetime as dt
+import json
 from dataclasses import replace
 
 import polars as pl
@@ -136,12 +137,94 @@ def test_snapshot_checksums_reject_modified_input(tmp_path):
     from gpa.forecast import provenance
 
     frame = record(tmp_path)
-    path = tmp_path / "issues" / frame["issue_id"][0] / "input_panel.parquet"
-    path.write_bytes(b"changed")
+    manifest = json.loads(
+        (tmp_path / "issues" / frame["issue_id"][0] / "manifest.json").read_text()
+    )
+    digest = next(iter(manifest["artifacts"]["input_panel"].values()))
+    (tmp_path / "blobs" / digest).write_bytes(b"changed")
     with pytest.raises(ValueError, match="checksum"):
         provenance.read_snapshot(tmp_path, frame["issue_id"][0])
     with pytest.raises(ValueError, match="checksum"):
         ledger.canonical(frame, root=tmp_path)
+
+
+def test_snapshot_shares_one_blob_across_two_issues_of_the_same_history(tmp_path):
+    record(tmp_path, stamp=STAMP)
+    before = sorted(p.name for p in (tmp_path / "blobs").glob("*"))
+    record(tmp_path, panel=changed_target(full_panel(), 400.0), stamp=STAMP.replace(hour=10))
+    after = sorted(p.name for p in (tmp_path / "blobs").glob("*"))
+
+    # Both issues share the same history except the delivery day's own target
+    # feature, which changed_target rewrites; only that day's blob is new.
+    assert len(after) == len(before) + 1
+    assert set(before) < set(after)
+
+
+def test_snapshot_stores_only_the_fuels_the_panel_reads(tmp_path):
+    from gpa.forecast import provenance
+
+    generation = pl.DataFrame(
+        {
+            "zone": [ZONE.code] * 3,
+            "ts_utc": [STAMP] * 3,
+            "resolution_min": [60] * 3,
+            "fuel": ["wind", "solar", "coal"],
+            "gen_mw": [10.0, 20.0, 30.0],
+            "source": ["test"] * 3,
+        }
+    )
+    load = pl.DataFrame(
+        {
+            "zone": [ZONE.code],
+            "ts_utc": [STAMP],
+            "resolution_min": [60],
+            "load_mw": [100.0],
+            "source": ["test"],
+        }
+    )
+    frame = record(
+        tmp_path,
+        source_frames={"generation": generation, "load": load},
+        observed_at={"generation": STAMP, "load": STAMP},
+    )
+    meta = json.loads((tmp_path / "issues" / frame["issue_id"][0] / "manifest.json").read_text())
+    assert meta["generation_fuels_stored"] == ["wind", "solar"]
+    stored = provenance._read_partitioned(tmp_path, meta["artifacts"]["source_generation"])
+    assert set(stored["fuel"]) == {"wind", "solar"}
+
+
+def test_snapshot_refuses_to_silently_narrow_generation_if_fuels_drift(tmp_path, monkeypatch):
+    """If RESIDUAL_LOAD_FUELS ever falls out of sync with what the panel
+    actually reads, a minimal snapshot would misrepresent the archived
+    evidence. This must fail loudly instead."""
+    from gpa.forecast import provenance
+
+    monkeypatch.setattr(provenance, "RESIDUAL_LOAD_FUELS", ("wind",))
+    generation = pl.DataFrame(
+        {
+            "zone": [ZONE.code] * 2,
+            "ts_utc": [STAMP] * 2,
+            "resolution_min": [60] * 2,
+            "fuel": ["wind", "solar"],
+            "gen_mw": [10.0, 20.0],
+            "source": ["test"] * 2,
+        }
+    )
+    load = pl.DataFrame(
+        {
+            "zone": [ZONE.code],
+            "ts_utc": [STAMP],
+            "resolution_min": [60],
+            "load_mw": [100.0],
+            "source": ["test"],
+        }
+    )
+    with pytest.raises(ValueError, match="fuels changed"):
+        record(
+            tmp_path,
+            source_frames={"generation": generation, "load": load},
+            observed_at={"generation": STAMP, "load": STAMP},
+        )
 
 
 def test_canonical_selects_one_whole_earliest_complete_issue(tmp_path):
