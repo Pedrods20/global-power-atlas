@@ -31,7 +31,7 @@ from gpa.calendar import hours_in_local_day
 from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
-from gpa.zones import ZONES, Zone
+from gpa.zones import ZONES, Zone, get_zone
 
 __all__ = ["DEFAULT_OUTPUT", "export_all", "site_root"]
 
@@ -51,6 +51,7 @@ richer research tables, all from the one frozen forecast snapshot."""
 _BATTERY_MODEL_NAMES: tuple[str, ...] = DEFAULT_MODELS
 _BATTERY_DURATIONS_MWH: tuple[float, ...] = (1.0, 2.0, 4.0)
 _FORECAST_PAGE_WEEKS = 12
+_CANNIBALISATION_FUELS: tuple[str, ...] = ("solar", "wind")
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "daily_prices": _daily_prices(),
         "daily_load": _daily_load(),
         "generation_mix": _generation_mix(),
+        "capacity": _capacity(),
+        "cannibalisation": _cannibalisation(),
         "freshness": _freshness(),
     }
     from gpa import quality
@@ -317,6 +320,51 @@ def _generation_mix() -> pl.DataFrame:
         return mix_metrics.generation_mix(frame, zone, period="month").rename({"period": "month"})
 
     return _for_each("generation", build)
+
+
+def _capacity() -> pl.DataFrame:
+    """Installed DE renewable/storage capacity, tagged for the DE-LU page.
+
+    Reads the reference-data series :mod:`gpa.capacity` fetched from Energy-
+    Charts' ``/installed_power`` (``gpa capacity``), not the interval store.
+    Tagged with the DE-LU zone code for the site's existing per-zone filter,
+    while the underlying ``country`` column (always "DE") stays visible so the
+    DE-LU-vs-Germany-only distinction is never hidden from a reader.
+    """
+    from gpa import capacity as capacity_module
+
+    frame = capacity_module.read()
+    if frame.is_empty():
+        return frame
+    return frame.with_columns(pl.lit("DE-LU").alias("zone"))
+
+
+def _cannibalisation() -> pl.DataFrame:
+    """Yearly generation-weighted capture price/rate for DE-LU solar and wind.
+
+    Wires :func:`gpa.metrics.price.capture_rate`, built and tested earlier but
+    never connected to the export pipeline, against the price and generation
+    already in the store. This is the empirical cannibalisation measure the
+    capacity/renewables scenario study is built around.
+    """
+    zone = get_zone("DE-LU")
+    if not (zone.has("price") and zone.has("generation")):
+        return pl.DataFrame()
+    prices = store.read("price", zone.code)
+    generation = store.read("generation", zone.code)
+    if prices.is_empty() or generation.is_empty():
+        return pl.DataFrame()
+
+    frames = [
+        price_metrics.capture_rate(prices, generation, zone, fuel=fuel, period="year").with_columns(
+            pl.lit(fuel).alias("fuel")
+        )
+        for fuel in _CANNIBALISATION_FUELS
+    ]
+    frames = [frame for frame in frames if not frame.is_empty()]
+    if not frames:
+        return pl.DataFrame()
+    return pl.concat(frames, how="vertical_relaxed").with_columns(pl.lit(zone.code).alias("zone"))
 
 
 def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:

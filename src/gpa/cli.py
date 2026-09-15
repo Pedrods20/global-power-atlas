@@ -5,6 +5,7 @@ The main portfolio commands are:
 ``gpa zones``      inspect the registry
 ``gpa ingest``     fetch a recent window, for the daily scheduled run
 ``gpa backfill``   fetch a long history, for the one-off initial load
+``gpa capacity``   fetch installed renewable/storage capacity, a period series
 ``gpa validate``   re-check everything on disk against the schema contracts
 ``gpa stats``      report what the store holds
 ``gpa backtest``   walk-forward price forecast, scored against naive baselines
@@ -188,6 +189,46 @@ def backfill(
         zone, dataset, start=start, end=end, chunk_days=chunk_days, dry_run=dry_run
     )
     _report(results)
+
+
+@app.command()
+def capacity(
+    zone: Annotated[
+        str, typer.Option("--zone", "-z", help="Zone to fetch installed capacity for.")
+    ] = "DE-LU",
+    verbose: VerboseOption = False,
+) -> None:
+    """Fetch installed renewable/storage capacity by technology, yearly and monthly.
+
+    A period series, not a market interval series: stored separately under
+    data/reference/capacity/, outside the price/load/generation/fundamentals
+    store. Re-running replaces the file with the provider's full current
+    series rather than upserting, since a "planned" figure can legitimately
+    disappear when a policy target is revised.
+    """
+    _configure_logging(verbose)
+    from gpa import capacity as capacity_module
+    from gpa.sources.energy_charts import EnergyChartsSource
+
+    market = get_zone(zone)
+    if "energy_charts_country" not in market.source_keys:
+        typer.secho(f"{zone} has no Energy-Charts country code.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    source = EnergyChartsSource()
+    yearly = source.fetch_installed_power(market, time_step="yearly")
+    monthly = source.fetch_installed_power(market, time_step="monthly")
+    combined = pl.concat([yearly, monthly], how="vertical_relaxed")
+    if combined.is_empty():
+        typer.secho("No capacity data returned.", fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+
+    path = capacity_module.write(combined)
+    technologies = combined["technology"].n_unique()
+    typer.secho(
+        f"Wrote {combined.height} rows ({technologies} technologies) to {path}.",
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()

@@ -161,6 +161,68 @@ paragraph; wiring capacity data into the short-term day-ahead forecast panel
 fundamentals ablation as a new frozen release (a separate, still-open
 decision); any live/pilot inference.
 
+### P3 handoff evidence — partial (steps 1-2 of 8), committed and run
+
+Steps 1 (capacity data) and 2 (cannibalisation) of the plan above only; steps
+3-7 (correlation, battery-competition, cost context, citations, site
+narrative) are not started.
+
+**Step 1.** `EnergyChartsSource.fetch_installed_power(zone, *, time_step)` in
+`src/gpa/sources/energy_charts.py`, and `gpa.capacity` (`reference_root`,
+`capacity_path`, `write`, `read`) for the new `data/reference/capacity/`
+storage, kept outside the `store.write` interval contract as planned. One
+real bug the live run caught that the plan's own research had gotten wrong:
+monthly period labels are `"MM.YYYY"` (e.g. `"02.2024"`), not the ISO
+`"YYYY-MM"` this project uses everywhere else and that the plan assumed
+without checking against a live monthly response — the parser and its test
+were written for the wrong format and failed loudly on the first real run
+against `gpa capacity`, not silently. Fixed before committing. New CLI
+command `gpa capacity --zone DE-LU`, run live: 2,347 rows, 18 technologies,
+including the three official policy targets confirmed during planning
+(`Solar planned (EEG 2023)`, `Wind onshore planned (EEG 2023)`, `Wind
+offshore planned (WindSeeG)`) each correctly flagged `is_planned=true` and
+kept as separate rows from the realised series, per the plan's requirement.
+
+**Step 2.** Wired `gpa.metrics.price.capture_rate` (already built and tested,
+never connected to anything) into `gpa.export` as two new site tables,
+`capacity` and `cannibalisation`, both added to `export_all()`. Run live
+against the real DE-LU 2019-2026 store, `period="year"`:
+
+| year | solar capture_rate | wind capture_rate |
+|---|---|---|
+| 2019 | 0.928 | 0.871 |
+| 2020 | 0.806 | 0.829 |
+| 2021 | 0.785 | 0.859 |
+| 2022 | 0.939 | 0.737 |
+| 2023 | 0.759 | 0.839 |
+| 2024 | 0.592 | 0.838 |
+| 2025 | 0.514 | 0.883 |
+| 2026 (partial year) | 0.511 | 0.903 |
+
+Solar's capture rate falls in a clean, almost monotonic line from 0.93 to
+0.51 across the sample (2022's spike is the gas-crisis year, where every
+technology captured close to the flat average because the market was
+scarcity-priced for most of the year, not evidence against the trend) — the
+cannibalisation mechanism the whole study is centred on is real and already
+visible in the data this project holds today, before any scenario work.
+Wind shows no comparable trend (0.74-0.90, no monotonic direction), which
+itself is a real, citable contrast worth explaining in the eventual site
+narrative (wind's flatter daily/seasonal generation profile self-cannibalises
+far less than solar's midday concentration) rather than an oversight to fix.
+
+**Verification run:** `pytest` (new `tests/test_capacity.py`, extended
+`tests/test_export.py`, full suite), `ruff check`, `mypy` all clean. `gpa
+export` regenerates `capacity.parquet` and `cannibalisation.parquet`
+alongside the existing tables; not yet checked into `site/data/` pending
+steps 3-7, since these tables have no site page reading them yet.
+
+**Not done in this increment, deliberately:** any correlation model (step 3),
+battery-competition analysis (step 4), cost context (step 5), auction
+citations (step 6), or site narrative (step 7) — the plan's own priority
+order put capacity fetch and cannibalisation first because they needed no new
+analysis, only wiring already-built pieces to real data, and that is exactly
+what this increment did.
+
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 
 Two independent pieces, split because they differ enormously in cost and risk.

@@ -14,6 +14,8 @@ from gpa.export import (
     _BATTERY_DURATIONS_MWH,
     _BATTERY_MODEL_NAMES,
     _battery_tables,
+    _cannibalisation,
+    _capacity,
     _daily_load,
     _drop_incomplete_trailing_day,
     _forecast_page_predictions,
@@ -23,6 +25,7 @@ from gpa.export import (
 )
 from gpa.zones import get_zone
 from tests.test_battery import DAY, predictions
+from tests.test_metrics import generation_frame, price_frame
 from tests.test_pipeline import load_rows
 from tests.test_store import price_rows
 
@@ -128,6 +131,60 @@ def test_daily_load_drops_a_trailing_partial_day(tmp_path, monkeypatch):
     assert dt.date(2026, 6, 10) in dates
     assert dt.date(2026, 6, 11) in dates
     assert dt.date(2026, 6, 12) not in dates
+
+
+def test_capacity_is_empty_before_anything_is_fetched(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    assert _capacity().is_empty()
+
+
+def test_capacity_tags_the_delu_zone_alongside_the_raw_country(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    from gpa import capacity as capacity_module
+
+    capacity_module.write(
+        pl.DataFrame(
+            {
+                "country": ["DE"],
+                "time_step": ["yearly"],
+                "period": ["2024"],
+                "as_of": [dt.date(2024, 12, 31)],
+                "technology": ["Solar DC"],
+                "value": [120.0],
+                "unit": ["GW"],
+                "is_planned": [False],
+                "source": ["energy_charts"],
+            },
+            schema=capacity_module.CAPACITY_COLUMNS,
+        )
+    )
+    result = _capacity()
+    assert result["zone"].to_list() == ["DE-LU"]
+    assert result["country"].to_list() == ["DE"]  # the underlying scope stays visible
+
+
+def test_cannibalisation_is_empty_without_stored_price_or_generation(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    assert _cannibalisation().is_empty()
+
+
+def test_cannibalisation_reports_solar_and_wind_capture_rate(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    # Solar generates only in the cheap second half of the day, so its
+    # capture rate must land below one, the cannibalisation signature.
+    start = dt.datetime(2026, 6, 15, tzinfo=dt.UTC)
+    store.write(price_frame([100.0] * 12 + [20.0] * 12, start=start), "price")
+    store.write(
+        generation_frame(
+            [(start + dt.timedelta(hours=h), "solar", 0.0 if h < 12 else 500.0) for h in range(24)]
+        ),
+        "generation",
+    )
+    result = _cannibalisation()
+    solar = result.filter(pl.col("fuel") == "solar").row(0, named=True)
+    assert solar["zone"] == "DE-LU"
+    assert solar["capture_rate"] < 1.0
+    assert result.filter(pl.col("fuel") == "wind").is_empty()  # no wind generation stored
 
 
 def test_export_all_raises_without_a_frozen_snapshot(tmp_path, monkeypatch):

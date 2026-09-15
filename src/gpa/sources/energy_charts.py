@@ -19,11 +19,13 @@ Resolution changes without notice
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from typing import Any, Final
 
 import polars as pl
 
+from gpa.capacity import CAPACITY_COLUMNS
 from gpa.schema import UTC_DATETIME
 from gpa.schema import empty_frame as _empty
 from gpa.sources.base import UpstreamError, fetch_json, http_client
@@ -85,6 +87,10 @@ They are dropped rather than stored. This project recomputes renewable share
 from the mix so the definition is ours and is documented, and so it stays
 consistent across markets whose providers disagree about what counts.
 """
+
+
+_INSTALLED_POWER_GWH_TECHNOLOGIES: Final[frozenset[str]] = frozenset({"Battery storage (capacity)"})
+"""The one /installed_power technology reported in GWh; every other one is GW."""
 
 
 _FORECAST_PRODUCTION_TYPES: Final[dict[str, str]] = {
@@ -319,6 +325,74 @@ class EnergyChartsSource:
             .sort(["ts_utc", "series"])
         )
 
+    # --- installed capacity -------------------------------------------------
+
+    def fetch_installed_power(self, zone: Zone, *, time_step: str = "yearly") -> pl.DataFrame:
+        """Installed capacity by technology: a period series, not a settlement series.
+
+        Unlike every other method here, this takes no ``start``/``end`` window:
+        the provider always returns its complete current series in one
+        response, and a "planned" series is a government build-out target,
+        not a measurement, so there is nothing to page through. ``time``
+        labels the *end* of each period per the endpoint's own documentation,
+        not an interval start; the returned ``as_of`` records that same
+        convention as a real date. Monthly granularity is documented by the
+        provider as Germany-only.
+
+        Args:
+            zone: Supplies the Energy-Charts country code.
+            time_step: ``"yearly"`` or ``"monthly"``.
+
+        Returns:
+            Long-format rows matching :data:`gpa.capacity.CAPACITY_COLUMNS`:
+            country, time_step, period (the provider's raw label), as_of,
+            technology (the provider's raw name -- kept apart from this
+            project's canonical fuel taxonomy, because a "planned" and a
+            realised series for the same technology are different rows here,
+            not one fuel bucket the way generation combines them), value,
+            unit ("GW", or "GWh" for battery storage energy capacity),
+            is_planned, source. Empty with that shape if the provider returns
+            nothing.
+        """
+        if time_step not in ("yearly", "monthly"):
+            raise ValueError(f"time_step must be 'yearly' or 'monthly', got {time_step!r}")
+        country = zone.source_keys.get("energy_charts_country")
+        if not country:
+            raise UpstreamError(f"zone {zone.code} has no 'energy_charts_country' in source_keys")
+
+        payload = self._get("/installed_power", {"country": country, "time_step": time_step})
+        labels = [str(value) for value in (payload.get("time") or [])]
+        series = payload.get("production_types") or []
+        if not labels or not series:
+            return pl.DataFrame(schema=CAPACITY_COLUMNS)
+
+        rows: list[dict[str, object]] = []
+        for entry in series:
+            name = str(entry.get("name", ""))
+            values = entry.get("data") or []
+            unit = "GWh" if name in _INSTALLED_POWER_GWH_TECHNOLOGIES else "GW"
+            is_planned = "planned" in name.lower()
+            n = min(len(labels), len(values))
+            for label, value in zip(labels[:n], values[:n], strict=True):
+                if value is None:
+                    continue
+                rows.append(
+                    {
+                        "country": country.upper(),
+                        "time_step": time_step,
+                        "period": label,
+                        "as_of": _period_end(label, time_step),
+                        "technology": name,
+                        "value": float(value),
+                        "unit": unit,
+                        "is_planned": is_planned,
+                        "source": self.name,
+                    }
+                )
+        if not rows:
+            return pl.DataFrame(schema=CAPACITY_COLUMNS)
+        return pl.DataFrame(rows, schema=CAPACITY_COLUMNS).sort(["technology", "as_of"])
+
     # --- helpers ----------------------------------------------------------
 
     def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
@@ -353,6 +427,21 @@ def _stamp(frame: pl.DataFrame) -> pl.DataFrame:
 def _window(frame: pl.DataFrame, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
     """Trim to the caller's half-open window; the provider's end is inclusive."""
     return frame.filter((pl.col("ts_utc") >= start) & (pl.col("ts_utc") < end))
+
+
+def _period_end(label: str, time_step: str) -> dt.date:
+    """The real calendar date a /installed_power period label ends on.
+
+    Confirmed live against the provider on 15 September 2026: yearly labels
+    are a bare ``"YYYY"``, monthly labels are ``"MM.YYYY"`` (e.g.
+    ``"02.2024"``) -- not the ISO ``"YYYY-MM"`` this project uses everywhere
+    else, so it is not safe to assume.
+    """
+    if time_step == "yearly":
+        return dt.date(int(label), 12, 31)
+    month_text, year_text = label.split(".")
+    year, month = int(year_text), int(month_text)
+    return dt.date(year, month, calendar.monthrange(year, month)[1])
 
 
 def _currency_from_unit(unit: str, zone: Zone) -> str:
