@@ -27,6 +27,29 @@ try {
           errors.push(JSON.stringify({route, width: viewport.width, error: 'No visible Plot chart'}));
         }
       }
+      if (route === 'battery') {
+        // A different chart on the page must not hide a blank cumulative plot.
+        try {
+          const cumulative = page.locator('#battery-cumulative');
+          await expect(cumulative).toBeVisible({timeout: 10000});
+          await expect(cumulative.locator('g[aria-label="line"] path')).toHaveCount(7);
+          for (const id of ['battery-scoreboard', 'battery-comparisons', 'battery-costs', 'battery-sensitivities', 'battery-risk', 'battery-durations']) {
+            const table = page.locator(`#${id}`);
+            await expect(table).toBeVisible();
+            await expect(table.locator('tbody tr').first()).toBeVisible();
+          }
+          await expect(page.locator('#battery-scoreboard')).toContainText('Similar day');
+          await expect(page.locator('#battery-scoreboard')).toContainText('Previous day');
+          await expect(page.locator('#battery-sensitivities')).toContainText('85%');
+          await page.locator('main select').first().selectOption({index: 0});
+          await expect(cumulative).toContainText('1h battery');
+          await expect(cumulative.locator('g[aria-label="line"] path')).toHaveCount(7);
+          await page.locator('main select').first().selectOption({index: 2});
+          await expect(cumulative).toContainText('4h battery');
+        } catch (error) {
+          errors.push(JSON.stringify({route, width: viewport.width, error: `Battery evidence: ${error.message}`}));
+        }
+      }
       await page.waitForTimeout(1200);
       const report = await page.evaluate((selector) => ({
         title: document.querySelector('main h1')?.textContent,

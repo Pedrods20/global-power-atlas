@@ -17,3 +17,4 @@ package-lock.json linguist-generated=true -diff
 # The curated store is data, not source. Excluding it from language statistics
 # stops GitHub from reporting the repository as mostly Parquet.
 data/curated/** linguist-generated=true
+graphify-out/graph.json merge=graphify

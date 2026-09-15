@@ -62,6 +62,20 @@ def test_pairing_uses_differences_and_is_reproducible():
     assert row["ci_low_eur_mw"] == pytest.approx(140.0)
     assert row["ci_high_eur_mw"] == pytest.approx(140.0)
     assert row["status"] == "exploratory"
+    assert row["underperform_days"] == 0
+    assert row["top_5_days_share_positive_incremental"] == pytest.approx(5 / 70)
+    assert row["incremental_without_best_5_days_eur_mw"] == 130.0
+
+
+def test_incremental_concentration_never_divides_by_net_profit():
+    row = paired_comparisons(daily_sample([-10.0, 5.0, 5.0])).row(0, named=True)
+    assert row["incremental_eur_mw"] == 0.0
+    assert row["underperform_days"] == 1
+    assert row["top_5_days_share_positive_incremental"] == 1.0
+    assert row["incremental_without_best_5_days_eur_mw"] == -10.0
+    losses = paired_comparisons(daily_sample([-1.0, -2.0])).row(0, named=True)
+    assert losses["top_5_days_share_positive_incremental"] is None
+    assert losses["incremental_without_best_5_days_eur_mw"] == -3.0
 
 
 def test_short_sample_does_not_manufacture_a_confidence_interval():

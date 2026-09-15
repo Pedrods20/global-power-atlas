@@ -137,6 +137,14 @@ def test_export_all_raises_without_a_frozen_snapshot(tmp_path, monkeypatch):
 
 
 def test_battery_tables_match_battery_study_evaluate_bit_for_bit():
+    assert set(_BATTERY_MODEL_NAMES) == {
+        "ridge",
+        "lightgbm",
+        "naive_previous_day",
+        "naive_previous_week",
+        "naive_similar_day",
+    }
+    assert _BATTERY_DURATIONS_MWH == (1.0, 2.0, 4.0)
     frame = predictions(days=(DAY, DAY + dt.timedelta(days=1)))
     tables = _battery_tables(frame)
     expected = evaluate(

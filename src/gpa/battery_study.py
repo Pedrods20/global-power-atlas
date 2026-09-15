@@ -57,6 +57,9 @@ _COMPARISON_SCHEMA: Final = {
     "block_days": pl.UInt32,
     "incremental_eur_mw": pl.Float64,
     "mean_daily_incremental_eur_mw": pl.Float64,
+    "underperform_days": pl.UInt32,
+    "top_5_days_share_positive_incremental": pl.Float64,
+    "incremental_without_best_5_days_eur_mw": pl.Float64,
     "ci_low_eur_mw": pl.Float64,
     "ci_high_eur_mw": pl.Float64,
     "status": pl.String,
@@ -235,6 +238,7 @@ def paired_comparisons(
                     np.asarray(frame["profit_eur"].to_list(), dtype=float)
                     - np.asarray(reference["profit_eur"].to_list(), dtype=float)
                 ) / power
+                positive = delta[delta > 0]
                 low: float | None = None
                 high: float | None = None
                 status = "insufficient_blocks" if count < _MIN_BLOCKS else "insufficient_days"
@@ -256,6 +260,16 @@ def paired_comparisons(
                         "block_days": block_days,
                         "incremental_eur_mw": float(delta.sum()),
                         "mean_daily_incremental_eur_mw": float(delta.mean()),
+                        "underperform_days": int((delta < 0).sum()),
+                        "top_5_days_share_positive_incremental": (
+                            float(np.sort(positive)[-5:].sum() / positive.sum())
+                            if positive.size
+                            else None
+                        ),
+                        # Ex-post concentration diagnostic, not a dispatch rule.
+                        "incremental_without_best_5_days_eur_mw": float(
+                            delta.sum() - np.sort(positive)[-5:].sum()
+                        ),
                         "ci_low_eur_mw": low,
                         "ci_high_eur_mw": high,
                         "status": status,

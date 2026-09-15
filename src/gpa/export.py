@@ -26,6 +26,7 @@ from typing import TypedDict
 import polars as pl
 
 from gpa import store
+from gpa.battery import DEFAULT_MODELS
 from gpa.calendar import hours_in_local_day
 from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
@@ -41,21 +42,13 @@ _BATTERY_TABLES: tuple[str, ...] = (
     "battery_comparisons",
     "battery_coverage",
     "battery_costs",
+    "battery_sensitivities",
 )
 """Economic dispatch rows, the scoreboard and :func:`gpa.battery_study.evaluate`'s
 richer research tables, all from the one frozen forecast snapshot."""
 
-_BATTERY_MODEL_NAMES: tuple[str, ...] = ("ridge", "lightgbm", "naive_previous_week")
-_BATTERY_DURATIONS_MWH: tuple[float, ...] = (1.0, 4.0)
-
-_BATTERY_COST_SCENARIOS: tuple[tuple[float, float], ...] = ((0.0, 0.0), (2.0, 3.0), (5.0, 10.0))
-"""(variable, degradation) EUR per absolute grid MWh. Zero cost is the published
-base case that also backs ``battery_dispatch``/``battery_summary``/``battery_risk``/
-``battery_comparisons``/``battery_coverage``; the other two are the illustrative
-sensitivities already used in the local ``.gpa/battery-studies/`` research runs
-(C), not calibrated market or investment costs. Each scenario reruns dispatch
-optimization, since costs can change the chosen schedule.
-"""
+_BATTERY_MODEL_NAMES: tuple[str, ...] = DEFAULT_MODELS
+_BATTERY_DURATIONS_MWH: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 log = logging.getLogger(__name__)
 
@@ -333,6 +326,7 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
     that these are ordinary 24-hour DE-LU days, which the underlying dispatch
     already requires to include every interval of the day regardless.
     """
+    from gpa.battery_sensitivity import scenario_tables
     from gpa.battery_study import evaluate
 
     if predictions.is_empty():
@@ -340,29 +334,12 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
 
     tag = pl.lit("DE-LU").alias("zone")
 
-    def cost_row(variable: float, degradation: float, summary: pl.DataFrame) -> pl.DataFrame:
-        return summary.select("strategy", "power_mw", "energy_mwh", "profit_eur").with_columns(
-            pl.lit(variable).alias("variable_cost_eur_mwh"),
-            pl.lit(degradation).alias("degradation_cost_eur_mwh"),
-        )
-
     base = evaluate(
         predictions, model_names=_BATTERY_MODEL_NAMES, durations_mwh=_BATTERY_DURATIONS_MWH
     )
-    cost_rows = [cost_row(0.0, 0.0, base.summary)]
-    for variable, degradation in _BATTERY_COST_SCENARIOS:
-        if (variable, degradation) == (0.0, 0.0):
-            continue
-        study = evaluate(
-            predictions,
-            model_names=_BATTERY_MODEL_NAMES,
-            durations_mwh=_BATTERY_DURATIONS_MWH,
-            spec_kwargs={
-                "variable_cost_eur_mwh": variable,
-                "degradation_cost_eur_mwh": degradation,
-            },
-        )
-        cost_rows.append(cost_row(variable, degradation, study.summary))
+    costs, sensitivities = scenario_tables(
+        predictions, base, model_names=_BATTERY_MODEL_NAMES, durations_mwh=_BATTERY_DURATIONS_MWH
+    )
 
     return {
         "battery_dispatch": base.dispatch.with_columns(tag),
@@ -370,7 +347,8 @@ def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
         "battery_risk": base.risk.with_columns(tag),
         "battery_comparisons": base.comparisons.with_columns(tag),
         "battery_coverage": base.coverage.with_columns(tag),
-        "battery_costs": pl.concat(cost_rows).with_columns(tag),
+        "battery_costs": costs.with_columns(tag),
+        "battery_sensitivities": sensitivities.with_columns(tag),
     }
 
 

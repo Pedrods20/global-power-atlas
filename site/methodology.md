@@ -72,15 +72,16 @@ published base case is:
 | Assumption | Value |
 |---|---:|
 | Power | 1 MW |
-| Energy cases | 1 MWh and 4 MWh |
+| Energy cases | 1, 2 and 4 MWh |
 | Round-trip efficiency | 90% |
-| Dispatch horizon | 24 market intervals |
+| Dispatch horizon | Complete eligible local day |
 | Daily cycling policy | At most one charge/discharge cycle |
 | Initial and terminal SOC | 0 MWh |
 | Operating and degradation cost | 0 in the base case; configurable |
 
-The optimizer uses forecast prices to choose the first action of each rolling
-horizon. The action is then settled against the observed price. `no_trade` is
+The optimizer uses forecast prices to choose a full-day schedule with at most
+one charge-then-discharge episode; there is no intraday re-optimization.
+The schedule is then settled against the observed price. `no_trade` is
 the zero-value baseline, while `perfect_foresight` runs the same physical
 optimizer using realised prices only as an upper bound. Neither result is a
 trading recommendation.
@@ -88,6 +89,17 @@ trading recommendation.
 The [Battery page](./battery) is a pre-computed historical backtest. A future
 prospective ledger will be evaluated separately after its delivery prices are
 known.
+
+All three fixed naive models, Ridge and LightGBM share the same complete days.
+The strongest naive is ranked retrospectively over the sample, not selected
+daily as an oracle or promoted to a prospective policy. The battery page shows
+each fixed comparison, illustrative re-optimized costs, observed downside,
+incremental concentration and paired exploratory block-bootstrap intervals.
+Its fixed sensitivity protocol includes 85% efficiency, signal attenuation
+toward D-1 and whole-day calendar downtime. These are diagnostic assumptions,
+not a German asset calibration. Cost rates apply to charge plus discharge at
+the grid boundary; capital and fixed/lifetime costs remain outside the model.
+See the [Battery page](./battery) for exact definitions and source attribution.
 
 ## Quality controls
 

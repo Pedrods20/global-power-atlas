@@ -1,7 +1,7 @@
 # Global Power Atlas
 
 Reproducible electricity-market analytics with a focused research question:
-can a leakage-safe day-ahead price forecast create measurable value for battery
+can a temporally evaluated day-ahead price forecast create measurable value for battery
 dispatch?
 
 [![CI](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml)
@@ -18,8 +18,8 @@ dispatch?
 The project turns public power-system data into a compact decision workflow:
 
 1. Validate interval prices, demand and generation by fuel in market time.
-2. Forecast the DE-LU day-ahead price using only information available before
-   the market gate.
+2. Benchmark the DE-LU day-ahead price with lagged inputs and explicit
+   publication-vintage limitations.
 3. Convert the forecast into a constrained battery dispatch and settle it on
    realised prices.
 
@@ -40,23 +40,33 @@ Ridge's day-ahead price MAE is EUR 21.04/MWh over 8,971 scored clock-hour
 cells, a 27.0% reduction against the best naive baseline (EUR 28.80/MWh,
 previous day). On the resulting 368-day common sample, a 1 MW / 4 MWh battery
 captures 94.5% of the constrained perfect-foresight value with Ridge (94.2%
-with LightGBM) and adds about EUR 7,025/MW over the strongest fixed comparator
-in this sample, same-hour last week; the no-trade baseline is included
-explicitly.
+with LightGBM). Ridge adds **EUR 5,578/MW (4.3%)** over similar-day dispatch,
+the strongest of all three fixed naive comparators in this observed sample.
+The exploratory paired 95% interval is EUR 3,810-7,571/MW; removing the five
+largest positive incremental days still leaves EUR 4,114/MW. These are
+sample-period figures, not annualized returns.
 
 These are retrospective development results from a reproducible release, not
 prospective trading returns. The published base case has zero asset-specific
 operating and degradation cost; both costs are explicit optimizer inputs, and
-the site also reports margin under two illustrative non-zero cost scenarios.
+the site reports both illustrative non-zero cost cases and fixed efficiency,
+signal-attenuation and calendar-downtime stresses. The combined case leaves
+EUR 5,498/MW incremental margin, not a forecast of future profit. All five
+models are compared at 1/2/4h; LightGBM underperforms the best naive by EUR 60/MW
+at 1h in the zero-cost case. Higher model complexity is not automatically more
+valuable, and larger absolute battery margin does not establish the best
+investment duration without CAPEX and fixed/lifetime costs.
 Reproduce with `gpa export --check` against the committed snapshot.
 
 ## Research design
 
 - **Information set:** lagged prices, calendar variables and lagged residual
   load; no realised delivery-day fundamentals enter the retrospective forecast.
+  Stored provider revisions cannot certify original publication-time vintages.
 - **Validation:** expanding walk-forward evaluation with naive baselines, Ridge
   and pooled LightGBM. Hyperparameters are selected before the evaluation
-  period.
+  period; this already-inspected history remains development evidence, not an
+  untouched final test. Sensitivities do not reselect the models or parameters.
 - **Battery:** explicit power, energy, efficiency, SOC, terminal SOC and
   one-cycle-per-day constraints. Forecast-guided dispatch is settled against
   observed prices; perfect foresight is an upper bound under the same physics.
