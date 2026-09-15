@@ -14,8 +14,20 @@ def inspect(frame: pl.DataFrame, dataset: str, zone: str) -> pl.DataFrame:
     Missing time remains missing. Percent coverage cannot prove accuracy of a
     provider's measurement or presence of an unreported technology.
     """
-    value = {"price": "price", "load": "load_mw", "generation": "gen_mw"}[dataset]
-    data = frame if "fuel" in frame.columns else frame.with_columns(pl.lit("all").alias("fuel"))
+    value = {
+        "price": "price",
+        "load": "load_mw",
+        "generation": "gen_mw",
+        "fundamentals": "forecast_mw",
+    }[dataset]
+    # "fuel" and "fundamentals"' "series" both name a per-row discriminator to
+    # report separately; normalize to one column name for the loop below.
+    if "series" in frame.columns:
+        data = frame.rename({"series": "fuel"})
+    elif "fuel" in frame.columns:
+        data = frame
+    else:
+        data = frame.with_columns(pl.lit("all").alias("fuel"))
     rows: list[dict[str, object]] = []
     if data.is_empty():
         return pl.DataFrame(

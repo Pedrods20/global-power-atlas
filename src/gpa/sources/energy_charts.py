@@ -87,11 +87,22 @@ consistent across markets whose providers disagree about what counts.
 """
 
 
+_FORECAST_PRODUCTION_TYPES: Final[dict[str, str]] = {
+    "load": "load",
+    "wind_onshore": "wind",
+    "wind_offshore": "wind",
+    "solar": "solar",
+}
+"""Energy-Charts ``production_type`` values to fetch, and the canonical
+fundamental series each maps to. Onshore and offshore wind are summed into
+one ``wind`` series, matching how ``generation`` already combines them."""
+
+
 class EnergyChartsSource:
     """Fetch price, load and generation for a European bidding zone."""
 
     name: str = "energy_charts"
-    datasets: tuple[str, ...] = ("price", "load", "generation")
+    datasets: tuple[str, ...] = ("price", "load", "generation", "fundamentals")
     # No documented cap, but the public_power endpoint returns about twenty
     # series at quarter-hourly resolution and starts timing out well before a
     # quarter's worth of data. Sixty days is comfortably inside that.
@@ -109,6 +120,8 @@ class EnergyChartsSource:
 
         if dataset == "price":
             return self._fetch_price(zone, start, end)
+        if dataset == "fundamentals":
+            return self._fetch_fundamentals(zone, start, end)
         return self._fetch_power(zone, dataset, start, end)
 
     # --- price ------------------------------------------------------------
@@ -237,6 +250,73 @@ class EnergyChartsSource:
             )
             .select("zone", "ts_utc", "resolution_min", "fuel", "gen_mw", "source")
             .sort(["ts_utc", "fuel"])
+        )
+
+    # --- fundamentals -------------------------------------------------------
+
+    def _fetch_fundamentals(self, zone: Zone, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
+        """Day-ahead load/wind/solar forecasts, not realised values.
+
+        This adapter reports only what the provider returns; it does not
+        record a publication vintage because the ``/public_power_forecast``
+        endpoint exposes none. Assigning an eligible-before-the-gate vintage
+        for a historical backfill is a research-policy decision, made in
+        :mod:`gpa.forecast.fundamentals`, not here.
+        """
+        country = zone.source_keys.get("energy_charts_country")
+        if not country:
+            raise UpstreamError(f"zone {zone.code} has no 'energy_charts_country' in source_keys")
+
+        frames: list[pl.DataFrame] = []
+        all_seconds: set[int] = set()
+        for production_type, series in _FORECAST_PRODUCTION_TYPES.items():
+            payload = self._get(
+                "/public_power_forecast",
+                {
+                    "country": country,
+                    "production_type": production_type,
+                    "forecast_type": "day-ahead",
+                    "start": _as_date(start),
+                    "end": _as_date(end),
+                },
+            )
+            seconds = payload.get("unix_seconds") or []
+            values = payload.get("forecast_values") or []
+            n = min(len(seconds), len(values))
+            if n == 0:
+                continue
+            all_seconds.update(seconds[:n])
+            chunk = (
+                pl.DataFrame(
+                    {"_epoch": seconds[:n], "_value": values[:n]},
+                    schema={"_epoch": pl.Int64, "_value": pl.Float64},
+                )
+                .drop_nulls("_value")
+                .with_columns(pl.lit(series).alias("series"))
+            )
+            frames.append(chunk)
+
+        if not frames:
+            return _empty("fundamentals")
+
+        combined = _window(_stamp(pl.concat(frames, how="vertical")), start, end)
+        if combined.is_empty():
+            return _empty("fundamentals")
+
+        # Onshore and offshore wind arrive as separate chunks; sum after
+        # mapping, the same rule generation.py applies to shared fuels.
+        out = combined.group_by(["ts_utc", "series"]).agg(
+            pl.col("_value").sum().alias("forecast_mw")
+        )
+        resolutions = _resolution_table(sorted(all_seconds), zone)
+        return (
+            out.join(resolutions, on="ts_utc")
+            .with_columns(
+                pl.lit(zone.code).alias("zone"),
+                pl.lit(self.name).alias("source"),
+            )
+            .select("zone", "ts_utc", "resolution_min", "series", "forecast_mw", "source")
+            .sort(["ts_utc", "series"])
         )
 
     # --- helpers ----------------------------------------------------------

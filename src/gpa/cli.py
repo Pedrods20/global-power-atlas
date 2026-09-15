@@ -59,7 +59,7 @@ ZoneOption = Annotated[
 ]
 DatasetOption = Annotated[
     list[str] | None,
-    typer.Option("--dataset", "-d", help="price, load or generation. Default: all."),
+    typer.Option("--dataset", "-d", help="price, load, generation or fundamentals. Default: all."),
 ]
 VerboseOption = Annotated[bool, typer.Option("--verbose", "-v", help="Log adapter detail.")]
 
@@ -402,6 +402,13 @@ def backtest(
             help="Run a long price-only stress test without requiring old load/generation history."
         ),
     ] = False,
+    include_fundamentals: Annotated[
+        bool,
+        typer.Option(
+            help="Add day-ahead load/wind/solar forecast features, where the zone collects them. "
+            "An ablation input, not part of the published feature set."
+        ),
+    ] = False,
     track: Annotated[bool, typer.Option(help="Record this comparison in local MLflow.")] = False,
     tracking_dir: Annotated[
         Path, typer.Option(help="Local MLflow database and artifacts.")
@@ -441,6 +448,7 @@ def backtest(
         tune_lightgbm=tune_lightgbm,
         lightgbm_refit_days=lightgbm_refit_days,
         include_actual_features=not price_only,
+        include_fundamentals=include_fundamentals,
     )
 
     if track:

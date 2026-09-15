@@ -320,6 +320,7 @@ def run(
     tune_lightgbm: bool = True,
     lightgbm_refit_days: int = 1,
     include_actual_features: bool = True,
+    include_fundamentals: bool = False,
     end: dt.date | None = BENCHMARK_END,
 ) -> BacktestResult:
     """Run the whole harness for one zone.
@@ -341,6 +342,9 @@ def run(
             the operational default; a larger value accelerates long diagnostics.
         include_actual_features: Include lagged realised load/generation when
             loading from the store. Disable for a long price-only stress test.
+        include_fundamentals: Add the day-ahead load/wind/solar forecast
+            features (see :func:`gpa.forecast.panel.load_panel`). An ablation
+            input, ignored when ``panel`` is supplied directly.
 
     Returns:
         A :class:`BacktestResult`.
@@ -357,7 +361,13 @@ def run(
     if lightgbm_refit_days < 1:
         raise ValueError("lightgbm_refit_days must be positive")
     prepared = (
-        panel if panel is not None else load_panel(market, include_actuals=include_actual_features)
+        panel
+        if panel is not None
+        else load_panel(
+            market,
+            include_actuals=include_actual_features,
+            include_fundamentals=include_fundamentals,
+        )
     )
     if prepared.zone != market:
         raise ValueError("panel zone does not match requested market")

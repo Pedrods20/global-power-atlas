@@ -48,6 +48,7 @@ _KEYS: dict[str, tuple[str, ...]] = {
     "price": ("zone", "ts_utc"),
     "load": ("zone", "ts_utc"),
     "generation": ("zone", "ts_utc", "fuel"),
+    "fundamentals": ("zone", "ts_utc", "series"),
 }
 """Natural key per dataset, used to deduplicate on upsert."""
 

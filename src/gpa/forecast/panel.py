@@ -415,12 +415,19 @@ def build_panel(
     )
 
 
-def load_panel(zone: Zone, *, include_actuals: bool = True) -> Panel:
+def load_panel(
+    zone: Zone, *, include_actuals: bool = True, include_fundamentals: bool = False
+) -> Panel:
     """Build the panel from the curated store.
 
     ``include_actuals=False`` is useful for long price-only stress tests when
     older load/generation vintages are not available. It deliberately removes
     residual-load features rather than forward-filling them across the gap.
+
+    ``include_fundamentals=True`` adds the day-ahead load/wind/solar forecast
+    features from :func:`gpa.forecast.fundamentals.from_store`, for zones that
+    collect them. Off by default: this is an ablation input, not part of the
+    frozen model's published feature set until a reviewed decision adopts it.
     """
     from gpa import store
 
@@ -429,7 +436,12 @@ def load_panel(zone: Zone, *, include_actuals: bool = True) -> Panel:
     generation = (
         store.read("generation", zone.code) if include_actuals and zone.has("generation") else None
     )
-    return build_panel(prices, zone, load=load, generation=generation)
+    fundamentals = None
+    if include_fundamentals and zone.has("fundamentals"):
+        from gpa.forecast import fundamentals as fundamentals_module
+
+        fundamentals = fundamentals_module.from_store(zone)
+    return build_panel(prices, zone, load=load, generation=generation, fundamentals=fundamentals)
 
 
 # --- Internals -------------------------------------------------------------

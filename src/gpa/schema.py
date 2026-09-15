@@ -29,6 +29,8 @@ from pandera.errors import SchemaError, SchemaErrors
 
 __all__ = [
     "FUELS",
+    "FUNDAMENTALS_SCHEMA",
+    "FUNDAMENTAL_SERIES",
     "GENERATION_SCHEMA",
     "LOAD_SCHEMA",
     "PRICE_SCHEMA",
@@ -191,10 +193,51 @@ GENERATION_SCHEMA: Final = pa.DataFrameSchema(
     coerce=True,
 )
 
+FUNDAMENTAL_SERIES: Final[tuple[str, ...]] = ("load", "wind", "solar")
+"""Canonical day-ahead forecast series this project stores.
+
+Wind is onshore and offshore combined at ingestion, matching how the
+``generation`` dataset already combines them into one canonical ``wind`` fuel.
+"""
+
+FUNDAMENTALS_SCHEMA: Final = pa.DataFrameSchema(
+    name="fundamentals",
+    columns={
+        "zone": _zone_column(),
+        "ts_utc": _timestamp_column(),
+        "resolution_min": _resolution_column(),
+        "series": pa.Column(
+            pl.String,
+            nullable=False,
+            checks=pa.Check.isin(FUNDAMENTAL_SERIES),
+            description="Which day-ahead forecast series this row carries.",
+        ),
+        "forecast_mw": pa.Column(
+            pl.Float64,
+            nullable=False,
+            checks=pa.Check.in_range(-50_000.0, 2_000_000.0),
+            description=(
+                "Forecast average power in MW over the interval. A small negative "
+                "wind or solar forecast is a legitimate model output, not an error. "
+                "This is the day-ahead forecast as currently held by the provider; "
+                "the provider exposes no publication timestamp, so this table alone "
+                "does not certify when a given value became available -- see "
+                "gpa.forecast.fundamentals for how eligibility before the market "
+                "gate is assigned and documented."
+            ),
+        ),
+        "source": _source_column(),
+    },
+    unique=["zone", "ts_utc", "series"],
+    strict=True,
+    coerce=True,
+)
+
 SCHEMAS: Final[dict[str, pa.DataFrameSchema]] = {
     "price": PRICE_SCHEMA,
     "load": LOAD_SCHEMA,
     "generation": GENERATION_SCHEMA,
+    "fundamentals": FUNDAMENTALS_SCHEMA,
 }
 """Dataset name to contract. The keys are the dataset names used in
 ``Zone.sources`` and as the top-level directory in ``data/curated``."""

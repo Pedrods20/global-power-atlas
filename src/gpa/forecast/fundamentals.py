@@ -26,6 +26,7 @@ __all__ = [
     "combine_smard_series",
     "empty",
     "from_smard_series",
+    "from_store",
     "normalize",
 ]
 
@@ -147,6 +148,45 @@ def attach(panel: pl.DataFrame, fundamentals: pl.DataFrame, zone: Zone) -> pl.Da
         .select("local_date", "local_hour", *FUNDAMENTAL_FEATURES)
     )
     return panel.join(snapshots, on=["local_date", "local_hour"], how="left")
+
+
+def from_store(zone: Zone) -> pl.DataFrame:
+    """Build the wide snapshot :func:`attach` expects from the curated store.
+
+    ``gpa.sources.energy_charts`` stores the honest day-ahead forecast values
+    with no publication vintage, because the provider exposes none. This is
+    the one place that turns that raw archive into a modelling input, and it
+    assigns ``published_at`` as this project's own research-policy assumption:
+    each row is treated as available at the market gate for its own delivery
+    day (:func:`gpa.forecast.ledger.market_gate`'s definition, reimplemented
+    here to avoid a circular import against ``ledger`` -> ``panel`` ->
+    ``fundamentals``), not an observed publication instant. That makes
+    ``da_forecast_age_hours`` a constant zero for every historically backfilled
+    row; a live, prospective use of these features (not implemented here) must
+    instead record its actual retrieval instant, which would vary.
+    """
+    from gpa import store
+
+    raw = store.read("fundamentals", zone.code)
+    if raw.is_empty():
+        return empty()
+
+    wide = raw.pivot(on="series", index=["zone", "ts_utc"], values="forecast_mw")
+    for series in ("load", "wind", "solar"):
+        if series not in wide.columns:
+            wide = wide.with_columns(pl.lit(None, dtype=pl.Float64).alias(series))
+    wide = wide.rename(
+        {"load": "load_forecast_mw", "wind": "wind_forecast_mw", "solar": "solar_forecast_mw"}
+    )
+
+    local = attach_local_time(wide, zone)
+    return local.with_columns(
+        pl.struct("local_date")
+        .map_elements(
+            lambda value: _gate(value["local_date"], zone), return_dtype=pl.Datetime("us", "UTC")
+        )
+        .alias("published_at")
+    ).select(empty().schema.names())
 
 
 def from_smard_series(

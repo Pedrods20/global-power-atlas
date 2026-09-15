@@ -165,7 +165,10 @@ ZONES: tuple[Zone, ...] = (
         timezone="Europe/Berlin",
         currency="EUR",
         peak=EUROPEAN_PEAKLOAD,
-        sources=dict(_ENERGY_CHARTS),
+        # Day-ahead load/wind/solar forecasts, for the forecast model's
+        # fundamentals ablation. Not fetched for FR/ES: this is a per-market
+        # research feature, not a general historical-context series.
+        sources=dict(_ENERGY_CHARTS) | {"fundamentals": "energy_charts"},
         source_keys={"energy_charts_country": "de", "entsoe_eic": "10Y1001A1001A82H"},
         notes=(
             "The deepest power market in Europe and the reference for continental "
