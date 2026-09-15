@@ -34,3 +34,11 @@ data/raw/
 .env
 .env.local
 *.key
+
+# Local AI coding-agent tooling. Personal workflow configuration, not part of
+# the portfolio's public evidence; never intended to be published.
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
+graphify-out/
