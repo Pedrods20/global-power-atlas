@@ -72,6 +72,49 @@ Ridge MAE is **${number(ridge.mae)} EUR/MWh**; LightGBM MAE is **${number(trees.
 ## Where the models fail
 
 ```js
+const byYear = (model) => scores.filter((d) => d.scope === "year" && d.model === model).sort((a, b) => a.bucket.localeCompare(b.bucket));
+const ridgeYearly = byYear("ridge");
+const lightgbmYearly = byYear("lightgbm");
+const worstYear = ridgeYearly.reduce((a, b) => (b.mae > a.mae ? b : a));
+const calmestYear = ridgeYearly.reduce((a, b) => (b.mae < a.mae ? b : a));
+const lightgbmLossYears = lightgbmYearly.filter((d) => d.skill_vs_best_baseline_pct <= 0).map((d) => d.bucket);
+const recentYears = lightgbmYearly.filter((d) => d.bucket >= "2024" && d.bucket <= run.test_end.slice(0, 4));
+const lightgbmAheadRecently = recentYears.every((d) => {
+  const r = ridgeYearly.find((e) => e.bucket === d.bucket);
+  return r && d.mae < r.mae;
+});
+const regime = (bucket) => scores.find((d) => d.scope === "regime" && d.bucket === bucket && d.model === "ridge");
+const regimeOf = (bucket, model) => scores.find((d) => d.scope === "regime" && d.bucket === bucket && d.model === model);
+const negative = regime("negative");
+const scarcity = regime("scarcity");
+```
+
+The 2019-2026 sample is not one market. Ridge's own annual MAE moves from
+**${number(calmestYear.mae)} EUR/MWh in ${calmestYear.bucket}** — a calm,
+low-demand year — to **${number(worstYear.mae)} EUR/MWh in ${worstYear.bucket}**,
+about **${(worstYear.mae / calmestYear.mae).toFixed(1)}×** higher, during the
+European gas-price shock. Both fitted models score every day the same way
+throughout; the swing is the market, not a change in method.
+
+The two models do not fail the same way. LightGBM lost outright to the best
+naive baseline in ${lightgbmLossYears.length ? lightgbmLossYears.join(" and ") : "no year"}
+— the most volatile years in the sample — while Ridge kept a positive skill
+margin every year, including those. ${lightgbmAheadRecently ? `From 2024
+onward, in the calmer market since, LightGBM's annual MAE has been at or below
+Ridge's every year` : `LightGBM has not consistently closed that gap since`} —
+this is one sample's ordering, not a general claim that either model dominates.
+
+The same pattern holds by regime, not just by year: in negative-price hours,
+**${label(negative.model)}** trails the previous-day baseline
+(${percent(negative.skill_vs_best_baseline_pct)}), and LightGBM trails it far
+more (${percent(regimeOf("negative", "lightgbm").skill_vs_best_baseline_pct)}).
+In the scarcest 5% of hours, Ridge still beats the baseline
+(${percent(scarcity.skill_vs_best_baseline_pct)}) but LightGBM loses badly
+(${percent(regimeOf("scarcity", "lightgbm").skill_vs_best_baseline_pct)}).
+A tree model's accuracy in typical hours does not carry over to the tails,
+where the euros actually are — explore both breakdowns below.
+
+```js
 const scope = view(Inputs.select(new Map([["Price regime", "regime"], ["Market block", "block"], ["Calendar year", "year"], ["Hour of day", "hour"]]), {label: "Break down by", value: "regime"}));
 const split = scores.filter((d) => d.scope === scope);
 ```
