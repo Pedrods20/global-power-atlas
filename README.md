@@ -33,14 +33,22 @@ Operator data → validated Parquet → walk-forward forecast → battery dispat
 
 ## Featured result
 
-The current historical DE-LU backtest covers 369 complete days. For a 1 MW / 4
-MWh battery, Ridge captures 94.5% of the constrained perfect-foresight value;
-LightGBM captures 94.2%. The no-trade baseline is included explicitly.
+The current release is a frozen, content-addressed DE-LU backtest
+(`data/experiments/`, committed alongside the site data it produced), not a
+live recompute that would silently drift as the historical store grows.
+Ridge's day-ahead price MAE is EUR 21.04/MWh over 8,971 scored clock-hour
+cells, a 27.0% reduction against the best naive baseline (EUR 28.80/MWh,
+previous day). On the resulting 368-day common sample, a 1 MW / 4 MWh battery
+captures 94.5% of the constrained perfect-foresight value with Ridge (94.2%
+with LightGBM) and adds about EUR 7,025/MW over the strongest fixed comparator
+in this sample, same-hour last week; the no-trade baseline is included
+explicitly.
 
-These are retrospective development results, not prospective trading returns.
-The published base case has zero asset-specific operating and degradation cost;
-both costs are parameters in the optimizer and must be calibrated before using
-the result for an investment decision.
+These are retrospective development results from a reproducible release, not
+prospective trading returns. The published base case has zero asset-specific
+operating and degradation cost; both costs are explicit optimizer inputs, and
+the site also reports margin under two illustrative non-zero cost scenarios.
+Reproduce with `gpa export --check` against the committed snapshot.
 
 ## Research design
 

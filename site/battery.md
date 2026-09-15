@@ -73,15 +73,30 @@ Plot.plot({
 
 ## Dispatch example
 
+Two stacked charts share the same local-hour axis so price (EUR/MWh) is never
+plotted on the same scale as the battery's physical state and flow (MWh).
+
 ```js
 Plot.plot({
   title: `4h battery dispatch — ${sampleDate ?? "no scored day"}`,
-  subtitle: "Ridge forecast-guided strategy; positive action discharges to the market.",
-  width, height: 340, marginLeft: 65,
-  x: {label: "Market-local hour"}, y: {label: "MW / MWh", grid: true},
-  color: {domain: ["Price", "State of charge", "Action"], range: ["#333333", "#0072B2", "#D55E00"], legend: true},
+  subtitle: "Ridge forecast-guided strategy; settled against the observed price.",
+  width, height: 200, marginLeft: 65, marginBottom: 20,
+  x: {label: null, axis: null},
+  y: {label: "EUR/MWh", grid: true},
   marks: sample.length ? [
-    Plot.lineY(sample, {x: "local_hour", y: "actual", stroke: "Price", tip: true}),
+    Plot.lineY(sample, {x: "local_hour", y: "actual", stroke: "#333333", tip: true}),
+    Plot.ruleY([0]),
+  ] : [Plot.ruleY([0])],
+})
+```
+
+```js
+Plot.plot({
+  subtitle: "State of charge (line) and dispatch action (bars); positive action discharges to the market.",
+  width, height: 260, marginLeft: 65,
+  x: {label: "Market-local hour"}, y: {label: "MWh", grid: true},
+  color: {domain: ["State of charge", "Action"], range: ["#0072B2", "#D55E00"], legend: true},
+  marks: sample.length ? [
     Plot.lineY(sample, {x: "local_hour", y: "soc_mwh", stroke: "State of charge", tip: true}),
     Plot.barY(sample, {x: "local_hour", y: "action_mwh", fill: "#D55E00", fillOpacity: .55, tip: true}),
     Plot.ruleY([0]),

@@ -20,39 +20,42 @@ import datetime as dt
 import json
 import logging
 import math
-from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import polars as pl
 
 from gpa import store
+from gpa.calendar import hours_in_local_day
 from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
 from gpa.zones import ZONES, Zone
 
-if TYPE_CHECKING:
-    from gpa.forecast.backtest import BacktestResult
-
 __all__ = ["DEFAULT_OUTPUT", "export_all", "site_root"]
 
-_FORECAST_TABLES: tuple[str, ...] = (
-    "forecast_scores",
-    "forecast_daily",
-    "forecast_predictions",
-    "forecast_coefficients",
+_BATTERY_TABLES: tuple[str, ...] = (
+    "battery_dispatch",
+    "battery_summary",
+    "battery_risk",
+    "battery_comparisons",
+    "battery_coverage",
+    "battery_costs",
 )
-"""Site tables produced by the walk-forward backtest.
+"""Economic dispatch rows, the scoreboard and :func:`gpa.battery_study.evaluate`'s
+richer research tables, all from the one frozen forecast snapshot."""
 
-Recomputed on every export rather than committed as a separate artefact, so a
-change to ingestion or to the model shows up in ``gpa export --check`` the same
-way every other table does. Daily LightGBM refits make this the expensive export
-step; :data:`gpa.forecast.backtest.PUBLISHED_ZONES` currently holds one zone.
+_BATTERY_MODEL_NAMES: tuple[str, ...] = ("ridge", "lightgbm", "naive_previous_week")
+_BATTERY_DURATIONS_MWH: tuple[float, ...] = (1.0, 4.0)
+
+_BATTERY_COST_SCENARIOS: tuple[tuple[float, float], ...] = ((0.0, 0.0), (2.0, 3.0), (5.0, 10.0))
+"""(variable, degradation) EUR per absolute grid MWh. Zero cost is the published
+base case that also backs ``battery_dispatch``/``battery_summary``/``battery_risk``/
+``battery_comparisons``/``battery_coverage``; the other two are the illustrative
+sensitivities already used in the local ``.gpa/battery-studies/`` research runs
+(C), not calibrated market or investment costs. Each scenario reruns dispatch
+optimization, since costs can change the chosen schedule.
 """
-
-_BATTERY_TABLES: tuple[str, ...] = ("battery_dispatch", "battery_summary")
-"""Economic dispatch rows and the compact strategy scoreboard."""
 
 log = logging.getLogger(__name__)
 
@@ -93,28 +96,25 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "generation_mix": _generation_mix(),
         "freshness": _freshness(),
     }
-    # The backtest is the one expensive step in this module, so it is run once
-    # here and its results are handed to both consumers rather than recomputed.
     from gpa import quality
-    from gpa.forecast import backtest as harness
     from gpa.forecast import snapshot
 
     tables["data_quality"] = quality.report()
     saved = snapshot.read()
     if saved is None:
-        forecasts = harness.published()
-        tables.update(_forecast_tables(forecasts))
-        runs = _forecast_runs(forecasts)
-    else:
-        metadata, frames = saved
-        runs = {"runs": [metadata]}
-        for suffix in ("scores", "daily", "predictions", "coefficients"):
-            result = frames[suffix]
-            if suffix == "predictions":
-                result = result.drop("ts_utc").with_columns(pl.col(pl.Float64).round(2))
-            tables[f"forecast_{suffix}"] = result.with_columns(
-                pl.lit(metadata["zone"]).alias("zone")
-            )
+        raise RuntimeError(
+            "no frozen forecast snapshot under data/experiments/. The public export "
+            "reads a committed release, not a live recompute that would drift as the "
+            "store grows. Run `gpa backtest --zone DE-LU --save-snapshot`, commit the "
+            "new data/experiments/<id>/ and current.json, then retry `gpa export`."
+        )
+    metadata, frames = saved
+    runs = {"runs": [metadata]}
+    for suffix in ("scores", "daily", "predictions", "coefficients"):
+        result = frames[suffix]
+        if suffix == "predictions":
+            result = result.drop("ts_utc").with_columns(pl.col(pl.Float64).round(2))
+        tables[f"forecast_{suffix}"] = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
 
     tables.update(_battery_tables(tables.get("forecast_predictions", pl.DataFrame())))
 
@@ -136,7 +136,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     (destination / "forecast.json").write_text(
         json.dumps(runs, indent=2, default=str), encoding="utf-8"
     )
-    written["forecast.json"] = len(runs["runs"])  # type: ignore[arg-type]
+    written["forecast.json"] = len(runs["runs"])
 
     return written
 
@@ -289,9 +289,29 @@ def _daily_prices() -> pl.DataFrame:
 
 def _daily_load() -> pl.DataFrame:
     def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        return load_metrics.daily_energy(frame, zone).rename({"local_date": "date"})
+        daily = load_metrics.daily_energy(frame, zone).rename({"local_date": "date"})
+        return _drop_incomplete_trailing_day(daily, zone, "hours_observed")
 
     return _for_each("load", build)
+
+
+def _drop_incomplete_trailing_day(
+    daily: pl.DataFrame, zone: Zone, hours_column: str
+) -> pl.DataFrame:
+    """Drop the last row if it covers fewer hours than its own local day has.
+
+    A day still being ingested reads as a collapse in the underlying quantity
+    if it is charted like every complete day before it. Comparing against
+    :func:`gpa.calendar.hours_in_local_day` rather than a flat 24 means a
+    genuinely short daylight-saving day is not mistaken for a partial one and
+    trimmed by mistake.
+    """
+    if daily.is_empty():
+        return daily
+    last = daily.tail(1).row(0, named=True)
+    if last[hours_column] < hours_in_local_day(zone, last["date"]):
+        return daily.head(daily.height - 1)
+    return daily
 
 
 def _generation_mix() -> pl.DataFrame:
@@ -301,67 +321,56 @@ def _generation_mix() -> pl.DataFrame:
     return _for_each("generation", build)
 
 
-def _forecast_tables(results: Sequence[BacktestResult]) -> dict[str, pl.DataFrame]:
-    """Backtest results for every published zone, stacked and zone-tagged.
-
-    A zone whose history is too short is skipped by the harness, so the tables
-    can come back empty. That is a site with one chart missing rather than a
-    failed build, which is the right trade for a page that is analysis rather
-    than a data contract.
-    """
-    collected: dict[str, list[pl.DataFrame]] = {name: [] for name in _FORECAST_TABLES}
-    for result in results:
-        code = pl.lit(result.zone.code).alias("zone")
-        collected["forecast_scores"].append(result.scores.with_columns(code))
-        collected["forecast_daily"].append(result.daily.with_columns(code))
-        collected["forecast_coefficients"].append(result.coefficients.with_columns(code))
-        # Prices are quoted to the cent, so the published forecasts are rounded
-        # to it. Scoring uses full precision; this only stops sixteen digits of
-        # float noise per value from tripling the size of the file the browser
-        # downloads.
-        collected["forecast_predictions"].append(
-            result.predictions.drop("ts_utc")
-            .with_columns(pl.col(pl.Float64).round(2))
-            .with_columns(code)
-        )
-
-    return {
-        name: pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
-        for name, frames in collected.items()
-    }
-
-
-def _forecast_runs(results: Sequence[BacktestResult]) -> dict[str, object]:
-    """Metadata for each published backtest: target, split, penalty and features.
-
-    Published as JSON beside the tables so the page can state what was forecast
-    and on what information, rather than leaving a reader to infer it from a
-    chart. The alpha search is included so the penalty does not look like a
-    number pulled out of the air.
-    """
-    runs: list[dict[str, object]] = []
-    for result in results:
-        entry = result.metadata()
-        entry["alpha_search"] = result.alpha_search.to_dicts()
-        runs.append(entry)
-    return {"runs": runs}
-
-
 def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
-    """Create the static battery study from the common forecast sample."""
-    from gpa import battery
+    """Freeze the site's battery economics from the same forecast snapshot.
+
+    ``battery_study.evaluate`` is a pure function of ``predictions``, so once
+    that table comes from the frozen forecast snapshot, calling it here instead
+    of the bare dispatch backtest freezes the battery numbers too, and exposes
+    the same risk/comparison/coverage tables the local research studies get.
+    A short compatibility guard (``horizon_steps=24``) that the previous bare
+    call passed is not available through ``evaluate``; it only ever re-asserted
+    that these are ordinary 24-hour DE-LU days, which the underlying dispatch
+    already requires to include every interval of the day regardless.
+    """
+    from gpa.battery_study import evaluate
 
     if predictions.is_empty():
         return {name: pl.DataFrame() for name in _BATTERY_TABLES}
-    result = battery.backtest_predictions(
-        predictions,
-        model_names=("ridge", "lightgbm", "naive_previous_week"),
-        durations_mwh=(1.0, 4.0),
-        horizon_steps=24,
+
+    tag = pl.lit("DE-LU").alias("zone")
+
+    def cost_row(variable: float, degradation: float, summary: pl.DataFrame) -> pl.DataFrame:
+        return summary.select("strategy", "power_mw", "energy_mwh", "profit_eur").with_columns(
+            pl.lit(variable).alias("variable_cost_eur_mwh"),
+            pl.lit(degradation).alias("degradation_cost_eur_mwh"),
+        )
+
+    base = evaluate(
+        predictions, model_names=_BATTERY_MODEL_NAMES, durations_mwh=_BATTERY_DURATIONS_MWH
     )
+    cost_rows = [cost_row(0.0, 0.0, base.summary)]
+    for variable, degradation in _BATTERY_COST_SCENARIOS:
+        if (variable, degradation) == (0.0, 0.0):
+            continue
+        study = evaluate(
+            predictions,
+            model_names=_BATTERY_MODEL_NAMES,
+            durations_mwh=_BATTERY_DURATIONS_MWH,
+            spec_kwargs={
+                "variable_cost_eur_mwh": variable,
+                "degradation_cost_eur_mwh": degradation,
+            },
+        )
+        cost_rows.append(cost_row(variable, degradation, study.summary))
+
     return {
-        "battery_dispatch": result.dispatch.with_columns(pl.lit("DE-LU").alias("zone")),
-        "battery_summary": result.summary.with_columns(pl.lit("DE-LU").alias("zone")),
+        "battery_dispatch": base.dispatch.with_columns(tag),
+        "battery_summary": base.summary.with_columns(tag),
+        "battery_risk": base.risk.with_columns(tag),
+        "battery_comparisons": base.comparisons.with_columns(tag),
+        "battery_coverage": base.coverage.with_columns(tag),
+        "battery_costs": pl.concat(cost_rows).with_columns(tag),
     }
 
 
@@ -386,6 +395,17 @@ def _freshness() -> pl.DataFrame:
 # --- Overview --------------------------------------------------------------
 
 
+_MEASURED_DATASETS = ("load", "generation")
+"""Datasets that describe what has actually happened, for ``data_as_of``.
+
+Price is excluded on purpose: since day-ahead prices are ingested up to
+:data:`gpa.pipeline.PUBLISHED_AHEAD_DAYS` past now, its own latest timestamp
+can be a delivery hour that has not happened yet. Labelling the page "as of"
+that instant would read as data from the future. Each zone's own price
+coverage is still shown separately in ``datasets.price.last`` below.
+"""
+
+
 def _overview() -> Overview:
     """Zone metadata plus a freshness snapshot, for the landing page."""
     coverage = store.coverage()
@@ -394,7 +414,8 @@ def _overview() -> Overview:
     # polars types `.max()` as a broad union, so narrow it rather than casting:
     # an unexpected dtype should read as "unknown" instead of crashing on
     # `.isoformat()` at build time.
-    raw_as_of = coverage["last_ts_utc"].max() if not coverage.is_empty() else None
+    measured = coverage.filter(pl.col("dataset").is_in(_MEASURED_DATASETS))
+    raw_as_of = measured["last_ts_utc"].max() if not measured.is_empty() else None
     data_as_of = raw_as_of if isinstance(raw_as_of, dt.datetime) else None
 
     entries: list[dict[str, object]] = []
