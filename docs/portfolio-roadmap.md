@@ -10,15 +10,187 @@ written plan before code changes. No GitHub publication is authorized by this
 request. This section is the single implementation log; do not create parallel
 STATE/TODO/handoff documents.
 
-**Current state: A/B/C/D/E/F implemented, tested and committed locally on
-`main` (E is `55e7543`, its snapshot-size follow-up `bb33212`; F is `0927be6`);
-G pending.** P0 and P1 are not complete as whole priorities. Nothing has been
-pushed to a remote; no public deploy, committed data ingestion beyond the
-frozen `data/experiments/` snapshot, or prospective issuance occurred. Resume
-at **G**. Do not reopen the battery engine, the ledger/provenance/attempts
-core, the ingestion checkpoint or the frozen F export/site presentation: they
-are committed and green (334 tests, ruff check/format and mypy strict clean,
-88% coverage, `npm run build` and the full browser smoke suite passing).
+**Current state (15 September 2026): A-F committed; portfolio steps 1-2 / the
+bounded G sensitivity study are implemented, verified and committed.** Baseline
+before this increment: `7b4aefe`, 334 tests passing, lint and strict typing
+clean. The review found that F's export omitted two available naive
+comparators, its README promised cost tables not displayed by the site, and
+its cumulative battery chart was blank despite smoke tests; all three are
+fixed and verified below. The battery engine, forecast snapshot, ledger and
+ingestion core were not reopened. No push, public deploy, real issuance, new
+provider ingestion or live pilot is authorized. Resume at the **English
+executive case** (next in "Portfolio direction adopted from the review" above).
+
+### Portfolio steps 1-2 / bounded G plan — recorded before code changes
+
+Scope approved by the user: reconcile the current evidence and finish a small,
+commercially interpretable sensitivity study. Preserve existing untracked agent
+configuration and `.gitattributes` changes, plus all historical study artifacts.
+
+1. Use all three fixed naive forecasts, Ridge and LightGBM on the same eligible
+   days, for 1/2/4h assets. Keep the frozen hourly/rounded presentation input
+   convention explicit so old studies remain comparable; do not invent physical
+   DST intervals. Reconcile README, page, export and calculated headline.
+2. Display incremental value, each fixed comparator, observed downside and
+   concentration, exploratory paired intervals and the existing re-optimized
+   cost cases. Label the best naive as selected retrospectively, not a policy.
+3. Before running the new stresses, fix their rules: retain cost pairs 0/0,
+   2/3 and 5/10 EUR per absolute grid MWh; use a sourced 85% round-trip
+   efficiency sensitivity (not German project calibration); simulate full-day
+   downtime every twentieth calendar day from 2025-01-01, identically for all
+   strategies; and halve Ridge/LightGBM's forecast deviation from the previous
+   day baseline without reading realised prices. Re-optimize changed forecasts
+   and efficiency, but zero settlement/activity on downtime days, keeping the
+   sample denominator. Include a combined 2/3 cost + efficiency + signal +
+   downtime stress. These are diagnostic scenarios, not fitted probabilities.
+4. Freeze model settings and sample; no model re-selection on these results.
+   Existing history has been inspected and remains development evidence.
+   Explain duration trade-offs from operational margin; do not claim optimal
+   investment duration without CAPEX, fixed costs and additional revenue data.
+   Externally sourced assumptions and illustrative costs must stay distinct.
+5. Fix the cumulative chart and assert its visible, nonempty curves, plus cost
+   and risk tables, in both browser viewports. Regenerate the static export,
+   run focused/full tests, lint/type checks, export replay and site/browser
+   checks. Record results, commands, numerical conclusions and any limits here.
+
+Portfolio direction adopted from the review: finish this evidence first, then
+bring forward the English executive case (question, finding, implication,
+limitations and personal contribution). Next explain historical market regimes
+and test genuine pre-auction fundamentals; only then develop the DE-LU capacity/
+renewables/storage scenario study. Keep monthly history superficial. Do not add
+markets, pages, models or operational infrastructure merely for breadth. Keep
+this file as the single state/handoff record; older entries below are history,
+not a competing current plan. The original broader G's asset-specific cost
+calibration and investment valuation are not implied by this bounded scope.
+
+### Portfolio steps 1-2 / bounded G handoff evidence — done, committed
+
+The plan above and code were both already written, uncommitted, when this
+session resumed; this session's job was to verify, regenerate the export, run
+the full check list and record the result — item 5 of the plan above.
+
+Changed files: `src/gpa/battery_sensitivity.py` (new: `weaken_signal`,
+`calendar_outages`, `scenario_tables`, the seven registered `SCENARIOS`),
+`src/gpa/battery_study.py` (+`underperform_days`, `top_5_days_share_positive_incremental`,
+`incremental_without_best_5_days_eur_mw` on `paired_comparisons`),
+`src/gpa/export.py` (`_battery_tables` now compares all five models at 1/2/4
+MWh and calls `battery_sensitivity.scenario_tables`, adding `battery_sensitivities`
+to the exported tables), `site/battery.md` (rewritten: interactive duration
+selector, decision-in-brief summary, full comparator/cost/sensitivity/risk/
+duration tables, a download link for the sensitivity Parquet), `site/methodology.md`
+(documents the sensitivity protocol and 1/2/4 MWh cases), `README.md` (Featured
+result replaced with the sensitivity-backed figures), `scripts/browser-smoke.mjs`
+(battery-page-specific assertions: a nonempty, 7-line cumulative chart and
+every evidence table visible with content, in both viewports), `.gitattributes`
+(`graphify-out/graph.json merge=graphify`, preserved per the plan's scope note),
+`tests/test_battery_sensitivity.py` (new), `tests/test_battery_study.py` and
+`tests/test_export.py` (extended). All of `site/data/*` regenerated.
+
+**The "Cumulative net value" chart defect F found and left unfixed is now
+fixed**, confirmed by the browser smoke suite: `battery.md`'s cumulative-chart
+cell now assigns the plot to a variable, sets `cumulativeChart.id`, and calls
+`display(cumulativeChart)` explicitly instead of relying on an implicit
+last-expression display after two preceding `const` declarations in the same
+cell — plus the duration selector is now a `view(Inputs.select(...))`, so the
+whole cell structure changed. Which of those changes actually fixed it was not
+re-isolated (out of scope here, and no longer worth the time now that it
+reproduces correctly with real data); `npm run test:browser` now specifically
+asserts the cumulative chart has exactly 7 visible strategy lines in both the
+1h and 4h duration views, so a regression would fail CI rather than pass
+silently the way the original defect did.
+
+Verified against the regenerated `site/data/*` (not re-derived from the
+README's own prose, to catch a possible stale/aspirational figure): Ridge's
+4 MWh incremental margin over its best naive (`naive_similar_day`, selected
+retrospectively) is EUR 5,577.55/MW, a 4.25% uplift over that comparator's own
+EUR 131,095/MW, with a 95% exploratory interval of EUR 3,810–7,571/MW; removing
+its five best incremental days leaves EUR 4,114.41/MW; the `combined` stress
+(2/3 EUR costs + 85% efficiency + 50% signal + calendar downtime) leaves
+EUR 5,498.27/MW; and LightGBM trails `naive_previous_day` by EUR 59.68/MW at
+1h in the zero-cost case. All exact matches to what `README.md` already
+states, confirming the prior session's figures were pipeline output, not
+hand-typed estimates. The full sensitivity table for Ridge at 4 MWh:
+
+| Scenario | Available days | Margin (EUR/MW) | Increment vs best naive (EUR/MW) | 95% interval |
+|---|---:|---:|---:|---:|
+| base | 368 | 136,672.56 | 5,577.55 | 3,810.02 – 7,571.40 |
+| cost 2/3 | 368 | 121,927.30 | 5,819.59 | 3,897.71 – 7,874.16 |
+| cost 5/10 | 368 | 93,536.80 | 5,594.97 | 3,548.53 – 7,830.46 |
+| efficiency 85% | 368 | 128,440.23 | 5,708.16 | 3,927.03 – 7,695.02 |
+| signal 50% | 368 | 136,759.16 | 5,664.15 | 3,783.33 – 7,817.42 |
+| calendar downtime | 350 (18 unavailable) | 129,147.08 | 5,016.62 | 3,297.17 – 6,894.35 |
+| combined | 350 (18 unavailable) | 107,437.41 | 5,498.27 | 3,630.33 – 7,676.64 |
+
+The incremental margin over the strongest fixed naive is remarkably stable
+(roughly EUR 5,000–5,800/MW) across every stress; nothing here erases Ridge's
+advantage over the sample, though none of it is a promise it survives
+structural market change. By duration, all at `base`: 1h EUR 1,501.41/MW
+(vs `naive_previous_day`), 2h EUR 2,801.87/MW (vs `naive_previous_day`), 4h
+EUR 5,577.55/MW (vs `naive_similar_day`) — the best comparator itself changes
+with duration, which is exactly why the page always names it per row rather
+than assuming one fixed baseline.
+
+Final validation (Windows, Python 3.13.9):
+
+| Check | Result |
+|---|---|
+| Full suite | **345 passed, 0 failed** |
+| Ruff check / format | Passed; 55 source/test files |
+| Mypy strict | Passed; 35 source files |
+| `gpa export` then `gpa export --check` | Regenerated, then confirmed reproducible from the frozen snapshot |
+| `npm run build` | 4 pages rendered, 6 links validated |
+| `npm run test:browser` | Both viewports, all 4 routes, zero errors/overflow; battery: cumulative chart visible with 7 lines, every evidence table visible with content, duration selector switches correctly |
+
+Limits carried forward, unchanged from F: the frozen snapshot's provenance
+covers the supplied prediction sample and this economic calculation, not
+upstream model training or raw-data publication vintages; `signal_50` and
+`efficiency_85` are diagnostic stresses, not calibrated error/asset
+distributions; costs remain illustrative, not sourced market or investment
+figures; and none of this is annualized or prospective performance.
+
+### Session close — 15 September 2026 (sixth checkpoint, bounded G done)
+
+The user made further changes outside this session (a review found F's
+presentation defects and someone — a different tool or session — wrote the
+plan above plus its full implementation, uncommitted) and asked this session
+to review the uncommitted files and continue. This session verified the
+already-written code and site against the full check list item 5 asked for,
+confirmed the README's figures against a fresh `gpa export` rather than
+trusting the prose, and committed. No push, public deploy, real issuance or
+new provider ingestion occurred.
+
+Also noted: this repository now carries local agent tooling (`.claude/`,
+`.codex/`, `AGENTS.md`, `CLAUDE.md`, `graphify-out/`, all untracked) for a
+codebase-graph tool called `graphify`, installed into `.venv` with hooks that
+inject "MANDATORY" instructions on every Read/Bash/Grep call. This was
+verified to be a real, locally installed executable wired through legitimate
+hook config, not an external prompt injection, and the user confirmed it may
+be used. It was left untracked per the plan's own instruction to preserve it;
+whether to commit it, gitignore it or remove it is a decision for the user,
+not made here.
+
+To resume safely in a new session:
+
+1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas` and
+   run `git log --oneline -13` / `git status --short`. Expect a clean tree
+   (aside from the untracked agent-tooling files above) with `30292c9` (bounded
+   G) on top of `7b4aefe`/`0927be6` (F) and the earlier D/E commits on `main`,
+   all unpushed.
+2. Start the English executive case per "Portfolio direction adopted from the
+   review" above (question, finding, implication, limitations, personal
+   contribution) — not a new dashboard page. Write its plan into this file
+   before editing code, the same discipline D, E, F and G followed.
+3. After that: historical market regimes and genuine pre-auction fundamentals,
+   then the DE-LU capacity/renewables/storage scenario study. Keep monthly
+   history superficial; do not add markets, pages, models or operational
+   infrastructure merely for breadth. The original broader G's asset-specific
+   cost calibration and investment valuation remain open, not silently dropped.
+
+Suggested resume request:
+
+> Leia `docs/portfolio-roadmap.md`. A-F e o estudo de sensibilidade limitado de
+> G estão commitados. Registre o plano do caso executivo em inglês antes de
+> alterar código, depois implemente. Não publique no GitHub sem eu pedir.
 
 ### D execution plan — recorded before implementation
 
@@ -609,7 +781,7 @@ research outputs must be frozen and reviewed before replacing public headlines.
 | D — Issuance provenance (P0) | `forecast/ledger.py`, `forecast/provenance.py`, `forecast/attempts.py`, `cli.py`, workflow/tests | Target-day feature hash, model parameters/version, input snapshot, late/failure/abstention policy, canonical issuance | **Done and committed** locally (`c893fa7`, `f2bb495`, `c594b75`); not pushed |
 | E — Input availability/history (P0) | Pipeline, sources, ingest/forecast workflows and tests | Full already-published curve, no unavailable targets, checkpoint catch-up and isolated persistent history | **Done and committed** locally (`55e7543`, snapshot-size fix `bb33212`); not pushed |
 | F — Frozen release and presentation (P0/P1) | Snapshot/export, existing site pages, README/tests | Reproducible corrected release; honest date/coverage/cost labels; separate units; concise commercial summary | **Done and committed** locally (`0927be6`); not pushed |
-| G — Remaining P1 sensitivities | Analysis/configuration/tests | Sourced/calibrated cost assumptions, availability/error stresses, model-selection/evaluation separation and a qualified duration recommendation | Pending after comparison layer |
+| G — Remaining P1 sensitivities | Analysis/configuration/tests | Sourced/calibrated cost assumptions, availability/error stresses, model-selection/evaluation separation and a qualified duration recommendation | Bounded scope **done and committed** locally (`30292c9`; all five models, cost/efficiency/signal/downtime stresses, per-duration comparators); asset-specific cost calibration and investment valuation remain open |
 
 Execution rules agreed before editing:
 
@@ -646,14 +818,16 @@ Validation commands (PowerShell, repository root):
 npm run build
 ```
 
-**Next action — D, E and F are done; start G.** D's provenance core, E's
-checkpoint catch-up and publication horizon, and F's frozen export/site
-presentation are all committed (see their handoff evidence above), including
-the newly-discovered pre-existing "Cumulative net value" chart defect F found
-but left unfixed. Write G's execution plan into this file before editing
-code, the same discipline D, E and F followed.
+**Next action — D, E, F and the bounded G sensitivity study are done.** D's
+provenance core, E's checkpoint catch-up and publication horizon, F's frozen
+export/site presentation and G's bounded sensitivity study are all committed
+(see their handoff evidence above); the "Cumulative net value" chart defect F
+found is confirmed fixed by the browser smoke suite. Resume at the English
+executive case per "Portfolio direction adopted from the review" near the top
+of this file, writing its plan into this file first, the same discipline D,
+E, F and G followed.
 
-Then finish G's calibrated costs/availability/error stresses. The current C snapshots
+The current C snapshots
 freeze supplied predictions and the economic calculation, not upstream model
 training or raw-data vintages. Do not declare complete forecasting provenance.
 
