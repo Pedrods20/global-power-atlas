@@ -161,11 +161,11 @@ paragraph; wiring capacity data into the short-term day-ahead forecast panel
 fundamentals ablation as a new frozen release (a separate, still-open
 decision); any live/pilot inference.
 
-### P3 handoff evidence — partial (steps 1-2 of 8), committed and run
+### P3 handoff evidence — partial (steps 1-3 of 8), committed and run
 
-Steps 1 (capacity data) and 2 (cannibalisation) of the plan above only; steps
-3-7 (correlation, battery-competition, cost context, citations, site
-narrative) are not started.
+Steps 1 (capacity data), 2 (cannibalisation) and 3 (capacity-to-price-shape
+correlation) of the plan above; steps 4-7 (battery-competition, cost context,
+citations, site narrative) are not started.
 
 **Step 1.** `EnergyChartsSource.fetch_installed_power(zone, *, time_step)` in
 `src/gpa/sources/energy_charts.py`, and `gpa.capacity` (`reference_root`,
@@ -210,18 +210,64 @@ itself is a real, citable contrast worth explaining in the eventual site
 narrative (wind's flatter daily/seasonal generation profile self-cannibalises
 far less than solar's midday concentration) rather than an oversight to fix.
 
-**Verification run:** `pytest` (new `tests/test_capacity.py`, extended
-`tests/test_export.py`, full suite), `ruff check`, `mypy` all clean. `gpa
-export` regenerates `capacity.parquet` and `cannibalisation.parquet`
-alongside the existing tables; not yet checked into `site/data/` pending
-steps 3-7, since these tables have no site page reading them yet.
+**Step 3.** Three new `gpa.export` tables — `capacity_price_yearly` (one row
+per year, capacity joined to `block_prices`, `negative_price_summary` and
+`capture_rate`, inner-joined on price coverage so a capacity-only year cannot
+appear), `capacity_price_correlation` (Pearson r over four pairs, current
+partial year always excluded from the fit) and `capacity_extrapolation_flags`
+(each 2030 policy target compared against the realised ceiling, current
+partial year excluded there too). Two decisions made only after looking at
+the real data, as the plan required:
 
-**Not done in this increment, deliberately:** any correlation model (step 3),
-battery-competition analysis (step 4), cost context (step 5), auction
-citations (step 6), or site narrative (step 7) — the plan's own priority
-order put capacity fetch and cannibalisation first because they needed no new
-analysis, only wiring already-built pieces to real data, and that is exactly
-what this increment did.
+- The raw EUR on/off-peak spread is confounded by the 2021-2022 fuel-price
+  shock (2022's spread is the sample's largest in EUR terms purely because
+  both peak and off-peak prices were extremely high that year, not because
+  cannibalisation was worse) — correlated `spread_pct_of_price` (spread as a
+  percentage of that year's average price) instead of the raw EUR figure, to
+  stop the coefficient from mostly measuring gas prices.
+- Kept the correlation at yearly resolution as planned rather than moving to
+  monthly, which was considered: monthly solar capture rate has a large
+  seasonal swing (summer midday oversupply vs. winter darkness) that has
+  nothing to do with capacity growth, and controlling for it properly (e.g.
+  same-calendar-month year-over-year) is a real enough piece of work that it
+  was left as a noted future robustness check rather than folded into this
+  step unplanned.
+
+Run live against the real store:
+
+| x | y | n | pearson_r | fitted years |
+|---|---|---|---|---|
+| solar_capacity_gw | solar_capture_rate | 7 | -0.895 | 2019-2025 |
+| solar_capacity_gw | negative_pct | 7 | 0.823 | 2019-2025 |
+| wind_capacity_gw | wind_capture_rate | 7 | 0.205 | 2019-2025 |
+| solar_capacity_gw | spread_pct_of_price | 7 | -0.911 | 2019-2025 |
+
+n=7 complete years: a real but small-sample, shared-time-trend correlation,
+not a causal estimate — recorded as a limitation in the function's own
+docstring and carried as `fitted_year_min`/`fitted_year_max` on every row, not
+left implicit. Wind's near-zero correlation is itself informative: it is the
+same asymmetry step 2 already found in wind's flat capture-rate trend, now
+also absent from the capacity relationship, which is consistent rather than
+a second, independent finding.
+
+`capacity_extrapolation_flags`, run live: every one of solar (AC and DC),
+wind onshore and wind offshore has `exceeds_realised_max = true` for its 2030
+EEG 2023/WindSeeG target — e.g. wind offshore's realised ceiling is 9.7 GW
+(2025) against a 30 GW 2030 target. Every scenario that reaches toward these
+targets is confirmed, from real data rather than assumption, to be an
+extrapolation beyond anything this project's correlation is fitted on.
+
+**Verification run:** `pytest` (extended `tests/test_export.py`, full suite),
+`ruff check`, `mypy` all clean. `gpa export` regenerates `capacity.parquet`,
+`cannibalisation.parquet`, `capacity_price_yearly.parquet`,
+`capacity_price_correlation.parquet` and `capacity_extrapolation_flags.parquet`
+alongside the existing tables, checked into `site/data/` as with every other
+export table so `gpa export --check` keeps passing, even though no site page
+reads them yet.
+
+**Not done in this increment, deliberately:** battery-competition analysis
+(step 4), cost context (step 5), auction citations (step 6), or site
+narrative (step 7).
 
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 

@@ -21,7 +21,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import polars as pl
 
@@ -52,6 +52,39 @@ _BATTERY_MODEL_NAMES: tuple[str, ...] = DEFAULT_MODELS
 _BATTERY_DURATIONS_MWH: tuple[float, ...] = (1.0, 2.0, 4.0)
 _FORECAST_PAGE_WEEKS = 12
 _CANNIBALISATION_FUELS: tuple[str, ...] = ("solar", "wind")
+
+_CORRELATION_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("solar_capacity_gw", "solar_capture_rate", "Solar capacity vs. solar capture rate"),
+    ("solar_capacity_gw", "negative_pct", "Solar capacity vs. negative-price frequency"),
+    ("wind_capacity_gw", "wind_capture_rate", "Wind capacity vs. wind capture rate"),
+    (
+        "solar_capacity_gw",
+        "spread_pct_of_price",
+        "Solar capacity vs. on/off-peak spread (% of average price)",
+    ),
+)
+"""(x column, y column, label) pairs correlated by :func:`_capacity_price_correlation`.
+
+``spread_pct_of_price`` rather than the raw EUR spread: the raw spread scales
+with the overall price level, so 2021-2022's fuel-price shock alone would
+dominate a level correlation without a single extra megawatt of capacity
+being built. Normalising by the year's average price does not remove the
+shock entirely, but it stops the correlation from mostly just measuring gas
+prices.
+"""
+
+_PLANNED_TO_REALISED_TECHNOLOGY: Final[dict[str, tuple[str, ...]]] = {
+    "Solar planned (EEG 2023)": ("Solar AC", "Solar DC"),
+    "Wind onshore planned (EEG 2023)": ("Wind onshore",),
+    "Wind offshore planned (WindSeeG)": ("Wind offshore",),
+}
+"""Government target series to the realised series it should be read against.
+
+Solar maps to both AC and DC realised series because it is not independently
+verified which convention EEG 2023's target uses; showing both rather than
+guessing one keeps that uncertainty visible instead of hidden in a single
+number.
+"""
 
 log = logging.getLogger(__name__)
 
@@ -86,12 +119,16 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     destination = Path(output) if output is not None else site_root()
     destination.mkdir(parents=True, exist_ok=True)
 
+    capacity_price_yearly = _capacity_price_yearly()
     tables: dict[str, pl.DataFrame] = {
         "daily_prices": _daily_prices(),
         "daily_load": _daily_load(),
         "generation_mix": _generation_mix(),
         "capacity": _capacity(),
         "cannibalisation": _cannibalisation(),
+        "capacity_price_yearly": capacity_price_yearly,
+        "capacity_price_correlation": _capacity_price_correlation(capacity_price_yearly),
+        "capacity_extrapolation_flags": _capacity_extrapolation_flags(),
         "freshness": _freshness(),
     }
     from gpa import quality
@@ -365,6 +402,184 @@ def _cannibalisation() -> pl.DataFrame:
     if not frames:
         return pl.DataFrame()
     return pl.concat(frames, how="vertical_relaxed").with_columns(pl.lit(zone.code).alias("zone"))
+
+
+def _capacity_price_yearly() -> pl.DataFrame:
+    """One row per year: realised solar/wind capacity paired with price-shape metrics.
+
+    Anchored on years the store actually has price coverage for (2019
+    onward), not on the capacity series' longer history, since a correlation
+    needs both sides present. The current year is real but partial (not yet
+    a full 12 months), which is left in this descriptive table -- only
+    :func:`_capacity_price_correlation` excludes it from a fitted statistic.
+    """
+    zone = get_zone("DE-LU")
+    if not (zone.has("price") and zone.has("generation")):
+        return pl.DataFrame()
+    prices = store.read("price", zone.code)
+    generation = store.read("generation", zone.code)
+    if prices.is_empty() or generation.is_empty():
+        return pl.DataFrame()
+
+    from gpa import capacity as capacity_module
+
+    yearly_cap = capacity_module.read().filter(
+        (pl.col("time_step") == "yearly") & (~pl.col("is_planned"))
+    )
+    if yearly_cap.is_empty():
+        return pl.DataFrame()
+
+    solar_gw = yearly_cap.filter(pl.col("technology") == "Solar AC").select(
+        pl.col("period").alias("year"), pl.col("value").alias("solar_capacity_gw")
+    )
+    wind_gw = (
+        yearly_cap.filter(pl.col("technology").is_in(["Wind onshore", "Wind offshore"]))
+        .group_by("period")
+        .agg(pl.col("value").sum().alias("wind_capacity_gw"))
+        .rename({"period": "year"})
+    )
+    spread = price_metrics.block_prices(prices, zone, period="year").select(
+        pl.col("period").alias("year"),
+        "spread",
+        (pl.col("spread") / pl.col("all_hours") * 100.0).alias("spread_pct_of_price"),
+    )
+    negative = (
+        price_metrics.negative_price_summary(prices, zone)
+        .with_columns(pl.col("local_month").str.slice(0, 4).alias("year"))
+        .group_by("year")
+        .agg(pl.col("negative_hours").sum(), pl.col("observed_hours").sum())
+        .with_columns(
+            (pl.col("negative_hours") / pl.col("observed_hours") * 100.0).alias("negative_pct")
+        )
+        .select("year", "negative_pct")
+    )
+    solar_capture = price_metrics.capture_rate(
+        prices, generation, zone, fuel="solar", period="year"
+    ).select(pl.col("period").alias("year"), pl.col("capture_rate").alias("solar_capture_rate"))
+    wind_capture = price_metrics.capture_rate(
+        prices, generation, zone, fuel="wind", period="year"
+    ).select(pl.col("period").alias("year"), pl.col("capture_rate").alias("wind_capture_rate"))
+
+    combined = (
+        spread.join(solar_gw, on="year", how="inner")
+        .join(wind_gw, on="year", how="left")
+        .join(negative, on="year", how="left")
+        .join(solar_capture, on="year", how="left")
+        .join(wind_capture, on="year", how="left")
+        .sort("year")
+    )
+    if combined.is_empty():
+        return combined
+    return combined.with_columns(pl.lit(zone.code).alias("zone"))
+
+
+def _capacity_price_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
+    """Pearson correlation for each pair in :data:`_CORRELATION_PAIRS`.
+
+    Excludes the current, still-partial year: a part-year point (built from
+    fewer months than the rest) is not comparable to a complete one and would
+    distort a correlation computed on only seven-odd points to begin with.
+
+    This is a small-n, shared-time-trend correlation, not a causal estimate:
+    with about seven annual points, most series that both trend over the
+    sample period will correlate whether or not one drives the other. The
+    exact fitted year range is carried in every row so a reader can see how
+    little data underlies the coefficient, and so nobody downstream
+    mistakes it for something it is not.
+    """
+    if yearly.is_empty():
+        return pl.DataFrame()
+    complete = yearly.filter(pl.col("year") != str(dt.datetime.now(dt.UTC).year))
+    if complete.is_empty():
+        return pl.DataFrame()
+
+    fitted_min, fitted_max = complete["year"].min(), complete["year"].max()
+    rows: list[dict[str, object]] = []
+    for x, y, label in _CORRELATION_PAIRS:
+        pair = complete.select(x, y).drop_nulls()
+        if pair.height < 3:
+            continue
+        r = pair.select(pl.corr(x, y)).item()
+        rows.append(
+            {
+                "x": x,
+                "y": y,
+                "label": label,
+                "n": pair.height,
+                "pearson_r": r,
+                "fitted_year_min": fitted_min,
+                "fitted_year_max": fitted_max,
+            }
+        )
+    if not rows:
+        return pl.DataFrame()
+    return pl.DataFrame(rows).with_columns(pl.lit("DE-LU").alias("zone"))
+
+
+def _capacity_extrapolation_flags() -> pl.DataFrame:
+    """Whether each 2030 policy target lies above anything DE-LU has realised.
+
+    Answers the plan's own requirement directly, as a table rather than a
+    prose caveat: the correlation in :func:`_capacity_price_correlation` is
+    fitted only on realised capacity levels, and a scenario that walks a
+    technology out to its government 2030 target is an extrapolation beyond
+    that fitted range whenever this table says ``exceeds_realised_max`` is
+    true. Excludes the current partial year from "realised", the same choice
+    :func:`_capacity_price_correlation` makes, so a not-yet-complete year
+    cannot masquerade as this technology's realised ceiling.
+    """
+    from gpa import capacity as capacity_module
+
+    cap = capacity_module.read()
+    if cap.is_empty():
+        return pl.DataFrame()
+
+    current_year = str(dt.datetime.now(dt.UTC).year)
+    realised = (
+        cap.filter(
+            (pl.col("time_step") == "yearly")
+            & (~pl.col("is_planned"))
+            & (pl.col("period") != current_year)
+        )
+        .group_by("technology")
+        .agg(
+            pl.col("value").max().alias("realised_max_gw"),
+            pl.col("period").sort_by("value", descending=True).first().alias("realised_max_year"),
+        )
+    )
+    planned_2030 = cap.filter(
+        (pl.col("time_step") == "yearly") & pl.col("is_planned") & (pl.col("period") == "2030")
+    ).select(pl.col("technology").alias("planned_technology"), pl.col("value").alias("planned_2030_gw"))
+
+    rows: list[pl.DataFrame] = []
+    for planned_technology, realised_technologies in _PLANNED_TO_REALISED_TECHNOLOGY.items():
+        planned_row = planned_2030.filter(pl.col("planned_technology") == planned_technology)
+        if planned_row.is_empty():
+            continue
+        matches = realised.filter(pl.col("technology").is_in(list(realised_technologies)))
+        if matches.is_empty():
+            continue
+        rows.append(matches.join(planned_row, how="cross"))
+
+    if not rows:
+        return pl.DataFrame()
+    return (
+        pl.concat(rows, how="vertical_relaxed")
+        .with_columns(
+            (pl.col("planned_2030_gw") > pl.col("realised_max_gw")).alias("exceeds_realised_max"),
+            pl.lit("DE-LU").alias("zone"),
+        )
+        .select(
+            "planned_technology",
+            "technology",
+            "realised_max_gw",
+            "realised_max_year",
+            "planned_2030_gw",
+            "exceeds_realised_max",
+            "zone",
+        )
+        .sort(["planned_technology", "technology"])
+    )
 
 
 def _battery_tables(predictions: pl.DataFrame) -> dict[str, pl.DataFrame]:
