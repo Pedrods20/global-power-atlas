@@ -200,13 +200,21 @@ def from_store(zone: Zone) -> pl.DataFrame:
     )
 
     local = attach_local_time(wide, zone)
-    return local.with_columns(
-        pl.struct("local_date")
-        .map_elements(
-            lambda value: _gate(value["local_date"], zone), return_dtype=pl.Datetime("us", "UTC")
+    # One gate per distinct delivery day, not per row: a multi-year hourly
+    # frame has far fewer unique dates than rows, and _gate() is Python-level.
+    gates = (
+        local.select("local_date")
+        .unique()
+        .with_columns(
+            pl.struct("local_date")
+            .map_elements(
+                lambda value: _gate(value["local_date"], zone),
+                return_dtype=pl.Datetime("us", "UTC"),
+            )
+            .alias("published_at")
         )
-        .alias("published_at")
-    ).select(empty().schema.names())
+    )
+    return local.join(gates, on="local_date").select(empty().schema.names())
 
 
 def from_smard_series(
