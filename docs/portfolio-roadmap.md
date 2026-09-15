@@ -23,7 +23,100 @@ issuance or live pilot is authorized. **The DE-LU history extension is now
 re-frozen and reconciled** in release `b0e69bf47f6e230be9b5`; the prior
 `5e3c9f1a256ec73c62e2` release remains for provenance. The current headline
 pages and README now use the 2019-onward benchmark. The old session-close
-instructions below are retained as historical handoff evidence.
+instructions below are retained as historical handoff evidence. **Next:**
+historical market regimes and pre-auction fundamentals (plan below), the step
+"Portfolio direction adopted from the review" (further below) names before the
+capacity/renewables/storage scenario study.
+
+### Historical market regimes and pre-auction fundamentals — recorded before implementation
+
+Two independent pieces, split because they differ enormously in cost and risk.
+User confirmed the data-source choice in part B (Energy-Charts, not SMARD)
+before this was written.
+
+**A — historical market regimes (narrative, low risk).** The extended
+2019-2026 history now spans COVID demand collapse, the 2021-22 gas crisis and
+the 2025 quarter-hour transition, but nothing on the site explains them; the
+existing `forecast_scores.parquet` "year" and "regime" (negative-price,
+scarcity) scopes already compute the numbers, unnarrated. Add explanatory
+prose to `site/forecast.md` (and the homepage findings, if a regime materially
+changes a claim) grounded only in those already-computed tables — read the
+actual year-by-year MAE/skill and negative-price frequency before writing a
+sentence about them, never assume "the energy crisis raised volatility" and
+then go looking for a number to cite. No new computation.
+
+**B — pre-auction fundamentals (new data, real engineering risk).** The
+architecture already exists and was never connected: `src/gpa/forecast/
+fundamentals.py` (`normalize`, `attach` with a D-1-noon-gate as-of join,
+`FUNDAMENTAL_FEATURES`) and `panel.build_panel`'s `fundamentals` parameter are
+already wired and tested against a synthetic frame; `SMARD_FORECAST_FILTERS`
+shows SMARD was the originally intended provider, but nothing fetches real
+data from it. This plan uses Energy-Charts instead (user's choice): checked
+live and read-only on 15 September 2026, `/public_power_forecast`
+(`production_type` in `load`/`solar`/`wind_onshore`/`wind_offshore`,
+`forecast_type=day-ahead`) returns quarter-hour data back to at least
+2019-06-01, and a spot check against `/public_power` actuals for 2020-06-15
+solar confirmed the two series are genuinely different (0 of 30 sampled
+intervals identical, realistic small forecast errors) — not actuals
+relabelled as a forecast.
+
+1. **Vintage honesty, decided before any code.** Neither endpoint exposes a
+   publication timestamp; `fundamentals.py`'s own docstring already
+   anticipates this ("the caller supplies the publication time... because
+   SMARD's historical chart archive does not provide a reliable publication
+   vintage"). A historical backfill cannot observe a real retrieval instant,
+   so it must not fabricate one. Assign `published_at` = the D-1 noon gate
+   itself for every backfilled row (`da_forecast_age_hours = 0` throughout),
+   and label this table's `data_vintages` metadata explicitly as "historical
+   day-ahead-labelled forecast, publication instant not independently
+   verified — distinct from a live-captured vintage." A future live `gpa
+   issue` run would instead record its actual fetch instant, and that
+   distinction must stay visible in the data, not just in prose.
+2. **New store dataset.** Add `"fundamentals"` to `schema.SCHEMAS`/
+   `store.DATASETS`: `zone, ts_utc, resolution_min, series
+   (load_forecast_mw/wind_forecast_mw/solar_forecast_mw), value, source`, or a
+   wide equivalent — decide the exact shape from how `store.write`'s
+   zone/month partitioning and `fundamentals.normalize`'s wide contract
+   compose most simply, favouring reuse of the existing narrow
+   zone/ts_utc/fuel-like pattern `generation` already uses over inventing a
+   new one. Combine onshore + offshore into one `wind_forecast_mw` at fetch
+   time, matching `RESIDUAL_LOAD_FUELS`'s existing wind/solar residual
+   definition. Register the source in `zones.py` for DE-LU only.
+3. **Fetch and backfill.** A new `EnergyChartsSource` method for
+   `/public_power_forecast`, reusing the existing retry/backoff client. `gpa
+   backfill --zone DE-LU --dataset fundamentals` from 2019-01-01 (matching the
+   committed store's own floor) through today. Validate before use: `gpa
+   validate`, `quality.report()`, no internal gaps/duplicates, resolution
+   consistent with load/generation.
+4. **Wire the panel, then test leakage before touching the harness.**
+   Construct the `zone/ts_utc/published_at/*_forecast_mw` frame `attach()`
+   expects from the stored `fundamentals` dataset; add a `load_panel(...,
+   include_fundamentals: bool = False)` path calling `build_panel(...,
+   fundamentals=...)`. Add regression tests before wiring the harness:
+   a future-dated fundamentals row must never enter a target day's features
+   (the existing D-1-noon gate in `attach()` already enforces this — write a
+   test that proves it against a real day using this data, not just the
+   existing synthetic-frame tests), and the residual-load-forecast identity
+   (`da_residual_load_forecast = load - wind - solar`) must match.
+5. **Ablation, not a wholesale model change.** Run `gpa backtest --zone DE-LU
+   --scope all` with `include_fundamentals=True` against the *same* frozen
+   evaluation window as `b0e69bf47f6e230be9b5` and compare MAE, skill and
+   feature coefficients with vs. without the new features — a new comparison
+   table, not a replacement of the current frozen release. Do not select
+   models or parameters using the comparison result; the existing validation
+   window and grids stay as they are. If the ablation improves the case for
+   a new frozen release, that is a separate, later decision requiring its own
+   plan-then-freeze discipline like F's and the history extension's, not an
+   automatic consequence of this item.
+6. **Verification.** Full pytest/ruff/mypy; `gpa export --check` must still
+   pass unchanged (nothing here alters the published release by itself);
+   record the ablation's numbers, coverage report and any excluded interval
+   here, plus store growth.
+
+**Not in this item:** wiring fundamentals into `gpa issue` for prospective use
+(D's live pilot boundary stays closed); outages, cross-border availability or
+fuel/carbon inputs (P2's own text defers those); adopting the ablation's
+result as the new frozen release (a later, separate decision).
 
 ### DE-LU history from 2019-01-01 and a re-frozen release — recorded before implementation
 
