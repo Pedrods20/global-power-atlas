@@ -154,16 +154,21 @@ def from_store(zone: Zone) -> pl.DataFrame:
     """Build the wide snapshot :func:`attach` expects from the curated store.
 
     ``gpa.sources.energy_charts`` stores the honest day-ahead forecast values
-    with no publication vintage, because the provider exposes none. This is
-    the one place that turns that raw archive into a modelling input, and it
-    assigns ``published_at`` as this project's own research-policy assumption:
-    each row is treated as available at the market gate for its own delivery
-    day (:func:`gpa.forecast.ledger.market_gate`'s definition, reimplemented
-    here to avoid a circular import against ``ledger`` -> ``panel`` ->
-    ``fundamentals``), not an observed publication instant. That makes
-    ``da_forecast_age_hours`` a constant zero for every historically backfilled
-    row; a live, prospective use of these features (not implemented here) must
-    instead record its actual retrieval instant, which would vary.
+    with no publication vintage, because the provider exposes none, at their
+    native resolution, which has been quarter-hourly throughout the archive
+    (unlike ``price``/``load``/``generation``, which changed resolution later).
+    This is the one place that turns that raw archive into a modelling input:
+    it averages sub-hourly rows into one duration-weighted value per clock
+    hour, dropping a clock hour outright rather than averaging a partial one
+    (:func:`attach` keys on whole clock hours and has no notion of a partial
+    one), and it assigns ``published_at`` as this project's own research-policy
+    assumption: each row is treated as available at the market gate for its
+    own delivery day (:func:`gpa.forecast.ledger.market_gate`'s definition,
+    reimplemented here to avoid a circular import against ``ledger`` ->
+    ``panel`` -> ``fundamentals``), not an observed publication instant. That
+    makes ``da_forecast_age_hours`` a constant zero for every historically
+    backfilled row; a live, prospective use of these features (not implemented
+    here) must instead record its actual retrieval instant, which would vary.
     """
     from gpa import store
 
@@ -171,7 +176,22 @@ def from_store(zone: Zone) -> pl.DataFrame:
     if raw.is_empty():
         return empty()
 
-    wide = raw.pivot(on="series", index=["zone", "ts_utc"], values="forecast_mw")
+    hourly = (
+        raw.with_columns(pl.col("ts_utc").dt.truncate("1h").alias("_hour"))
+        .group_by(["zone", "_hour", "series"])
+        .agg(
+            (
+                (pl.col("forecast_mw") * pl.col("resolution_min")).sum()
+                / pl.col("resolution_min").sum()
+            ).alias("forecast_mw"),
+            pl.col("resolution_min").sum().alias("_minutes"),
+        )
+        .filter(pl.col("_minutes") == 60)
+        .drop("_minutes")
+        .rename({"_hour": "ts_utc"})
+    )
+
+    wide = hourly.pivot(on="series", index=["zone", "ts_utc"], values="forecast_mw")
     for series in ("load", "wind", "solar"):
         if series not in wide.columns:
             wide = wide.with_columns(pl.lit(None, dtype=pl.Float64).alias(series))
