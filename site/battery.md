@@ -240,6 +240,7 @@ const solarCaptureCorr = capacityCorrelation.find((d) => d.x === "solar_capacity
 const spreadCorr = capacityCorrelation.find((d) => d.x === "solar_capacity_gw" && d.y === "spread_pct_of_price");
 const windCaptureCorr = capacityCorrelation.find((d) => d.x === "wind_capacity_gw" && d.y === "wind_capture_rate");
 const solarTarget = extrapolationFlags.find((d) => d.technology === "Solar AC");
+const solarDcTarget = extrapolationFlags.find((d) => d.technology === "Solar DC");
 const windOnshoreTarget = extrapolationFlags.find((d) => d.technology === "Wind onshore");
 const windOffshoreTarget = extrapolationFlags.find((d) => d.technology === "Wind offshore");
 const foresightCompetition = competitionCorrelation.find((d) => d.strategy === "perfect_foresight" && d.energy_mwh === duration);
@@ -247,8 +248,9 @@ const foresightCompetition = competitionCorrelation.find((d) => d.strategy === "
 
 Solar's own capture rate — what a solar generator actually earns, divided by
 the flat average price — fell from **${pct(firstSolar.capture_rate)}** in
-${firstSolar.period} to **${pct(lastSolar.capture_rate)}** in ${lastSolar.period},
-while DE-LU's installed solar capacity grew roughly **${solarCapacityMultiple.toFixed(1)}×**
+${firstSolar.period} to **${pct(lastSolar.capture_rate)}** in ${lastSolar.period}
+(partial year in this release),
+while Germany's installed solar AC capacity grew roughly **${solarCapacityMultiple.toFixed(1)}×**
 (correlation ${solarCaptureCorr.pearson_r.toFixed(2)}, n=${solarCaptureCorr.n}
 complete years, ${solarCaptureCorr.fitted_year_min}-${solarCaptureCorr.fitted_year_max}).
 The on/off-peak spread moved with it, from **EUR ${euro(firstSolarYear.spread)}/MWh**
@@ -257,16 +259,21 @@ ${lastSolar.period} (correlation ${spreadCorr.pearson_r.toFixed(2)}) — on-peak
 hours are now, on average, *cheaper* than off-peak, the textbook signature of
 solar cannibalisation. Wind shows no comparable trend
 (correlation ${windCaptureCorr.pearson_r.toFixed(2)}): its flatter daily and
-seasonal output self-cannibalises far less than solar's midday concentration.
+seasonal output differs from solar's midday concentration. This annual
+correlation alone does not measure either technology's causal price impact.
 
 This is a real, already-visible co-movement, not a fitted causal model: with
 only ${solarCaptureCorr.n} complete annual points, most series that both trend
 over the period will correlate whether or not one drives the other.
 
-Government targets assume this trend continues, and then some. DE-LU's
-realised solar capacity has never exceeded **${gw(solarTarget.realised_max_gw)} GW**
-(${solarTarget.realised_max_year}); Germany's EEG 2023 target for 2030 is
-**${gw(solarTarget.planned_2030_gw)} GW**. Onshore wind's realised ceiling is
+Government targets describe capacity expansion, not a continuation of the
+estimated price relationship. In the completed calendar years used here,
+Germany's maximum recorded solar capacity was **${gw(solarTarget.realised_max_gw)} GW AC**
+(${solarTarget.realised_max_year}) or **${gw(solarDcTarget.realised_max_gw)} GW DC**
+(${solarDcTarget.realised_max_year}); the provider's EEG 2023 target for 2030 is
+**${gw(solarTarget.planned_2030_gw)} GW**. The target's AC/DC convention has not
+been independently verified, so both historical series are shown.
+Onshore wind's maximum in those completed years is
 **${gw(windOnshoreTarget.realised_max_gw)} GW** against a ${gw(windOnshoreTarget.planned_2030_gw)} GW
 target; offshore wind's is **${gw(windOffshoreTarget.realised_max_gw)} GW**
 against **${gw(windOffshoreTarget.planned_2030_gw)} GW**. Every one of these
@@ -279,42 +286,41 @@ perfect-foresight margin correlates **positively** with Germany's own battery
 fleet (r=${foresightCompetition.pearson_r.toFixed(2)}, n=${foresightCompetition.n}
 years, ${foresightCompetition.fitted_year_min}-${foresightCompetition.fitted_year_max};
 the same sign holds for the forecast-driven strategies too) — not negatively.
-The same years saw the 2021-2022 fuel-price shock and the cannibalisation
-above expand the arbitrage opportunity faster than a still-small competing
-fleet could compress it. **This is not evidence that competition does not
-erode margin**, only that, so far, a much larger co-moving trend swamps
-whatever effect it may already be having.
+The period also includes the 2021-2022 price shock and changes in renewable
+output. These are possible confounders, not effects separated by this analysis.
+**This is not evidence that competition does not erode margin**: the annual
+correlation cannot identify its contribution. The trailing partial year is
+excluded using the frozen study's end, not today's date; the included 2020
+sample starts on 3 January and dispatch coverage exclusions still apply.
 
-That fleet is growing fast, and batteries just got a lot cheaper: utility-scale
+That fleet is growing fast, and battery packs became cheaper: global
 stationary-storage pack prices fell 45% in a single year, to $70/kWh in 2025
 ([BloombergNEF, 2025 Lithium-Ion Battery Price Survey](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/),
-published 9 December 2025) — the sharpest drop of any segment BNEF tracks. A
+published 9 December 2025) — the sharpest drop of any segment BNEF tracks.
+This is a pack price, not installed German project CAPEX. A
 falling barrier to adding competing capacity is exactly the condition under
 which the "not yet" above would be expected to change.
 
 Auction results add one more data point, with a caveat attached. Germany's
-most recent onshore wind auction (1 May 2026) cleared at an average reference
+onshore wind auction with a 1 May 2026 bid deadline had a volume-weighted average award
 value of 5.06 ct/kWh — EUR 50.6/MWh
 ([Bundesnetzagentur, consolidated onshore wind auction statistics](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html)),
 well below DE-LU's realised ${lastWind.period} wind capture price of
-**EUR ${euro(lastWind.capture_price)}/MWh**. This is not a fixed offtake price:
-EEG's sliding market premium tops a project up to the reference value only
-when the wholesale price is below it, and pays nothing in negative-price hours
-— so a reference value under today's capture price does not by itself mean new
-wind is unprofitable at the margin, only that its guaranteed floor sits well
-under what the market has recently paid.
+**EUR ${euro(lastWind.capture_price)}/MWh** (partial year). An auction award
+value and a realised, generation-weighted wholesale price are different
+measures. This comparison does not establish a project's hourly revenue,
+cost of energy or profitability; support eligibility and project-specific
+costs are not modelled here.
 
 **What would make the ${duration}h case above less attractive.** Its margin
-is currently earned in a market where volatility has been growing faster than
-competition — reverse either half of that and the case weakens. A calmer
+depends on price differences persisting after losses and costs. A calmer
 price shape (the gas-crisis premium unwinding) or storage finally growing past
 the point where it visibly compresses spreads rather than just riding them
 would shrink the spread this battery is paid to exploit, not just this
 project's forecast advantage over a naive strategy. None of the correlations
-above are strong enough, at n=${foresightCompetition.n} years, to say when
-that turn arrives — only that a battery fleet whose own rated power grew
-roughly tenfold in five years, now getting markedly cheaper to add to, makes
-it a real possibility within this decade rather than a remote one.
+above can identify a causal competition effect or, at n=${foresightCompetition.n}
+years, say when that turn arrives. Capacity growth and falling pack prices
+motivate a downside scenario; they do not date or quantify future margin erosion.
 
 ## Dispatch and study boundaries
 

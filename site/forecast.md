@@ -11,7 +11,7 @@ const metadata = await FileAttachment("data/forecast.json").json();
 const run = metadata.runs.find((d) => d.zone === "DE-LU");
 const scores = [...await FileAttachment("data/forecast_scores.parquet").parquet()];
 const daily = [...await FileAttachment("data/forecast_daily.parquet").parquet()];
-const predictions = [...await FileAttachment("data/forecast_predictions.parquet").parquet()];
+const predictions = [...await FileAttachment("data/forecast_preview.parquet").parquet()];
 const names = new Map([
   ["naive_previous_day", "Previous day"],
   ["naive_previous_week", "Previous week"],

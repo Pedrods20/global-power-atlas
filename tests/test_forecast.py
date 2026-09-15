@@ -406,6 +406,12 @@ def test_validation_and_cutoff_do_not_read_later_prices():
     assert result.predictions.group_by("model").len()["len"].n_unique() == 1
     assert result.validation_start < result.test_start <= result.test_end == end
     assert "retrospective" in result.metadata()["evaluation"]
+    assert result.metadata()["feature_mode"] == "price and calendar only"
+    actuals = replace(result, features=("residual_d2",))
+    assert actuals.metadata()["feature_mode"] == "lagged actual load/generation"
+    ablation = replace(result, features=("residual_d2", "da_load_forecast"))
+    assert "day-ahead load/wind/solar forecasts" in ablation.metadata()["feature_mode"]
+    assert "assumed gate vintage" in ablation.metadata()["feature_mode"]
     assert result.summary().height == 5
     changed_test = replace(
         source,

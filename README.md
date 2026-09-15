@@ -70,13 +70,13 @@ Reproduce with `gpa export --check` against the committed snapshot.
 - **Battery:** explicit power, energy, efficiency, SOC, terminal SOC and
   one-cycle-per-day constraints. Forecast-guided dispatch is settled against
   observed prices; perfect foresight is an upper bound under the same physics.
-- **Market structure:** the battery page also correlates DE-LU's own
+- **Market structure:** the battery page also correlates Germany's
   renewable and storage capacity (Energy-Charts, including Germany's official
   2030 targets) against solar's capture-rate erosion (0.93 to 0.51,
-  2019-2026), the on/off-peak spread going negative, and this project's own
-  arbitrage margin. Competition from Germany's fast-growing battery fleet is
-  not yet visibly compressing that margin, stated as "not detectable against
-  a larger co-moving trend," not "no effect."
+  2019-2026, with 2026 partial), the on/off-peak spread going negative, and
+  this project's own DE-LU arbitrage margin. Annual fleet-margin correlations
+  are positive in this sample; shared trends and price shocks prevent these
+  small-sample correlations from identifying a causal competition effect.
 - **Time and units:** UTC-aware source timestamps are interpreted through each
   market's local clock. Interval duration is carried explicitly, including the
   European hourly-to-quarter-hour transition.
@@ -122,6 +122,15 @@ gpa battery --zone DE-LU
 The repository has no runtime backend. The site reads only the small,
 pre-computed files under `site/data`; browser-visible credentials are never
 required.
+
+The forecast chart loads `site/data/forecast_preview.parquet` (12 sampled
+weeks). The separate `site/data/forecast_predictions.parquet` retains every
+rounded clock-hour prediction for reproducible battery studies; it is not
+downloaded by the forecast page. To rerun that study locally:
+
+```bash
+gpa battery-study --predictions site/data/forecast_predictions.parquet
+```
 
 ## Quality checks
 

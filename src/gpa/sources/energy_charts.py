@@ -298,7 +298,10 @@ class EnergyChartsSource:
                     schema={"_epoch": pl.Int64, "_value": pl.Float64},
                 )
                 .drop_nulls("_value")
-                .with_columns(pl.lit(series).alias("series"))
+                .with_columns(
+                    pl.lit(series).alias("series"),
+                    pl.lit(production_type).alias("_component"),
+                )
             )
             frames.append(chunk)
 
@@ -309,10 +312,19 @@ class EnergyChartsSource:
         if combined.is_empty():
             return _empty("fundamentals")
 
-        # Onshore and offshore wind arrive as separate chunks; sum after
-        # mapping, the same rule generation.py applies to shared fuels.
-        out = combined.group_by(["ts_utc", "series"]).agg(
-            pl.col("_value").sum().alias("forecast_mw")
+        # Total wind needs both components at each timestamp. Missing offshore
+        # is missing information, not zero production. Reject duplicates too.
+        out = (
+            combined.group_by(["ts_utc", "series"])
+            .agg(
+                pl.col("_value").sum().alias("forecast_mw"),
+                pl.col("_component").n_unique().alias("_components"),
+                pl.len().alias("_rows"),
+            )
+            .filter(
+                (pl.col("_components") == pl.when(pl.col("series") == "wind").then(2).otherwise(1))
+                & (pl.col("_rows") == pl.col("_components"))
+            )
         )
         resolutions = _resolution_table(sorted(all_seconds), zone)
         return (

@@ -131,6 +131,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     destination.mkdir(parents=True, exist_ok=True)
 
     capacity_price_yearly = _capacity_price_yearly()
+    price_before_year = _annual_fit_cutoff(store.read("price", "DE-LU"), get_zone("DE-LU"))
     tables: dict[str, pl.DataFrame] = {
         "daily_prices": _daily_prices(),
         "daily_load": _daily_load(),
@@ -138,8 +139,12 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "capacity": _capacity(),
         "cannibalisation": _cannibalisation(),
         "capacity_price_yearly": capacity_price_yearly,
-        "capacity_price_correlation": _capacity_price_correlation(capacity_price_yearly),
-        "capacity_extrapolation_flags": _capacity_extrapolation_flags(),
+        "capacity_price_correlation": _capacity_price_correlation(
+            capacity_price_yearly, before_year=price_before_year
+        ),
+        "capacity_extrapolation_flags": _capacity_extrapolation_flags(
+            before_year=price_before_year
+        ),
         "freshness": _freshness(),
     }
     from gpa import quality
@@ -162,7 +167,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         if suffix == "predictions":
             result = result.drop("ts_utc").with_columns(pl.col(pl.Float64).round(2))
             full_predictions = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
-            result = _forecast_page_predictions(full_predictions)
+            tables["forecast_preview"] = _forecast_page_predictions(full_predictions)
         tables[f"forecast_{suffix}"] = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
 
     battery_tables = _battery_tables(full_predictions)
@@ -170,7 +175,8 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     battery_margin_yearly = _battery_margin_yearly(battery_tables["battery_monthly"])
     tables["battery_margin_yearly"] = battery_margin_yearly
     tables["battery_competition_correlation"] = _battery_competition_correlation(
-        battery_margin_yearly
+        battery_margin_yearly,
+        before_year=_annual_fit_cutoff(frames["predictions"], get_zone(str(metadata["zone"]))),
     )
 
     written: dict[str, int] = {}
@@ -490,10 +496,29 @@ def _capacity_price_yearly() -> pl.DataFrame:
     return combined.with_columns(pl.lit(zone.code).alias("zone"))
 
 
-def _capacity_price_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
+def _annual_fit_cutoff(intervals: pl.DataFrame, zone: Zone) -> int | None:
+    """Exclusive year bound from the final input interval, never the export clock.
+
+    Price intervals carry their own resolution; frozen predictions are hourly.
+    Ending at local January 1 includes the preceding year. This only removes
+    a trailing partial year, not gaps or incomplete leading years within a study.
+    """
+    if intervals.is_empty():
+        return None
+    minutes = pl.col("resolution_min") if "resolution_min" in intervals.columns else pl.lit(60)
+    boundary = intervals.select(
+        (pl.col("ts_utc") + pl.duration(minutes=minutes))
+        .max()
+        .dt.convert_time_zone(zone.timezone)
+        .dt.year()
+    ).item()
+    return int(boundary)
+
+
+def _capacity_price_correlation(yearly: pl.DataFrame, *, before_year: int | None) -> pl.DataFrame:
     """Pearson correlation for each pair in :data:`_CORRELATION_PAIRS`.
 
-    Excludes the current, still-partial year: a part-year point (built from
+    Excludes years at or after the input-derived cutoff: a part-year point (built from
     fewer months than the rest) is not comparable to a complete one and would
     distort a correlation computed on only seven-odd points to begin with.
 
@@ -504,19 +529,20 @@ def _capacity_price_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
     little data underlies the coefficient, and so nobody downstream
     mistakes it for something it is not.
     """
-    if yearly.is_empty():
+    if yearly.is_empty() or before_year is None:
         return pl.DataFrame()
-    complete = yearly.filter(pl.col("year") != str(dt.datetime.now(dt.UTC).year))
+    complete = yearly.filter(pl.col("year") < str(before_year))
     if complete.is_empty():
         return pl.DataFrame()
 
-    fitted_min, fitted_max = complete["year"].min(), complete["year"].max()
     rows: list[dict[str, object]] = []
     for x, y, label in _CORRELATION_PAIRS:
-        pair = complete.select(x, y).drop_nulls()
+        pair = complete.select("year", x, y).filter(pl.col(x).is_finite() & pl.col(y).is_finite())
         if pair.height < 3:
             continue
         r = pair.select(pl.corr(x, y)).item()
+        if r is None or not math.isfinite(r):
+            continue
         rows.append(
             {
                 "x": x,
@@ -524,8 +550,8 @@ def _capacity_price_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
                 "label": label,
                 "n": pair.height,
                 "pearson_r": r,
-                "fitted_year_min": fitted_min,
-                "fitted_year_max": fitted_max,
+                "fitted_year_min": pair["year"].min(),
+                "fitted_year_max": pair["year"].max(),
             }
         )
     if not rows:
@@ -533,7 +559,7 @@ def _capacity_price_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows).with_columns(pl.lit("DE-LU").alias("zone"))
 
 
-def _capacity_extrapolation_flags() -> pl.DataFrame:
+def _capacity_extrapolation_flags(*, before_year: int | None) -> pl.DataFrame:
     """Whether each 2030 policy target lies above anything DE-LU has realised.
 
     Answers the plan's own requirement directly, as a table rather than a
@@ -541,22 +567,21 @@ def _capacity_extrapolation_flags() -> pl.DataFrame:
     fitted only on realised capacity levels, and a scenario that walks a
     technology out to its government 2030 target is an extrapolation beyond
     that fitted range whenever this table says ``exceeds_realised_max`` is
-    true. Excludes the current partial year from "realised", the same choice
+    true. Excludes the input's trailing partial year from "realised", the same choice
     :func:`_capacity_price_correlation` makes, so a not-yet-complete year
     cannot masquerade as this technology's realised ceiling.
     """
     from gpa import capacity as capacity_module
 
     cap = capacity_module.read()
-    if cap.is_empty():
+    if cap.is_empty() or before_year is None:
         return pl.DataFrame()
 
-    current_year = str(dt.datetime.now(dt.UTC).year)
     realised = (
         cap.filter(
             (pl.col("time_step") == "yearly")
             & (~pl.col("is_planned"))
-            & (pl.col("period") != current_year)
+            & (pl.col("period") < str(before_year))
         )
         .group_by("technology")
         .agg(
@@ -566,7 +591,9 @@ def _capacity_extrapolation_flags() -> pl.DataFrame:
     )
     planned_2030 = cap.filter(
         (pl.col("time_step") == "yearly") & pl.col("is_planned") & (pl.col("period") == "2030")
-    ).select(pl.col("technology").alias("planned_technology"), pl.col("value").alias("planned_2030_gw"))
+    ).select(
+        pl.col("technology").alias("planned_technology"), pl.col("value").alias("planned_2030_gw")
+    )
 
     rows: list[pl.DataFrame] = []
     for planned_technology, realised_technologies in _PLANNED_TO_REALISED_TECHNOLOGY.items():
@@ -652,20 +679,21 @@ def _battery_margin_yearly(monthly: pl.DataFrame) -> pl.DataFrame:
     return combined.with_columns(pl.lit("DE-LU").alias("zone"))
 
 
-def _battery_competition_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
+def _battery_competition_correlation(
+    yearly: pl.DataFrame, *, before_year: int | None
+) -> pl.DataFrame:
     """Pearson correlation between the German battery fleet and DE-LU arbitrage margin.
 
-    Same discipline as :func:`_capacity_price_correlation`: the current,
-    still-partial year is excluded from the fit, and every row carries its
+    Same discipline as :func:`_capacity_price_correlation`: the frozen input's
+    trailing partial year is excluded from the fit, and every row carries its
     exact fitted range and point count rather than leaving the small sample
     size implicit.
     """
-    if yearly.is_empty():
+    if yearly.is_empty() or before_year is None:
         return pl.DataFrame()
-    complete = yearly.filter(pl.col("year") != str(dt.datetime.now(dt.UTC).year))
+    complete = yearly.filter(pl.col("year") < str(before_year))
     if complete.is_empty():
         return pl.DataFrame()
-    fitted_min, fitted_max = complete["year"].min(), complete["year"].max()
 
     rows: list[dict[str, object]] = []
     for strategy in _BATTERY_COMPETITION_STRATEGIES:
@@ -674,20 +702,24 @@ def _battery_competition_correlation(yearly: pl.DataFrame) -> pl.DataFrame:
                 complete.filter(
                     (pl.col("strategy") == strategy) & (pl.col("energy_mwh") == duration)
                 )
-                .select("battery_power_gw", "eur_per_mw_day")
-                .drop_nulls()
+                .select("year", "battery_power_gw", "eur_per_mw_day")
+                .filter(
+                    pl.col("battery_power_gw").is_finite() & pl.col("eur_per_mw_day").is_finite()
+                )
             )
             if pair.height < 3:
                 continue
             r = pair.select(pl.corr("battery_power_gw", "eur_per_mw_day")).item()
+            if r is None or not math.isfinite(r):
+                continue
             rows.append(
                 {
                     "strategy": strategy,
                     "energy_mwh": duration,
                     "n": pair.height,
                     "pearson_r": r,
-                    "fitted_year_min": fitted_min,
-                    "fitted_year_max": fitted_max,
+                    "fitted_year_min": pair["year"].min(),
+                    "fitted_year_max": pair["year"].max(),
                 }
             )
     if not rows:

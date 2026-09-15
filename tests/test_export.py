@@ -13,6 +13,7 @@ from gpa.calendar import hours_in_local_day
 from gpa.export import (
     _BATTERY_DURATIONS_MWH,
     _BATTERY_MODEL_NAMES,
+    _annual_fit_cutoff,
     _battery_competition_correlation,
     _battery_margin_yearly,
     _battery_tables,
@@ -266,7 +267,9 @@ def test_capacity_price_yearly_drops_a_year_with_no_price_coverage(tmp_path, mon
     assert result["year"].to_list() == ["2019"]  # 2020 has capacity but no price
 
 
-def _yearly_fixture(years: list[str], solar_gw: list[float], solar_capture: list[float]) -> pl.DataFrame:
+def _yearly_fixture(
+    years: list[str], solar_gw: list[float], solar_capture: list[float]
+) -> pl.DataFrame:
     n = len(years)
     return pl.DataFrame(
         {
@@ -285,8 +288,12 @@ def test_capacity_price_correlation_matches_a_known_negative_relationship():
     # Solar capacity rises while its capture rate falls in lockstep: a clean,
     # unambiguous negative correlation the coefficient must recover.
     years = [str(y) for y in range(2015, 2022)]  # none is the real current year
-    yearly = _yearly_fixture(years, solar_gw=[40.0 + 10 * i for i in range(7)], solar_capture=[0.9 - 0.05 * i for i in range(7)])
-    result = _capacity_price_correlation(yearly)
+    yearly = _yearly_fixture(
+        years,
+        solar_gw=[40.0 + 10 * i for i in range(7)],
+        solar_capture=[0.9 - 0.05 * i for i in range(7)],
+    )
+    result = _capacity_price_correlation(yearly, before_year=2022)
     row = result.filter(
         (pl.col("x") == "solar_capacity_gw") & (pl.col("y") == "solar_capture_rate")
     ).row(0, named=True)
@@ -296,8 +303,8 @@ def test_capacity_price_correlation_matches_a_known_negative_relationship():
     assert row["fitted_year_max"] == "2021"
 
 
-def test_capacity_price_correlation_excludes_the_current_partial_year():
-    current_year = str(dt.datetime.now(dt.UTC).year)
+def test_capacity_price_correlation_excludes_a_historical_partial_year():
+    current_year = "2021"
     years = [str(y) for y in range(2015, 2021)] + [current_year]
     # The current year is a wild outlier; if it were included the fit would
     # be pulled toward it instead of the other six points' clean trend.
@@ -305,7 +312,7 @@ def test_capacity_price_correlation_excludes_the_current_partial_year():
     solar_capture = [0.9 - 0.05 * i for i in range(6)] + [0.9]
     yearly = _yearly_fixture(years, solar_gw, solar_capture)
 
-    result = _capacity_price_correlation(yearly)
+    result = _capacity_price_correlation(yearly, before_year=2021)
     row = result.filter(
         (pl.col("x") == "solar_capacity_gw") & (pl.col("y") == "solar_capture_rate")
     ).row(0, named=True)
@@ -316,7 +323,42 @@ def test_capacity_price_correlation_excludes_the_current_partial_year():
 
 def test_capacity_price_correlation_is_empty_with_fewer_than_three_points():
     yearly = _yearly_fixture(["2015", "2016"], solar_gw=[40.0, 50.0], solar_capture=[0.9, 0.8])
-    assert _capacity_price_correlation(yearly).is_empty()
+    assert _capacity_price_correlation(yearly, before_year=2022).is_empty()
+
+
+@pytest.mark.parametrize(
+    ("stamp", "minutes", "cutoff"),
+    [
+        (dt.datetime(2021, 9, 1, tzinfo=dt.UTC), 60, 2021),
+        (dt.datetime(2021, 12, 31, 22, tzinfo=dt.UTC), 60, 2022),
+        (dt.datetime(2021, 12, 31, 22, 45, tzinfo=dt.UTC), 15, 2022),
+        (dt.datetime(2021, 12, 31, 22, 30, tzinfo=dt.UTC), 15, 2021),
+    ],
+)
+def test_annual_fit_cutoff_uses_local_interval_end_not_wall_clock(stamp, minutes, cutoff):
+    intervals = pl.DataFrame({"ts_utc": [stamp], "resolution_min": [minutes]})
+    assert _annual_fit_cutoff(intervals, get_zone("DE-LU")) == cutoff
+    if minutes == 60:
+        assert _annual_fit_cutoff(intervals.drop("resolution_min"), get_zone("DE-LU")) == cutoff
+
+
+def test_annual_fit_cutoff_without_observations_is_unknown():
+    assert _annual_fit_cutoff(pl.DataFrame(), get_zone("DE-LU")) is None
+
+
+def test_capacity_correlation_reports_only_finite_pairs_and_their_actual_years():
+    yearly = _yearly_fixture(
+        ["2015", "2016", "2017", "2018", "2019"],
+        solar_gw=[40.0, 50.0, 60.0, 70.0, 80.0],
+        solar_capture=[float("nan"), 0.9, 0.8, 0.7, float("inf")],
+    )
+    result = _capacity_price_correlation(yearly, before_year=2020)
+    assert result.height == 1  # all other pairs contain a constant series
+    row = result.row(0, named=True)
+    assert row["n"] == 3
+    assert row["fitted_year_min"] == "2016"
+    assert row["fitted_year_max"] == "2018"
+    assert row["pearson_r"] == pytest.approx(-1.0)
 
 
 def test_capacity_extrapolation_flags_a_target_above_the_realised_ceiling(tmp_path, monkeypatch):
@@ -329,12 +371,15 @@ def test_capacity_extrapolation_flags_a_target_above_the_realised_ceiling(tmp_pa
                 _capacity_rows(period="2024", technology="Solar AC", value=100.0),
                 _capacity_rows(period="2024", technology="Solar DC", value=110.0),
                 _capacity_rows(
-                    period="2030", technology="Solar planned (EEG 2023)", value=215.0, is_planned=True
+                    period="2030",
+                    technology="Solar planned (EEG 2023)",
+                    value=215.0,
+                    is_planned=True,
                 ),
             ]
         )
     )
-    result = _capacity_extrapolation_flags()
+    result = _capacity_extrapolation_flags(before_year=2025)
     assert set(result["technology"]) == {"Solar AC", "Solar DC"}
     assert result["exceeds_realised_max"].all()
     assert result.filter(pl.col("technology") == "Solar AC")["realised_max_gw"][0] == 100.0
@@ -357,17 +402,17 @@ def test_capacity_extrapolation_does_not_flag_a_target_already_reached(tmp_path,
             ]
         )
     )
-    result = _capacity_extrapolation_flags()
+    result = _capacity_extrapolation_flags(before_year=2025)
     assert result["exceeds_realised_max"].to_list() == [False]
 
 
-def test_capacity_extrapolation_excludes_the_current_partial_year_from_realised_max(
+def test_capacity_extrapolation_excludes_a_historical_partial_year_from_realised_max(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
     from gpa import capacity as capacity_module
 
-    current_year = str(dt.datetime.now(dt.UTC).year)
+    current_year = "2024"
     capacity_module.write(
         pl.concat(
             [
@@ -385,7 +430,7 @@ def test_capacity_extrapolation_excludes_the_current_partial_year_from_realised_
             ]
         )
     )
-    result = _capacity_extrapolation_flags()
+    result = _capacity_extrapolation_flags(before_year=2024)
     assert result["realised_max_gw"][0] == 9.0
     assert result["realised_max_year"][0] == "2023"
 
@@ -394,7 +439,9 @@ def _fleet_rows(period: str, *, power_gw: float, energy_gwh: float) -> pl.DataFr
     return pl.concat(
         [
             _capacity_rows(period=period, technology="Battery storage (power)", value=power_gw),
-            _capacity_rows(period=period, technology="Battery storage (capacity)", value=energy_gwh),
+            _capacity_rows(
+                period=period, technology="Battery storage (capacity)", value=energy_gwh
+            ),
         ]
     )
 
@@ -423,10 +470,18 @@ def test_battery_margin_yearly_joins_the_fleet_and_normalises_to_eur_per_mw_day(
     monthly = pl.DataFrame(
         [
             _monthly_row(
-                strategy="perfect_foresight", energy_mwh=2.0, month="2020-01", days=31, profit_eur=310.0
+                strategy="perfect_foresight",
+                energy_mwh=2.0,
+                month="2020-01",
+                days=31,
+                profit_eur=310.0,
             ),
             _monthly_row(
-                strategy="perfect_foresight", energy_mwh=2.0, month="2020-02", days=29, profit_eur=290.0
+                strategy="perfect_foresight",
+                energy_mwh=2.0,
+                month="2020-02",
+                days=29,
+                profit_eur=290.0,
             ),
         ]
     )
@@ -447,7 +502,9 @@ def test_battery_margin_yearly_only_keeps_the_competition_strategies(tmp_path, m
     capacity_module.write(_fleet_rows("2020", power_gw=1.5, energy_gwh=2.3))
     monthly = pl.DataFrame(
         [
-            _monthly_row(strategy="no_trade", energy_mwh=2.0, month="2020-01", days=31, profit_eur=0.0),
+            _monthly_row(
+                strategy="no_trade", energy_mwh=2.0, month="2020-01", days=31, profit_eur=0.0
+            ),
             _monthly_row(
                 strategy="ridge", energy_mwh=2.0, month="2020-01", days=31, profit_eur=100.0
             ),
@@ -483,7 +540,9 @@ def test_battery_margin_yearly_is_empty_without_fleet_data(tmp_path, monkeypatch
     assert _battery_margin_yearly(monthly).is_empty()
 
 
-def _battery_yearly_fixture(years: list[str], power_gw: list[float], margin: list[float]) -> pl.DataFrame:
+def _battery_yearly_fixture(
+    years: list[str], power_gw: list[float], margin: list[float]
+) -> pl.DataFrame:
     return pl.DataFrame(
         {
             "year": years,
@@ -500,7 +559,7 @@ def test_battery_competition_correlation_matches_a_known_relationship():
     yearly = _battery_yearly_fixture(
         years, power_gw=[1.0 + i for i in range(7)], margin=[50.0 - 5 * i for i in range(7)]
     )
-    result = _battery_competition_correlation(yearly)
+    result = _battery_competition_correlation(yearly, before_year=2022)
     row = result.filter(
         (pl.col("strategy") == "perfect_foresight") & (pl.col("energy_mwh") == 2.0)
     ).row(0, named=True)
@@ -508,14 +567,14 @@ def test_battery_competition_correlation_matches_a_known_relationship():
     assert row["n"] == 7
 
 
-def test_battery_competition_correlation_excludes_the_current_partial_year():
-    current_year = str(dt.datetime.now(dt.UTC).year)
+def test_battery_competition_correlation_excludes_a_historical_partial_year():
+    current_year = "2021"
     years = [str(y) for y in range(2015, 2021)] + [current_year]
     power_gw = [1.0 + i for i in range(6)] + [1000.0]
     margin = [50.0 - 5 * i for i in range(6)] + [50.0]
     yearly = _battery_yearly_fixture(years, power_gw, margin)
 
-    result = _battery_competition_correlation(yearly)
+    result = _battery_competition_correlation(yearly, before_year=2021)
     row = result.row(0, named=True)
     assert row["n"] == 6
     assert current_year not in (row["fitted_year_min"], row["fitted_year_max"])
@@ -523,7 +582,21 @@ def test_battery_competition_correlation_excludes_the_current_partial_year():
 
 def test_battery_competition_correlation_is_empty_with_fewer_than_three_points():
     yearly = _battery_yearly_fixture(["2015", "2016"], power_gw=[1.0, 2.0], margin=[50.0, 40.0])
-    assert _battery_competition_correlation(yearly).is_empty()
+    assert _battery_competition_correlation(yearly, before_year=2022).is_empty()
+
+
+def test_battery_correlation_reports_pair_specific_years_and_skips_constant_series():
+    yearly = _battery_yearly_fixture(
+        ["2015", "2016", "2017", "2018", "2019"],
+        power_gw=[1.0, 2.0, 3.0, 4.0, 5.0],
+        margin=[None, 30.0, 20.0, 10.0, float("inf")],
+    )
+    row = _battery_competition_correlation(yearly, before_year=2020).row(0, named=True)
+    assert row["n"] == 3
+    assert row["fitted_year_min"] == "2016"
+    assert row["fitted_year_max"] == "2018"
+    constant = yearly.with_columns(pl.lit(1.0).alias("battery_power_gw"))
+    assert _battery_competition_correlation(constant, before_year=2020).is_empty()
 
 
 def test_export_all_raises_without_a_frozen_snapshot(tmp_path, monkeypatch):
@@ -531,6 +604,33 @@ def test_export_all_raises_without_a_frozen_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr("gpa.forecast.snapshot.read", lambda: None)
     with pytest.raises(RuntimeError, match="snapshot"):
         export_all(tmp_path / "site-data")
+
+
+def test_export_keeps_full_study_input_separate_from_browser_preview(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path / "curated"))
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path / "reference"))
+    frame = predictions(days=tuple(DAY + dt.timedelta(days=7 * i) for i in range(20)))
+    frames = dict.fromkeys(("scores", "daily", "coefficients"), pl.DataFrame())
+    frames["predictions"] = frame
+    monkeypatch.setattr("gpa.forecast.snapshot.read", lambda: ({"zone": "DE-LU"}, frames))
+    received = []
+
+    def battery_tables(full):
+        received.append(full)
+        return {"battery_monthly": pl.DataFrame()}
+
+    monkeypatch.setattr("gpa.export._battery_tables", battery_tables)
+    output = tmp_path / "site-data"
+    export_all(output)
+    full = pl.read_parquet(output / "forecast_predictions.parquet")
+    preview = pl.read_parquet(output / "forecast_preview.parquet")
+    assert full.height == frame.height == received[0].height
+    assert preview.height < full.height
+    assert preview["local_date"].str.to_date().dt.truncate("1w").n_unique() == 12
+    assert "ts_utc" not in full.columns  # retain the documented clock-hour contract
+    assert_frame_equal(
+        full.with_columns(pl.col("local_date").str.to_date()), received[0], check_row_order=False
+    )
 
 
 def test_battery_tables_match_battery_study_evaluate_bit_for_bit():

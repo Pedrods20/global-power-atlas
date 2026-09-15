@@ -47,6 +47,17 @@ competition is not yet visibly compressing this project's own arbitrage
 margin (a positive, not negative, correlation so far); two real sourced
 citations (BNEF battery pricing, a BNetzA auction result) and a new
 "Is this margin durable" section on `site/battery.md`. Full evidence below.
+**A review pass against that P3 work then found and fixed two real bugs and
+two real documentation/contract gaps** (16 September 2026), detailed further
+below: a clock-year-dependent (not data-dependent) correlation cutoff that
+could have changed results on 1 January with no new data; a wind fundamentals
+fetch that silently summed onshore-only when offshore data was missing rather
+than dropping the interval; forecast-snapshot metadata that did not identify
+a fundamentals-ablation run; and `forecast_predictions.parquet` being
+documented as the battery study's reproducible input while actually holding
+only the 12-week browser preview. All fixed, tested, verified in a real
+browser again, and a live spot-check across five years confirmed the wind bug
+never actually corrupted the already-published fundamentals-ablation numbers.
 **Next:** no further task has been requested; the open items are the
 capacity/renewables portfolio direction's own next natural step (P4,
 packaging the evidence) or the still-undecided fundamentals-adoption
@@ -382,6 +393,99 @@ competition, sourced context), not the original capacity-ledger-plus-
 asset-screening scenario brief with three named growth paths. That
 reframing was a deliberate, recorded decision (see above), not scope lost
 along the way.
+
+### P3 review pass — two bugs and two contract gaps found and fixed, verified
+
+A review of the just-shipped P3 work (16 September 2026) found and fixed four
+real problems before any further planning continued. Two are correctness
+bugs; two are contract/documentation gaps where the code was right but what
+it claimed about itself was not.
+
+1. **Correlation cutoff depended on wall-clock time, not on the data.**
+   `_capacity_price_correlation`/`_capacity_extrapolation_flags`/
+   `_battery_competition_correlation` all excluded "the current year" via
+   `dt.datetime.now(dt.UTC).year` -- meaning the exact same committed data
+   could report a different fitted year range and different correlation
+   coefficients depending on which calendar year `gpa export` happened to run
+   in, a reproducibility violation for a project whose whole premise is
+   reproducible releases. Fixed with a new `_annual_fit_cutoff(intervals,
+   zone)` that derives the boundary from the actual last observed interval
+   end in the relevant frozen input (price data for the capacity
+   correlations, the frozen predictions for the battery-competition one),
+   converted to local time -- a real fact about the data, not the export
+   clock. Covered by `test_annual_fit_cutoff_uses_local_interval_end_not_wall_clock`
+   (parametrised over hourly/quarter-hourly resolution and a year-boundary
+   edge case) and every existing cutoff-dependent test rewritten to a fixed
+   historical year rather than "today."
+2. **Fundamentals wind fetch silently summed onshore-only when offshore was
+   missing.** `_fetch_fundamentals`'s onshore+offshore summing used a plain
+   `group_by(["ts_utc", "series"]).agg(sum)`, so a missing, null or duplicated
+   value in either component at one interval produced a `wind` value that
+   silently reflected only the other component instead of failing or
+   dropping the interval -- a leakage-adjacent correctness bug in a feature
+   this project already ran a real ablation on. Fixed: an interval's `wind`
+   row now requires exactly one onshore and one offshore observation, or is
+   dropped entirely. Covered by a new parametrised test across both
+   components and three failure modes (missing, null, duplicate), confirming
+   only the affected interval is dropped and the adjacent one still sums
+   correctly. **Verified this did not actually corrupt the published
+   fundamentals-ablation numbers**: a live spot-check of a March week in
+   2019, 2020, 2022, 2024 and 2026 found onshore and offshore coverage
+   identical in every sample (768/768 timestamps matched, zero nulls) --
+   Energy-Charts appears to always publish both series together for Germany,
+   at least in the years sampled. The fix is a genuine correctness
+   improvement for a real class of failure, not a retroactive correction; no
+   backfill re-run or evidence retraction was needed.
+3. **Frozen-snapshot metadata did not identify a fundamentals-ablation run.**
+   `BacktestResult.metadata()`'s `feature_mode` field distinguished only
+   "price and calendar only" from "lagged actual load/generation," so a
+   snapshot run with `include_fundamentals=True` looked identical to one
+   without it in its own published metadata -- exactly the kind of gap that
+   makes "was this run the ablation or the published release" a question
+   requiring memory rather than a fact in the record. Fixed: `feature_mode`
+   now appends "; day-ahead load/wind/solar forecasts (assumed gate vintage)"
+   whenever a `da_*` feature is present. Covered by
+   `test_validation_and_cutoff_do_not_read_later_prices`'s extended
+   assertions across all three feature-mode states.
+4. **The file documented as the battery study's reproducible input actually
+   held only the 12-week browser preview.** `export_all()` reassigned
+   `result` to `_forecast_page_predictions(full_predictions)` (the trimmed
+   sample) before writing it out as `forecast_predictions.parquet` -- so
+   anyone downloading "the input" to reproduce the battery study, per the
+   project's own stated reproducibility promise, would have gotten a
+   12-week sample instead of the full multi-year history the real study
+   used internally. Fixed: the trimmed sample now writes to a new
+   `forecast_preview.parquet` (which `site/forecast.md`'s week inspector was
+   repointed at), and `forecast_predictions.parquet` keeps the full,
+   untrimmed, rounded clock-hour table. README.md documents this split and
+   the exact reproduction command. **Verified live**: `gpa battery-study
+   --predictions site/data/forecast_predictions.parquet` reproduces the
+   README's published headline exactly -- 2,404 common days, Ridge at 4h
+   adds EUR 29,014.30/MW over `naive_similar_day`. Regression test
+   `test_export_keeps_full_study_input_separate_from_browser_preview` spies
+   on `_battery_tables`'s actual input and asserts the exported file matches
+   it bit-for-bit while the preview file stays smaller.
+
+**Site narrative rigor pass on `site/battery.md`,** alongside the fixes
+above, tightening several claims that were more confident than the evidence
+supported: correlation-vs-causation language strengthened throughout (e.g.
+"the annual correlation cannot identify its contribution" rather than
+implying a hidden effect exists); 2026 explicitly marked as a partial year
+everywhere it appears, not only in the methodology section; both Solar AC and
+Solar DC realised maxima shown side by side rather than picking one, with the
+EEG target's own AC/DC convention flagged as unverified; the BNEF pack-price
+figure clarified as global, not German-specific CAPEX; the BNetzA auction
+figure's terminology corrected (a "volume-weighted average award value," not
+a single "cleared" price); and the closing "what would make this less
+attractive" paragraph no longer asserts a specific causal story about
+volatility outpacing competition, replaced with a more careful framing of
+what the data can and cannot say.
+
+**Verification:** full `pytest` (395 tests), `ruff check`, `mypy` all clean. `npm run build` and `npm run test:browser` (Playwright
+against a live `observable preview` server, both viewports) both pass on the
+rebuilt site with no console errors and no leaked `NaN`/`undefined`; the
+rendered DOM text of the changed section was read directly and confirmed
+coherent. `gpa export --check` passes against the regenerated `site/data/`.
 
 ### Historical market regimes and pre-auction fundamentals — recorded before implementation
 

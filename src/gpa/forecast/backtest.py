@@ -162,6 +162,13 @@ class BacktestResult:
         """A JSON-safe description of the run, for the published page."""
         overall = self.summary()
         best = overall.row(0, named=True) if not overall.is_empty() else {}
+        feature_mode = (
+            "lagged actual load/generation"
+            if any(name.startswith("residual_") for name in self.features)
+            else "price and calendar only"
+        )
+        if any(name.startswith("da_") for name in self.features):
+            feature_mode += "; day-ahead load/wind/solar forecasts (assumed gate vintage)"
         return {
             "zone": self.zone.code,
             "zone_name": self.zone.name,
@@ -207,11 +214,7 @@ class BacktestResult:
             "lightgbm_refit_days": self.lightgbm_parameters.get("refit_every_days", 1),
             "lightgbm_features": [*self.features, "local_hour"],
             "target_convention": "complete UTC hours; repeated autumn clock hour averaged; each clock-hour cell scored equally",
-            "feature_mode": (
-                "lagged actual load/generation"
-                if any(name.startswith("residual_") for name in self.features)
-                else "price and calendar only"
-            ),
+            "feature_mode": feature_mode,
         }
 
 

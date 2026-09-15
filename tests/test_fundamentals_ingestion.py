@@ -6,11 +6,8 @@ fetch time, the store round-trip through the new ``fundamentals`` dataset, and
 the hourly aggregation and research-policy vintage
 :func:`gpa.forecast.fundamentals.from_store` applies for a historical backfill.
 
-Energy-Charts' forecast endpoint has been quarter-hourly throughout its
-archive (unlike ``price``/``load``/``generation``, which changed resolution
-later), so the fixtures below use quarter-hour spacing to match what a real
-backfill actually returns, not the hourly shape those other datasets have had
-for most of their history.
+The historical forecast backfill contains quarter-hourly values, so the
+fixtures below exercise that spacing as well as hourly provider responses.
 """
 
 from __future__ import annotations
@@ -75,7 +72,7 @@ def test_energy_charts_fundamentals_combines_wind_and_requests_day_ahead(monkeyp
     assert result["zone"].unique().to_list() == ["DE-LU"]
 
 
-def test_energy_charts_fundamentals_tolerates_one_missing_series(monkeypatch):
+def test_energy_charts_fundamentals_omits_total_wind_when_offshore_is_missing(monkeypatch):
     start = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
     payloads = _hourly_payloads(start)
     payloads["wind_offshore"] = {"unix_seconds": [], "forecast_values": []}
@@ -85,7 +82,32 @@ def test_energy_charts_fundamentals_tolerates_one_missing_series(monkeypatch):
     result = source.fetch(ZONE, "fundamentals", start, start + dt.timedelta(hours=24))
 
     wind = result.filter(pl.col("series") == "wind")
-    assert wind["forecast_mw"].unique().to_list() == [10.0]  # onshore only
+    assert wind.is_empty()
+    assert set(result["series"]) == {"load", "solar"}
+
+
+@pytest.mark.parametrize("component", ["wind_onshore", "wind_offshore"])
+@pytest.mark.parametrize("failure", ["missing", "null", "duplicate"])
+def test_energy_charts_fundamentals_requires_both_wind_components_per_interval(
+    monkeypatch, component, failure
+):
+    start = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
+    payloads = _hourly_payloads(start, hours=2)
+    if failure == "missing":
+        payloads[component]["unix_seconds"] = payloads[component]["unix_seconds"][1:]
+        payloads[component]["forecast_values"] = payloads[component]["forecast_values"][1:]
+    elif failure == "null":
+        payloads[component]["forecast_values"][0] = None
+    else:
+        payloads[component]["unix_seconds"].append(int(start.timestamp()))
+        payloads[component]["forecast_values"].append(10.0)
+    source = EnergyChartsSource()
+    monkeypatch.setattr(source, "_get", lambda path, params: payloads[params["production_type"]])
+    result = source.fetch(ZONE, "fundamentals", start, start + dt.timedelta(hours=2))
+    wind = result.filter(pl.col("series") == "wind")
+    assert wind["ts_utc"].to_list() == [start + dt.timedelta(hours=1)]
+    assert wind["forecast_mw"].to_list() == [15.0]
+    assert result.filter(pl.col("series") == "load").height == 2
 
 
 def test_energy_charts_fundamentals_measures_quarter_hour_resolution(monkeypatch):
