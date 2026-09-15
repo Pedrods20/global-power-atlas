@@ -153,25 +153,109 @@ Final validation (Windows, Python 3.13.9):
 | Mypy strict | Passed, 34 source files |
 | Coverage | 87.25% (floor 75%) |
 
-### Session close — 14 September 2026 (third checkpoint, D done)
+### E execution plan — recorded before implementation, not yet started
 
-The user asked to commit and continue the roadmap. D is now fully done and
-committed; nothing was pushed to a remote and no public export, ingestion or
-prospective issuance occurred.
+The user asked to scope E now without implementing it. Scope: local
+ingestion-window and checkpoint logic only. No publication, live pilot start,
+or change to `ingest.yml`'s/`forecast.yml`'s cron schedules is part of this
+increment. Grounded in a read of the current code, cited below file:line.
+
+1. **Stop treating "now" as a publication ceiling.** `pipeline.ingest()`
+   (`pipeline.py:133-134`) defaults `end = now()`; `energy_charts._window()`
+   (`energy_charts.py:273-275`) then clips every fetch to `ts_utc < end`.
+   Because a day-ahead auction publishes a full calendar day's 24 delivery
+   hours in one batch roughly a day ahead of physical delivery, this silently
+   truncates the *current* day's own already-published curve at whatever
+   wall-clock hour the job happens to run — the exact "already-cleared prices
+   for later delivery on the issue day are dropped" finding. Replace the hard
+   `now()` ceiling with a small forward horizon (for example `now() + 2 days`)
+   so a run at any hour can pick up a day-ahead result that has already
+   cleared, and let the provider's own response decide how much of that
+   window actually has data. Before relying on this, confirm with a
+   live/recorded fixture that Energy-Charts returns fewer rows — not an
+   error — when asked for delivery hours it has not published yet, and check
+   that `SmardSource`/`OnsSource` (very different publication cadences, per
+   `sources/smard.py`/`sources/ons.py`) tolerate the same forward request
+   harmlessly, since `pipeline.ingest` is zone/dataset-agnostic.
+2. **Turn `store.coverage()` into the ingestion checkpoint.** `store.py` has
+   no persisted watermark today — `read()`/`available_months()` only glob
+   directory contents, and `coverage()` derives `first_ts_utc`/`last_ts_utc`
+   by scanning the Parquet files themselves. Add a small helper (for example
+   `store.last_ingested(dataset, zone)`) built on that existing scan, and
+   change `pipeline.ingest()`'s default `start` to `last_ingested -
+   overlap_buffer` (a few days, to absorb late revisions) when prior data
+   exists, falling back to today's fixed `lookback_days` only on a cold start
+   (empty store). This lets a resumed run catch up an arbitrarily large gap
+   instead of being capped at `lookback_days`, without adding a second,
+   driftable source of truth for "what we already have."
+3. **Apply the same checkpoint to the isolated forecast store.**
+   `forecast.yml` reseeds `$GPA_DATA_ROOT` from the monthly `data/curated`
+   snapshot every run and then always asks for a fixed `FORECAST_LOOKBACK=7`
+   days (lines 29-32, 63-69), so a gap larger than 7 days between the last
+   `ingest.yml` monthly commit and today is never recovered. Once item 2
+   lands, drop the fixed `--days` flag from this step (or keep it only as an
+   explicit safety floor) so the same coverage-derived catch-up applies here.
+4. **Publication-vs-retrieval distinction stays local, not invented.**
+   Energy-Charts' `/price` payload carries no publication timestamp
+   (`energy_charts.py:123-124` only reads `unix_seconds`/`price`), so E
+   cannot fabricate a true provider publication time. Keep doing what D's
+   provenance layer already does honestly — record the local retrieval
+   instant as `observed_at`/`input_as_of` and label it
+   `provider_publication_times: "unknown"` — and do not add a fabricated
+   vintage field to `store.py`'s schema. A provider later found to expose
+   real publication metadata is new scope, not a retrofit of this step.
+5. **Keep the panel's completeness guard; let items 1-3 make it pass.**
+   `panel.py`'s `_day_hours(zone)` gate on the D-1/D-7 daily aggregates
+   (lines 357-370, 441-451) already correctly excludes a partially-ingested
+   day from `price_d1_mean` etc. rather than silently averaging a truncated
+   day; that safeguard is correct and must not be loosened. Items 1-3 remove
+   the reason D-1 would ever be partially ingested at issuance time in the
+   first place. Add a regression test that ingests and issues on the same run
+   and asserts D-1's daily aggregate features are present, which today's
+   architecture cannot pass.
+6. **Tests and verification.** Cover: computing `start` from
+   `store.coverage()` with prior data vs. a cold start; a simulated multi-month
+   gap caught up in one call with no `--days` override; the forward horizon in
+   item 1 staying bounded rather than requesting an unbounded future window;
+   and an end-to-end `gpa ingest` → `gpa issue` fixture showing D-1's price
+   curve is no longer truncated at the run's wall-clock hour. Update
+   `tests/test_pipeline.py`, `tests/test_store.py` and `tests/test_cli.py`;
+   run the full validation command list before calling E done.
+
+**Open questions to resolve while implementing, not guessed at here:** whether
+Energy-Charts truly returns a short result (vs. an error) for undelivered
+future hours; the safe forward-horizon size that does not risk provider
+errors or rate limits; and whether ONS's yearly-file publication model needs
+its own overlap/horizon constants rather than sharing DE-LU's defaults.
+
+**Acceptance:** `gpa ingest` run at any hour no longer truncates the current
+day's own already-published price curve; a checkpoint derived from
+`store.coverage()` lets a scheduled run recover from an arbitrarily long gap
+without a manual `gpa backfill`; the isolated forecast store in `forecast.yml`
+inherits the same catch-up instead of its own fixed 7-day window; and the
+publication-timestamp gap stays honestly labelled "unknown" rather than
+invented. Integration tests cover a missed-run gap, a same-day truncation
+scenario and the existing D-1/D-7 completeness guard.
+
+### Session close — 14 September 2026 (third checkpoint, D done, E scoped)
+
+The user asked to commit and continue the roadmap, then — once D was done —
+asked only to scope E, not implement it yet. Nothing in this session's E work
+touched code: "E execution plan" above is a plan grounded in reading
+`pipeline.py`, `energy_charts.py`, `sources/base.py`, `store.py`,
+`panel.py`, `ingest.yml` and `forecast.yml`, not yet implemented.
 
 To resume safely in a new session:
 
 1. Open this roadmap in `C:\Users\Pedro\Desktop\Python\global-power-atlas`
    and run `git log --oneline -5` / `git status --short`. Expect a clean
-   working tree with `c594b75` (D done), `f2bb495` and `c893fa7` as the three
-   most recent commits on `main`, all unpushed.
-2. Read "D handoff evidence" above for what D actually built, then start
-   **E — input availability/history**: replace the fixed seven-day ingestion
-   window with checkpoint-based catch-up and revision overlap, ingest the
-   full already-published price curve instead of clipping at "now", and
-   persist the isolated forecasting history. E has not been scoped into a
-   step-by-step plan yet — write that plan into this file before editing code,
-   the same way D's plan was recorded in "D execution plan" before D started.
+   working tree with `7e94fb3` (docs), `c594b75` (D done), `f2bb495` and
+   `c893fa7` as the four most recent commits on `main`, all unpushed.
+2. Read "D handoff evidence" for what D actually built, then implement "E
+   execution plan" above item by item — it already cites exact file:line
+   locations and the open questions to resolve (Energy-Charts' behaviour on
+   undelivered future hours, a safe forward-horizon size, ONS's different
+   publication cadence) before relying on them.
 3. Keep the existing studies under `.gpa/battery-studies/`; nothing this
    session touched them. Do not clean this directory or overwrite a saved study.
 4. After E, continue with F (frozen release/presentation) and G (remaining
@@ -180,10 +264,10 @@ To resume safely in a new session:
 
 Suggested resume request:
 
-> Leia `docs/portfolio-roadmap.md`. D está concluído e commitado; registre o
-> plano do item E (disponibilidade/histórico de entradas) antes de alterar
-> código, depois implemente. Atualize este mesmo arquivo com os resultados;
-> não publique no GitHub sem eu pedir.
+> Leia `docs/portfolio-roadmap.md` e implemente o plano do item E já
+> registrado ali (disponibilidade/histórico de entradas), com os testes
+> descritos. Atualize este mesmo arquivo com os resultados; não publique no
+> GitHub sem eu pedir.
 
 **First implementation increment:** make the battery accounting trustworthy and
 build the P1 economic-comparison layer on that corrected engine. This increment
