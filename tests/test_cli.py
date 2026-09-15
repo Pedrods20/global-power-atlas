@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -20,6 +21,10 @@ from typer.testing import CliRunner
 
 from gpa import store
 from gpa.cli import app
+from gpa.forecast import snapshot
+from gpa.forecast.backtest import stable_hash
+from tests.test_battery import DAY
+from tests.test_battery import predictions as battery_predictions
 
 runner = CliRunner()
 
@@ -27,7 +32,28 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def temporary_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    # The frozen release is committed repository data too, not just the store.
+    monkeypatch.setattr(snapshot, "ROOT", tmp_path / "experiments")
+    monkeypatch.setattr(snapshot, "CURRENT", tmp_path / "experiments" / "current.json")
     return tmp_path
+
+
+@pytest.fixture
+def release(temporary_store: Path) -> None:
+    """A tiny valid frozen release: two complete days for all five forecasts."""
+    predictions = battery_predictions(days=(DAY, DAY + dt.timedelta(days=1)))
+    panel = predictions.select("local_date", "local_hour").unique()
+    tables = {
+        "predictions": predictions,
+        "scores": pl.DataFrame({"scope": ["overall"], "model": ["ridge"], "mae": [1.0]}),
+        "daily": pl.DataFrame({"local_date": [DAY], "model": ["ridge"], "mae": [1.0]}),
+        "coefficients": pl.DataFrame({"feature": ["price_d1"], "coefficient": [1.0]}),
+        "alpha_search": pl.DataFrame({"alpha": [0.1], "n": [1], "mae": [1.0]}),
+        "input_panel": panel,
+    }
+    fingerprint = stable_hash(panel.sort("local_date", "local_hour"))
+    metadata = {"zone": "DE-LU", "input_sha256": fingerprint}
+    snapshot.save(SimpleNamespace(metadata=lambda: dict(metadata), **tables))
 
 
 @pytest.fixture
@@ -166,19 +192,22 @@ def test_validate_exits_non_zero_on_a_corrupt_partition(populated: Path) -> None
 # --- export -----------------------------------------------------------------
 
 
-def test_export_writes_the_site_tables(populated: Path, tmp_path: Path) -> None:
+def test_export_writes_the_site_tables(populated: Path, release: None, tmp_path: Path) -> None:
     destination = tmp_path / "site-data"
 
     result = runner.invoke(app, ["export", "--output", str(destination)])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.exception
     assert (destination / "zones.json").exists()
     assert (destination / "daily_prices.parquet").exists()
+    assert (destination / "battery_sensitivities.parquet").exists()
 
 
-def test_export_check_passes_when_the_tables_match(populated: Path, tmp_path: Path) -> None:
+def test_export_check_passes_when_the_tables_match(
+    populated: Path, release: None, tmp_path: Path
+) -> None:
     destination = tmp_path / "site-data"
-    runner.invoke(app, ["export", "--output", str(destination)])
+    assert runner.invoke(app, ["export", "--output", str(destination)]).exit_code == 0
 
     result = runner.invoke(app, ["export", "--check", "--output", str(destination)])
 
@@ -186,15 +215,16 @@ def test_export_check_passes_when_the_tables_match(populated: Path, tmp_path: Pa
 
 
 def test_export_check_exits_non_zero_when_the_tables_are_stale(
-    populated: Path, tmp_path: Path
+    populated: Path, release: None, tmp_path: Path
 ) -> None:
     """CI fails the build on this, which is what stops a stale site shipping.
 
     Ingesting without re-exporting leaves the committed site tables describing
-    data that no longer matches the store.
+    data that no longer matches the store. The first export must succeed, or a
+    failed export would make this pass for the wrong reason.
     """
     destination = tmp_path / "site-data"
-    runner.invoke(app, ["export", "--output", str(destination)])
+    assert runner.invoke(app, ["export", "--output", str(destination)]).exit_code == 0
 
     extra = dt.datetime(2026, 6, 2, tzinfo=dt.UTC)
     store.write(
