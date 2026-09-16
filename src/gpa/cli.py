@@ -643,7 +643,8 @@ def issue(
     Every delivery hour is retained, including explicit abstentions when a
     required feature or enough training history is unavailable.
     """
-    from gpa.forecast import attempts, ledger, provenance
+    from gpa.calendar import attach_local_time
+    from gpa.forecast import attempts, fundamentals, ledger, provenance
     from gpa.forecast.panel import build_panel
 
     market = get_zone(zone)
@@ -683,16 +684,41 @@ def issue(
     try:
         sources: dict[str, pl.DataFrame] = {}
         observations: dict[str, dt.datetime] = {}
-        for dataset in ("price", "load", "generation"):
+        for dataset in ("price", "load", "generation", "fundamentals"):
             if market.has(dataset):
                 sources[dataset] = store.read(dataset, market.code)
                 observations[dataset] = ledger.now_utc()
+        # A prospective issue may use day-ahead fundamentals because it can
+        # record when it actually read them. The retrospective release cannot:
+        # its archive carries an assigned vintage, so those features stay a
+        # labelled ablation there. See fundamentals.from_store_observed.
+        #
+        # Fundamentals are supplied only when they actually cover this delivery
+        # day. Supplying a snapshot that does not would add the fundamental
+        # features to the panel with nothing behind them for the hours being
+        # forecast, and every one of them would abstain for missing inputs --
+        # turning "the provider has not published tomorrow yet" into a lost day
+        # rather than a forecast from the published information set. The archive
+        # always holds older days, so emptiness alone is not the test; coverage
+        # of the target day is. Which information set was actually used is not
+        # silent: the issue's provenance metadata records the panel's features.
+        snapshots = None
+        if "fundamentals" in sources:
+            observed = fundamentals.from_store_observed(
+                market, retrieved_at=observations["fundamentals"]
+            )
+            if not observed.is_empty():
+                covered = attach_local_time(observed, market).filter(
+                    pl.col("local_date") == target_date
+                )
+                snapshots = observed if not covered.is_empty() else None
         as_of = ledger.now_utc()
         prepared = build_panel(
             sources["price"],
             market,
             load=sources.get("load"),
             generation=sources.get("generation"),
+            fundamentals=snapshots,
             delivery_date=target_date,
         )
         frame = ledger.record_issue(

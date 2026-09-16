@@ -222,7 +222,12 @@ def save_snapshot(
     from gpa.forecast.ledger import timing_reason
 
     sources, observations = source_frames or {}, observed_at or {}
-    if set(sources) != set(observations) or set(sources) - {"price", "load", "generation"}:
+    if set(sources) != set(observations) or set(sources) - {
+        "price",
+        "load",
+        "generation",
+        "fundamentals",
+    }:
         raise ValueError("source frames require matching local observation timestamps")
     issued_at = frame["issued_at"][0]
     if any(utc(stamp) > frame["input_as_of"][0] for stamp in observations.values()):

@@ -249,6 +249,17 @@ basis are outside scope. The next credible step is a separately recorded
 four-to-six-week prospective ledger, followed by reconciliation and battery
 acceptance; extending the historical backtest would not answer that question.
 
+That ledger also carries the one open modelling question. Day-ahead load, wind
+and solar forecasts measurably reduce error in the labelled ablation, but the
+historical archive cannot certify when each value became available, so they are
+not in the published information set and adopting them from history alone would
+mean trusting an assumption instead of an observation. A live issue does not
+have that problem: it records the instant it read the forecast. The prospective
+run therefore uses those features when the provider has already published the
+delivery day and falls back to the published set when it has not, recording
+which of the two it used — turning a stalled decision into an experiment with
+an observable answer.
+
 ## References
 
 Data providers:

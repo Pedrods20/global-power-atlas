@@ -42,8 +42,8 @@ log = logging.getLogger(__name__)
 # upserts, so overlapping runs converge instead of duplicating.
 DEFAULT_LOOKBACK_DAYS = 7
 
-PUBLISHED_AHEAD_DAYS: dict[str, int] = {"price": 2}
-"""Days past now worth requesting for datasets cleared before delivery.
+PUBLISHED_AHEAD_DAYS: dict[str, int] = {"price": 2, "fundamentals": 2}
+"""Days past now worth requesting for datasets published before delivery.
 
 A day-ahead auction publishes the whole next delivery day at once, so capping a
 request at the current instant drops prices that are already public. Two days
@@ -51,6 +51,14 @@ covers the next local delivery day whatever hour a run starts. Providers return
 only what is published: Energy-Charts answered a request four days ahead with
 the same rows as two days ahead (checked 15 September 2026). Load and
 generation are measurements, so they never extend past now.
+
+``fundamentals`` belongs here for the same reason as ``price`` and not for the
+opposite one: it holds the operators' *forecasts* of load, wind and solar for a
+delivery day, which exist before that day does. Capping them at now was
+invisible while these features were only ever replayed over history for the
+labelled ablation, and fatal the moment a prospective issue needed tomorrow:
+the run would find no snapshot covering its own delivery day and fall back to
+the published information set every single time.
 """
 
 # Requesting several years in one call times out on most providers and produces

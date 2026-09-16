@@ -27,6 +27,7 @@ __all__ = [
     "empty",
     "from_smard_series",
     "from_store",
+    "from_store_observed",
     "normalize",
 ]
 
@@ -150,31 +151,26 @@ def attach(panel: pl.DataFrame, fundamentals: pl.DataFrame, zone: Zone) -> pl.Da
     return panel.join(snapshots, on=["local_date", "local_hour"], how="left")
 
 
-def from_store(zone: Zone) -> pl.DataFrame:
-    """Build the wide snapshot :func:`attach` expects from the curated store.
+def _hourly_wide(zone: Zone) -> pl.DataFrame | None:
+    """Whole clock hours from the curated archive, before any vintage is assigned.
 
     ``gpa.sources.energy_charts`` stores the honest day-ahead forecast values
     with no publication vintage, because the provider exposes none, at their
     native resolution, which has been quarter-hourly throughout the archive
     (unlike ``price``/``load``/``generation``, which changed resolution later).
-    This is the one place that turns that raw archive into a modelling input:
-    it averages sub-hourly rows into one duration-weighted value per clock
+    This averages sub-hourly rows into one duration-weighted value per clock
     hour, dropping a clock hour outright rather than averaging a partial one
     (:func:`attach` keys on whole clock hours and has no notion of a partial
-    one), and it assigns ``published_at`` as this project's own research-policy
-    assumption: each row is treated as available at the market gate for its
-    own delivery day (:func:`gpa.forecast.ledger.market_gate`'s definition,
-    reimplemented here to avoid a circular import against ``ledger`` ->
-    ``panel`` -> ``fundamentals``), not an observed publication instant. That
-    makes ``da_forecast_age_hours`` a constant zero for every historically
-    backfilled row; a live, prospective use of these features (not implemented
-    here) must instead record its actual retrieval instant, which would vary.
+    one).
+
+    Returns ``None`` when the archive holds nothing for the zone, so each caller
+    can return its own correctly typed empty frame.
     """
     from gpa import store
 
     raw = store.read("fundamentals", zone.code)
     if raw.is_empty():
-        return empty()
+        return None
 
     hourly = (
         raw.with_columns(pl.col("ts_utc").dt.truncate("1h").alias("_hour"))
@@ -198,8 +194,29 @@ def from_store(zone: Zone) -> pl.DataFrame:
     wide = wide.rename(
         {"load": "load_forecast_mw", "wind": "wind_forecast_mw", "solar": "solar_forecast_mw"}
     )
+    return attach_local_time(wide, zone)
 
-    local = attach_local_time(wide, zone)
+
+def from_store(zone: Zone) -> pl.DataFrame:
+    """Build the wide snapshot :func:`attach` expects from the curated store.
+
+    This is the *retrospective* path. It assigns ``published_at`` as this
+    project's own research-policy assumption: each row is treated as available
+    at the market gate for its own delivery day
+    (:func:`gpa.forecast.ledger.market_gate`'s definition, reimplemented here to
+    avoid a circular import against ``ledger`` -> ``panel`` ->
+    ``fundamentals``), not an observed publication instant. That makes
+    ``da_forecast_age_hours`` a constant zero for every historically backfilled
+    row, which is why these features are published only as a labelled ablation
+    and never folded into the frozen release.
+
+    A live, prospective issue must not use this function. It records an observed
+    retrieval instant instead; see :func:`from_store_observed`.
+    """
+    local = _hourly_wide(zone)
+    if local is None:
+        return empty()
+
     # One gate per distinct delivery day, not per row: a multi-year hourly
     # frame has far fewer unique dates than rows, and _gate() is Python-level.
     gates = (
@@ -215,6 +232,42 @@ def from_store(zone: Zone) -> pl.DataFrame:
         )
     )
     return local.join(gates, on="local_date").select(empty().schema.names())
+
+
+def from_store_observed(zone: Zone, *, retrieved_at: dt.datetime) -> pl.DataFrame:
+    """The same archive rows, stamped with an instant that was actually observed.
+
+    This is the *prospective* counterpart to :func:`from_store`, and the
+    difference between them is the whole reason these features are not in the
+    published retrospective release. ``retrieved_at`` is when this run read the
+    forecast, so it is a real, varying instant rather than a policy constant:
+    :func:`attach` measures ``da_forecast_age_hours`` from it, and a snapshot
+    read after the gate is correctly dropped instead of being assumed eligible.
+
+    It is an upper bound on the provider's own publication time, since the value
+    was published at or before the moment this project retrieved it. That
+    direction is the safe one: a later stamp can only make a row less eligible,
+    never more.
+
+    Args:
+        zone: Supplies the market timezone and the store partition.
+        retrieved_at: Timezone-aware instant at which this run read the archive.
+
+    Raises:
+        ValueError: If ``retrieved_at`` is naive, which would leave the vintage
+            unanchored and silently comparable against UTC gates.
+    """
+    if retrieved_at.tzinfo is None:
+        raise ValueError("retrieved_at must be timezone-aware")
+
+    local = _hourly_wide(zone)
+    if local is None:
+        return empty()
+
+    stamp = retrieved_at.astimezone(dt.UTC)
+    return local.with_columns(
+        pl.lit(stamp).cast(pl.Datetime(time_unit="us", time_zone="UTC")).alias("published_at")
+    ).select(empty().schema.names())
 
 
 def from_smard_series(

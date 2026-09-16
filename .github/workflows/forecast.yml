@@ -6,9 +6,33 @@ name: Forecast
 
 on:
   schedule:
-    # Before noon in both CET and CEST; DE-LU's documented day-ahead gate is
-    # 12:00 local market time on D-1.
-    - cron: "30 9 * * *"
+    # DE-LU's gate is 12:00 local market time on D-1: 10:00Z under CEST, 11:00Z
+    # under CET. GitHub's scheduled workflows are best-effort, and the previous
+    # 09:30Z cron left only thirty summer minutes of margin: its runs were
+    # actually delivered at 14:22Z and 15:56Z, hours past the gate, so every one
+    # failed with LateIssueError -- `gpa issue` correctly refusing to backdate a
+    # forecast. These two slots leave roughly eight and four hours of margin
+    # against the summer gate, and both run off the top of the hour, where the
+    # scheduler is least contended. Nothing needed is unavailable this early:
+    # D-1's own prices cleared in D-2's auction.
+    #
+    # Running twice a day is safe by design. The ledger keys an issue on
+    # issued_at as well as zone, model, delivery date and hour, so the backstop
+    # appends a second issue rather than colliding with the first, and
+    # `ledger.canonical` selects the earliest complete, verified pre-gate issue
+    # per model and delivery day. Every issue stays recorded either way.
+    #
+    # The two slots also serve the day-ahead fundamentals question. Those
+    # features enter a prospective panel only when the provider has already
+    # published the delivery day; checked at 05:45 CEST on 16 September 2026,
+    # Energy-Charts had not, so an early run falls back to the published
+    # information set and says so in its own manifest. The later slot has the
+    # better chance of catching them. Which run wins the canonical slot is
+    # deliberately not made to depend on that: the conservative, published
+    # information set stays canonical, exactly as in the retrospective release,
+    # and a fundamentals-bearing issue is recorded alongside it as evidence.
+    - cron: "17 2 * * *"
+    - cron: "47 6 * * *"
   workflow_dispatch:
 
 permissions:

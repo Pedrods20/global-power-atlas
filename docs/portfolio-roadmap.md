@@ -104,13 +104,154 @@ is gone. `npm run build` and `npm run test:browser` both pass after the fix.
 No data, export or CLI code was touched -- this was a `site/*.md` reactivity
 bug, not a pipeline bug. Not yet committed.
 
-**P5, the editorial pass below, is done** (16 September 2026): the README, all
-four site pages and one module docstring were rewritten or extended for
-executive framing, consolidated premises, full source provenance and a
-references section, with no data, model or reactive-cell change and no
-published number altered. **Next:** open items are the deferred commercial
-comparison, GitHub metadata, and the still-undecided fundamentals-adoption
-question.
+**P5, the editorial pass, is done** (16 September 2026): the README, all four
+site pages and one module docstring were rewritten or extended for executive
+framing, consolidated premises, full source provenance and a references
+section, with no data, model or reactive-cell change and no published number
+altered.
+
+**P6 is code-complete and proven locally** (16 September 2026): the prospective
+issue path produced its first real pre-gate forecast, two defects that only
+appear when the system runs forward were found and fixed, and the
+fundamentals-adoption question became a running experiment instead of a stalled
+decision. **Next:** the single open item blocking a daily prospective record is
+a decision, not work — GitHub Actions needs this branch pushed (41 commits
+ahead of `origin/main`), which has never been authorized here, and a local
+scheduler is the alternative. The deferred commercial comparison and the GitHub
+About/topics metadata remain open too.
+
+### P6 — start the prospective ledger — diagnosis and plan, recorded before code
+
+User decision (16 September 2026): start the prospective arm now, because it is
+the only open item bounded by calendar time, and resolve the long-open
+fundamentals question by *not* adopting them retrospectively while including
+them in the prospective arm, where a real retrieval instant is recorded.
+
+**Diagnosis, before planning any change.** The prospective ledger has never
+recorded a single issue: `data/forecast_issues/` is absent locally and holds no
+tracked file on `origin/main`. That is not because the job was never switched
+on. The Forecast workflow is `active` on GitHub and has run four times — twice
+on push and twice on schedule — and **all four runs failed**. Reading the job
+steps of the most recent run (34981200106): checkout, install, seed, `gpa
+ingest`, `gpa validate`, `gpa reconcile` and `gpa battery` all succeeded, and
+the run failed at exactly one step, `Issue before the market gate`.
+
+The cause is not a bug in `gpa issue`. The two scheduled runs were created at
+14:22Z and 15:56Z against a `30 9 * * *` cron. DE-LU's gate is 12:00 market
+time on D-1, which is 10:00Z under CEST, so both runs reached the issue step
+four to six hours *after* the auction had closed. `gpa issue` refused, raising
+`LateIssueError`, which is the behaviour the protocol requires: issuing after
+the gate would produce exactly the retrospective-dressed-as-prospective record
+this project exists to avoid. The system was right and the schedule was wrong.
+
+The underlying design flaw is the margin. A 09:30Z cron leaves thirty minutes
+before a 10:00Z summer gate, and GitHub's scheduled workflows are explicitly
+best-effort; the delay observed in this repository was five to six hours. Any
+gate-bound job scheduled that tightly will fail most days, and a prospective
+record that is missing on most days is not evidence.
+
+A second fact matters for the decision that follows: `origin/main` is at
+`074ad42` and this branch is 41 commits ahead of it. GitHub is therefore running
+a workflow that predates all of P0-P5, and no amount of local work reaches the
+scheduler until something is pushed.
+
+**Plan.**
+
+1. *Fundamentals in the prospective arm.* `gpa.forecast.fundamentals.from_store`
+   assigns each backfilled row the market gate as a research-policy vintage, and
+   its own docstring already records the consequence: `da_forecast_age_hours` is
+   a constant zero, and "a live, prospective use of these features (not
+   implemented here) must instead record its actual retrieval instant, which
+   would vary". Implement that sibling path: keep `from_store` exactly as it is
+   for the retrospective release, add a variant that stamps a caller-supplied
+   observed instant, and wire `gpa issue` to pass the issue run's own input
+   `as_of` so the panel's fundamentals carry an observed, varying vintage.
+   `build_panel` already accepts `fundamentals=` and already keeps only the
+   latest snapshot published before the gate, so no panel logic changes. The
+   frozen retrospective release, the published scores and the site are untouched:
+   this changes only what a future prospective issue records.
+2. *Scheduling margin.* Move the issue cron earlier and add a second backstop
+   run, both far enough ahead of the gate to absorb a multi-hour delay. D-1's
+   own prices cleared on D-2, so nothing needed is unavailable early in the
+   morning. Issuance is already idempotent — `ledger` merges on a key of zone,
+   delivery date, hour and model, refuses to alter immutable issuance fields and
+   preserves observed settlements on retry — so a backstop run after a
+   successful one cannot double-write or overwrite.
+3. *Prove it locally before trusting any scheduler.* Run `gpa issue` inside a
+   real pre-gate window and confirm an actual eligible ledger row, since the
+   path has never once produced one.
+4. *Decide how it runs daily.* GitHub Actions requires pushing this branch,
+   which no request in this project has authorized; the alternative is a local
+   scheduler on the workstation. Raise as a decision, do not assume it.
+
+Acceptance: a real pre-gate ledger row exists locally with an observed, non-zero
+fundamentals age; `ruff`, `mypy` and `pytest` clean; the published retrospective
+release, `data/experiments/current.json` and every site number unchanged.
+
+### P6 handoff evidence — the issue path works; the daily run is a decision, not a task
+
+**The path now produces a real issue.** Replicating the workflow locally against
+an isolated store seeded from `data/curated`, inside a genuine pre-gate window
+(03:45Z on 16 September 2026, 6h15m before the 10:00Z summer gate):
+`DE-LU 2026-09-17: issued, 24 forecasts, 0 abstentions`, exit 0. All 24 ledger
+rows carry `eligible = true`, `eligibility_reason = pre_gate` and
+`status = issued`, with forecasts from 155 to 175 EUR/MWh. This is the first
+successful issue this project has ever produced.
+
+**Two real defects were found on the way, both invisible until something ran
+forward.**
+
+*First, the ingest window never reached tomorrow.* `PUBLISHED_AHEAD_DAYS`
+contained only `{"price": 2}`. Fundamentals are the operators' forecasts for a
+delivery day, so they exist before that day does, but the pipeline treated them
+like a measurement and capped the request at now. The omission was harmless
+while those features were only replayed over history for the ablation, and
+fatal the moment a prospective issue needed tomorrow's snapshot. Adding
+`"fundamentals": 2` changed the observed coverage for the current day from six
+hours to a full twenty-four, and is now locked by a test.
+
+*Second, an unavailable provider series would have cost the whole day.* Passing
+a snapshot that does not cover the delivery day adds the fundamental features to
+the panel with nothing behind them, and every delivery hour then abstains for
+missing inputs. The first version of this change did exactly that, and two CLI
+tests caught it: `DE-LU 2026-07-01: abstained, 0 forecasts, 24 abstentions`.
+Fundamentals are now supplied only when they actually cover the target day;
+otherwise the run issues from the published information set. Emptiness alone is
+not the test, since the archive always holds older days.
+
+**The fundamentals decision is now an experiment, and its first real data point
+is already in.** Checked live at 05:45 CEST on 16 September 2026, Energy-Charts
+had published no day-ahead forecast for 2026-09-17 at all, so the proof issue
+fell back — and said so: its manifest records the nineteen published features
+and no `da_*` feature, alongside an `observed_at` entry for fundamentals and an
+archived `source_fundamentals` frame. The fallback is therefore auditable rather
+than silent. It also means the provider publishes the delivery day later than
+04:17 CEST, which the schedule has to respect; the exact hour is unknown and
+will be read off the ledger over the first week rather than guessed.
+
+**Scheduling.** The cron moved from `30 9 * * *` to `17 2 * * *` and
+`47 6 * * *`, leaving roughly eight and four hours of margin against the summer
+gate instead of thirty minutes, and running off the top of the hour where
+GitHub's scheduler is least contended. Two runs are safe: `ledger.canonical`
+keys on `issued_at` and selects the earliest complete, verified pre-gate issue
+per model and delivery day, and every other issue stays recorded. That also
+settles which arm is canonical: the conservative published information set,
+exactly as in the retrospective release, with any fundamentals-bearing issue
+recorded beside it as evidence rather than promoted over it.
+
+Verified: `ruff`, `ruff format --check`, `mypy` and the full `pytest` suite all
+clean, including five new tests for the observed vintage (age 0 under the policy
+vintage against a real 6 under an observed one, and a post-gate snapshot refused
+rather than backdated) and one for the ingest window. The retrospective release,
+`data/experiments/current.json` and every published site number are untouched.
+
+**Open decision, not assumed.** The workflow is `active` on GitHub and its four
+runs to date all failed at the issue step for the late-gate reason above. Fixing
+that reaches the scheduler only if this branch is pushed: `origin/main` is at
+`074ad42`, 41 commits behind, so GitHub is still running a workflow that
+predates P0-P5. Pushing to a public repository has never been authorized in this
+project, so it is left to the user, with a local scheduler as the alternative
+that avoids publication entirely.
 
 ### P5 — editorial pass: executive framing, premises, sources and references — recorded before editing
 

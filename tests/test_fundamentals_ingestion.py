@@ -173,6 +173,78 @@ def test_from_store_is_empty_when_nothing_backfilled(tmp_path, monkeypatch):
     assert fundamentals.from_store(ZONE).is_empty()
 
 
+# --- the prospective vintage -------------------------------------------------
+#
+# 2024-12-31 23:00 UTC starts one full Berlin delivery day (2025-01-01), whose
+# gate is noon Berlin on D-1, i.e. 2024-12-31 11:00 UTC in January.
+
+_GATE = dt.datetime(2024, 12, 31, 11, tzinfo=dt.UTC)
+_DAY_START = dt.datetime(2024, 12, 31, 23, tzinfo=dt.UTC)
+
+
+def _first_hour_panel() -> pl.DataFrame:
+    return pl.DataFrame(
+        {"local_date": [dt.date(2025, 1, 1)], "local_hour": [0]},
+        schema={"local_date": pl.Date, "local_hour": pl.Int8},
+    )
+
+
+def test_from_store_observed_stamps_the_instant_it_was_read_not_the_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    _write_fundamentals(monkeypatch, _DAY_START, hours=24)
+    retrieved = _GATE - dt.timedelta(hours=6)
+
+    observed = fundamentals.from_store_observed(ZONE, retrieved_at=retrieved)
+
+    assert observed.height == 24
+    assert observed["published_at"].unique().to_list() == [retrieved]
+    # The retrospective path assigns the gate itself to the very same rows.
+    assert fundamentals.from_store(ZONE)["published_at"].unique().to_list() == [_GATE]
+
+
+def test_an_observed_vintage_makes_the_forecast_age_real_rather_than_zero(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    _write_fundamentals(monkeypatch, _DAY_START, hours=24)
+    panel = _first_hour_panel()
+
+    policy = fundamentals.attach(panel, fundamentals.from_store(ZONE), ZONE)
+    observed = fundamentals.attach(
+        panel,
+        fundamentals.from_store_observed(ZONE, retrieved_at=_GATE - dt.timedelta(hours=6)),
+        ZONE,
+    )
+
+    # The constant zero is exactly why the backfilled features are published
+    # only as a labelled ablation; a real run has a real, varying age.
+    assert policy["da_forecast_age_hours"][0] == 0
+    assert observed["da_forecast_age_hours"][0] == 6
+
+
+def test_a_snapshot_read_after_the_gate_is_refused_rather_than_backdated(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    _write_fundamentals(monkeypatch, _DAY_START, hours=24)
+
+    late = fundamentals.attach(
+        _first_hour_panel(),
+        fundamentals.from_store_observed(ZONE, retrieved_at=_GATE + dt.timedelta(hours=1)),
+        ZONE,
+    )
+
+    assert late["da_load_forecast"][0] is None
+    assert late["da_forecast_age_hours"][0] is None
+
+
+def test_from_store_observed_rejects_a_naive_instant(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="timezone-aware"):
+        fundamentals.from_store_observed(ZONE, retrieved_at=dt.datetime(2024, 12, 31, 5))
+
+
+def test_from_store_observed_is_empty_when_nothing_backfilled(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
+    assert fundamentals.from_store_observed(ZONE, retrieved_at=_GATE).is_empty()
+
+
 def test_load_panel_include_fundamentals_adds_the_feature_columns(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
     # A full local day of price plus one day-ahead fundamentals snapshot.

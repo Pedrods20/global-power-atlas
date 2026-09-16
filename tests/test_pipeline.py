@@ -479,6 +479,22 @@ def test_only_datasets_published_before_delivery_extend_past_now(
     assert prices.calls[-1][1] == NOW + dt.timedelta(days=pipeline.PUBLISHED_AHEAD_DAYS["price"])
 
 
+def test_day_ahead_fundamentals_are_requested_past_now_like_prices() -> None:
+    """Fundamentals are operator *forecasts* for a delivery day, so they exist
+    before that day does. Capping the request at now was invisible while these
+    features were only replayed over history for the labelled ablation, and
+    fatal for a prospective issue: it would find no snapshot covering its own
+    delivery day and silently fall back every time."""
+    zone = get_zone("DE-LU")
+
+    _, forecast_end = pipeline.resolve_window(zone, "fundamentals", lookback_days=1, now=NOW)
+    _, measured_end = pipeline.resolve_window(zone, "generation", lookback_days=1, now=NOW)
+
+    assert forecast_end == NOW + dt.timedelta(days=pipeline.PUBLISHED_AHEAD_DAYS["fundamentals"])
+    assert forecast_end > NOW
+    assert measured_end == NOW  # a measurement still never reaches past now
+
+
 def test_prices_published_ahead_of_now_do_not_move_the_overlap_forward(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

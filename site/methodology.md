@@ -112,11 +112,20 @@ Day-ahead load/wind/solar forecasts (Energy-Charts) are backfilled from
 2019-01-05 for DE-LU, but are not part of the published information set above.
 The provider exposes no publication timestamp for the historical archive, so
 every backfilled row is assigned the D-1 noon market gate as a research-policy
-vintage rather than an observed retrieval instant; a prospective run would
-instead record its real fetch time. An ablation adding these features is
-shown as a labelled diagnostic on the [Forecasting page](./forecast), not
-folded into the published baseline: adopting it as a new frozen release is a
-separate decision this project has not made.
+vintage rather than an observed retrieval instant. An ablation adding these
+features is shown as a labelled diagnostic on the
+[Forecasting page](./forecast), not folded into the published baseline:
+adopting it as a new frozen release is a separate decision this project has
+not made, and the assigned vintage is precisely why it cannot be made from the
+archive alone.
+
+The prospective path resolves that differently, because it is not reading an
+archive: it records the instant it actually retrieved the forecast. A live
+issue therefore uses these features when the provider has already published
+the delivery day at that moment, and falls back to the information set above
+when it has not — and its manifest records which of the two it used, so the
+distinction never rests on trust. The forecast age is a measured quantity
+there, rather than the constant zero an assigned vintage produces.
 
 See the complete result on the [Forecasting page](./forecast).
 
@@ -187,7 +196,7 @@ reason each one was chosen and what it costs the result.
 | Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so this is the last instant a bidder's information set is fixed | A later gate would report hindsight as skill |
 | Target resolution | Local clock-hour, duration-weighted | Day-ahead coupling moved to 15-minute market time units for delivery from 1 October 2025; the hourly figure is an analytical aggregate from then on | The benchmark does not price a traded quarter-hour product |
 | Information set | Lagged prices, calendar features, residual load lagged ≥ 2 delivery days | Stored revisions cannot certify publication-time vintages, so realised delivery-day fundamentals are excluded | Reported skill is lower than a fundamentals-driven model would show; the ablation quantifies the gap |
-| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage | The historical archive exposes no publication timestamp | Those features inform only the labelled ablation, never the published baseline |
+| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage; a prospective issue records the instant it actually read them | The historical archive exposes no publication timestamp, while a live run can observe its own | Retrospectively those features inform only the labelled ablation, never the published baseline; prospectively they are used when the delivery day is already published, and the issue records which set it used |
 | Walk-forward protocol | Expanding window, refit with dates strictly before each forecast day | Mirrors how a model would actually be maintained in production | A fixed split would hide regime-dependent decay |
 | Hyperparameter selection | Frozen on a validation window preceding the test period | Selection inside the evaluation window reports a tuned fit as out-of-sample | Published scores would be optimistically biased |
 | Evaluation stance | Retrospective development benchmark on already-inspected history | Honest label for a sample that has been examined during development | Not an untouched holdout; a prospective ledger is still required |
@@ -265,7 +274,10 @@ prospective period is complete. The published information set uses lagged
 realised fundamentals, not operator forecasts: day-ahead load/wind/solar
 forecasts are backfilled but carry an assigned, not observed, publication
 vintage, so they inform only the labelled ablation on the Forecasting page,
-not the published baseline. The study is zonal, not nodal;
+not the published baseline. Whether they earn a place in the information set
+is left to the prospective ledger, where the vintage is observed rather than
+assumed; until that ledger has run, the question is open rather than settled.
+The study is zonal, not nodal;
 congestion, basis and transmission constraints are outside scope. Brazilian
 data is a national system comparison, not a wholesale price market.
 
