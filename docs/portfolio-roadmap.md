@@ -71,9 +71,43 @@ it as a new frozen release remains a separate, undone decision. The home-page
 commercial comparison was explicitly deferred by the user after four sources
 proved unverifiable in this environment (paywalled, 403, or unparseable).
 GitHub About/topics text was drafted for the user to apply; no `gh` access
-exists here. Full evidence below. **Next:** no further task requested; open
-items are the deferred commercial comparison, GitHub metadata, and the
-still-undecided fundamentals-adoption question.
+exists here. Full evidence below.
+
+**UI review pass (17 September 2026, user-requested): three broken interactive
+charts on the forecast page found and fixed, plus one cosmetic Plot warning.**
+Reviewed every page (index, forecast, battery, methodology) at four viewports
+with Playwright, checking for horizontal overflow, chart-vs-container fit,
+`NaN`/`undefined` leakage and console errors -- none of those were present.
+But three of the forecast page's five interactive selectors silently never
+updated their chart after the first render: "Explore the full breakdown"
+(`scope`/`split`), "Where the models fail"'s daily-error chart
+(`selectedModel`/`modelDaily`), and "Inspect a week" (`weekModel`/`week`/
+`weekRows`). Root cause, confirmed with an in-page debug probe: each paired a
+`const x = view(Inputs.select(...))` declaration with a derived `const y = ...x...`
+in the *same* fenced JS cell. The dropdown's own value (`x`) updated correctly
+and was picked up by other cells that referenced it directly (e.g. a chart
+title), but `y` -- computed from `x` inside that same cell -- froze at its
+first, usually-empty computation and never recomputed on later interaction,
+even though downstream cells reading `y` did re-render (with the stale value).
+battery.md's one `view()`-driven selector was already correctly isolated in
+its own cell (confirmed working, matches its existing passing smoke-test
+assertions), which is what exposed the pattern. Fixed by splitting each of the
+three pairs into separate cells in `site/forecast.md`, matching battery.md's
+convention; re-verified interactively (circle counts on the breakdown chart
+go 15/120/10/15 across the four options where they were 0 before; the
+daily-error line path now differs by model; the week chart's path count
+changes with the week selector). Separately, the index page's generation-mix
+bar chart triggered a Plot console warning ("data ... appear to be dates ...")
+because its `x` scale used a `"MM.YYYY"`-style field without an explicit type;
+fixed with `x: {type: "band", ...}` in `site/index.md`, confirmed the warning
+is gone. `npm run build` and `npm run test:browser` both pass after the fix.
+No data, export or CLI code was touched -- this was a `site/*.md` reactivity
+bug, not a pipeline bug. Not yet committed.
+
+**Next:** no further task requested; open items are the deferred commercial
+comparison, GitHub metadata, and the still-undecided fundamentals-adoption
+question. The `site/forecast.md` and `site/index.md` UI fixes above are made
+but uncommitted.
 
 ### P4 — package the evidence for recruiting — recorded before implementation
 

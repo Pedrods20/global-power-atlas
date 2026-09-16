@@ -155,6 +155,9 @@ where the euros actually are.
 
 ```js
 const scope = view(Inputs.select(new Map([["Price regime", "regime"], ["Market block", "block"], ["Calendar year", "year"], ["Hour of day", "hour"]]), {label: "Break down by", value: "regime"}));
+```
+
+```js
 const split = scores.filter((d) => d.scope === scope);
 ```
 
@@ -184,6 +187,9 @@ There are **${failures.length} model/bucket comparisons** with no improvement ov
 
 ```js
 const selectedModel = view(Inputs.select(new Map([["LightGBM", "lightgbm"], ["Ridge", "ridge"]]), {label: "Inspect model", value: "lightgbm"}));
+```
+
+```js
 const modelDaily = daily.filter((d) => d.model === selectedModel);
 ```
 
@@ -225,8 +231,17 @@ the downloadable research snapshot retain the complete evaluation sample.
 
 ```js
 const weekModel = view(Inputs.select(new Map([["LightGBM", "lightgbm"], ["Ridge", "ridge"]]), {label: "Inspect model", value: "lightgbm"}));
+```
+
+```js
 const weeks = [...new Set(predictions.map((d) => d3.utcMonday(new Date(d.local_date)).toISOString().slice(0, 10)))].sort();
+```
+
+```js
 const week = view(Inputs.select(weeks, {label: "Week beginning", value: weeks[Math.floor(weeks.length / 2)]}));
+```
+
+```js
 const begin = new Date(week);
 const end = d3.utcDay.offset(begin, 7);
 const weekRows = predictions.filter((d) => d.model === weekModel && new Date(d.local_date) >= begin && new Date(d.local_date) < end);

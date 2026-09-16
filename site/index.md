@@ -128,7 +128,7 @@ Plot.plot({
   title: `${selectedZone} monthly generation mix`,
   subtitle: "Share of generated energy; imports and storage are not treated as primary generation.",
   width, height: 340, marginLeft: 55,
-  x: {label: null, tickRotate: -40}, y: {label: "% of generation", grid: true, domain: [0, 100]},
+  x: {type: "band", label: null, tickRotate: -40}, y: {label: "% of generation", grid: true, domain: [0, 100]},
   color: {domain: fuelOrder, range: fuelOrder.map((f) => fuelColor[f]), legend: true},
   marks: [Plot.barY(mixRows, {x: "month", y: "share_pct", fill: "fuel", order: fuelOrder, tip: true}), Plot.ruleY([0])],
 })
