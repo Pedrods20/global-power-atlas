@@ -138,6 +138,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "generation_mix": _generation_mix(),
         "capacity": _capacity(),
         "cannibalisation": _cannibalisation(),
+        "fundamentals_ablation": _fundamentals_ablation(),
         "capacity_price_yearly": capacity_price_yearly,
         "capacity_price_correlation": _capacity_price_correlation(
             capacity_price_yearly, before_year=price_before_year
@@ -397,6 +398,20 @@ def _capacity() -> pl.DataFrame:
     if frame.is_empty():
         return frame
     return frame.with_columns(pl.lit("DE-LU").alias("zone"))
+
+
+def _fundamentals_ablation() -> pl.DataFrame:
+    """The pre-auction fundamentals ablation, a labelled diagnostic.
+
+    Reads ``gpa.fundamentals_ablation`` (``gpa fundamentals-ablation``), a
+    small reference file kept entirely separate from
+    ``data/experiments/``/``current.json`` -- this is a comparison against
+    the published release's identical protocol, not a candidate to replace
+    it. Empty until that command has been run once.
+    """
+    from gpa import fundamentals_ablation as ablation_module
+
+    return ablation_module.read()
 
 
 def _cannibalisation() -> pl.DataFrame:

@@ -60,7 +60,20 @@ browser again, and a live spot-check across five years confirmed the wind bug
 never actually corrupted the already-published fundamentals-ablation numbers.
 **Next:** user chose P4 (package the evidence for recruiting) over the
 fundamentals-adoption decision. Plan recorded immediately below, before any
-edit.
+edit. **P4 is now done except one deferred item** (17 September 2026): site
+disclosures, methodology accuracy fixes and README's personal-contribution
+line are all in; the fundamentals ablation is now shown on the forecast page
+as a labelled diagnostic (Ridge 22.07 -> 19.17, LightGBM 25.56 -> 20.56
+EUR/MWh, on the published test window) via a new, separate
+`data/reference/fundamentals_ablation/` artifact that never touches
+`data/experiments/current.json` (verified by hash, not assumed) -- adopting
+it as a new frozen release remains a separate, undone decision. The home-page
+commercial comparison was explicitly deferred by the user after four sources
+proved unverifiable in this environment (paywalled, 403, or unparseable).
+GitHub About/topics text was drafted for the user to apply; no `gh` access
+exists here. Full evidence below. **Next:** no further task requested; open
+items are the deferred commercial comparison, GitHub metadata, and the
+still-undecided fundamentals-adoption question.
 
 ### P4 — package the evidence for recruiting — recorded before implementation
 
@@ -145,6 +158,97 @@ against its primary source (matching the P3 citation discipline); nothing
 in `data/experiments/current.json` or the published frozen release changes;
 `gpa export --check`, full `pytest`/`ruff`/`mypy`, and a real-browser
 `npm run build` + `npm run test:browser` pass before any commit.
+
+### P4 handoff evidence — done except the commercial comparison (deferred), committed and run
+
+Items 2, 3, 5 done first (docs/structure, no new computation), then item 1
+(the one real risk), and item 6 turned out to need no change. Item 4 (a
+home-page commercial comparison) was explicitly deferred by the user after
+a real, disclosed verification wall -- recorded below, not silently dropped.
+Item 7 (GitHub About/topics) produced a recommendation, not a commit, since
+this environment has no `gh` CLI or API access.
+
+**Item 2 — disclosures.** `site/forecast.md`'s three secondary-diagnostic
+sections (the full block/regime/year/hour breakdown, predictive intervals,
+the week inspector) moved into collapsed `<details>` blocks. Caught a real
+bug on the first run: the week inspector reused a `selectedModel` variable
+defined inside the now-collapsed breakdown section, and the smoke test's
+generic "exercise every select" check hung on a `<select>` that was invisible
+inside a closed disclosure. Fixed by giving the week inspector its own
+`weekModel` selector (removing the cross-section reactive coupling) and by
+having `scripts/browser-smoke.mjs` open every `<details>` right after
+navigation, before any assertion -- collapsed-by-default content must not be
+exempt from the regression check that exists specifically to catch this.
+
+**Item 3 — methodology accuracy.** Fixed two claims in `site/methodology.md`
+that were true when written and false now: "operator forecast vintages are
+not yet stored" (they have been, since this session's fundamentals backfill)
+appeared twice. Added a new "Capacity and market structure" section
+documenting the P3 correlation methodology, the country-vs-DE-LU-zone
+distinction, and the small-sample/non-causal caveat -- previously not
+mentioned on the methodology page at all despite being a major addition to
+the battery page.
+
+**Item 5 — README.** Added the personal-contribution line already on the
+homepage, matching its exact existing wording (GitHub-only contact, per the
+user's earlier confirmed choice) rather than inventing new framing.
+
+**Item 6 — screenshot.** Checked, not changed: `docs/screenshots/dashboard-1440.png`
+came back byte-identical after a fresh capture, because none of this
+session's P3/P4 work touches `site/index.md`'s own computed content. The
+concern in the plan was reasonable to check and turned out not to apply.
+
+**Item 4 — commercial comparison, deferred by the user.** Checked four
+sources for a real, dated German battery-arbitrage revenue figure to compare
+against this project's own margin: the Aurora Energy Research/LCP Delta BESS
+revenue indexes (paywalled, only available secondhand via Montel/
+energy-storage.news, which returned HTTP 403 on direct fetch); RWTH Aachen
+ISEA's Battery Revenue Index (free, real, but renders its numbers only in an
+interactive chart no fetch tool here can read); and RWE's battery-business
+investor presentation (downloaded successfully but is an unparseable
+image-based PDF in this environment). Presented the situation to the user
+with three options (skip, user supplies a source, or cite a comparable
+open-source project found during the search instead of a commercial one);
+user chose to skip it for this round. **Open in the roadmap, not resolved.**
+
+**Item 1 — the fundamentals ablation, the one real risk in this plan.** New
+`gpa.fundamentals_ablation` module (`path`/`write`/`read`, mirroring the P3
+`gpa.capacity` precedent exactly: its own `data/reference/` artifact, never
+`data/experiments/` or `current.json`) and a new `gpa fundamentals-ablation`
+CLI command that runs `gpa.forecast.backtest.run()` twice -- once at every
+default parameter (confirmed by reading the published run's own
+`run.json`: min_train_days=270, validation_days=90, alpha selected not
+fixed, expanding window, LightGBM tuned, refit daily -- all of which are
+already this function's defaults, so no parameter needed overriding to match
+the published protocol exactly) with `include_fundamentals=False`, once with
+`True` -- and writes only the overall-scope scorecard, never a full
+snapshot. Verified `data/experiments/current.json`'s SHA-256 unchanged
+before and after running it, not just assumed from reading the code.
+
+Run live: Ridge MAE 22.07 -> **19.17** EUR/MWh, LightGBM 25.56 -> **20.56**
+EUR/MWh, on the identical 58,645-hour, 2020-01-03 to 2026-09-12 window the
+published release uses -- matching the roadmap's own earlier "~19.17" /
+"~20.55" algebraically-derived approximations to within rounding, confirming
+both that derivation and that the review pass's wind-fetch and metadata
+fixes did not materially change these numbers. Wired into a new "Does more
+information help?" section on `site/forecast.md`, positioned in the primary
+reading path (not a disclosure, since P4 groups this with "baseline skill"
+as primary content) but labelled plainly as a diagnostic throughout, with an
+explicit sentence that adopting it into a new frozen release remains a
+separate, undone decision.
+
+**Verification:** full `pytest` (400 tests), `ruff check`, `mypy` clean.
+`npm run build` and `npm run test:browser` (both viewports) clean, no
+console errors, no leaked `NaN`/`undefined`; the new section's rendered DOM
+text read directly and confirmed to show the exact real figures above.
+`gpa export --check` passes. `data/experiments/current.json` byte-identical
+before and after every step in this item, confirmed by hash, not assumed.
+
+**Open items carried forward, not silently dropped:** the home-page
+commercial comparison (item 4, deferred); GitHub About/topics (item 7,
+recommendation given, application is the user's to do); the still-undecided
+fundamentals-adoption question from part B of the earlier plan (unaffected
+by this item -- showing the ablation as a diagnostic is not adopting it).
 
 ### DE-LU capacity/renewables/storage scenario study (P3) — recorded before implementation, rethought before coding
 

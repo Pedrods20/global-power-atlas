@@ -69,6 +69,42 @@ Plot.plot({
 
 Ridge MAE is **${number(ridge.mae)} EUR/MWh**; LightGBM MAE is **${number(trees.mae)} EUR/MWh**. The LightGBM change relative to ridge is **${percent((1 - trees.mae / ridge.mae) * 100)}**: positive means lower error. This comparison describes this sample; it is not a claim of future trading profitability.
 
+## Does more information help?
+
+```js
+const ablation = [...await FileAttachment("data/fundamentals_ablation.parquet").parquet()];
+const ablationRow = (model, includeFundamentals) => ablation.find((d) => d.model === model && d.include_fundamentals === includeFundamentals);
+const ridgeBase = ablationRow("ridge", false);
+const ridgeAbl = ablationRow("ridge", true);
+const lightgbmBase = ablationRow("lightgbm", false);
+const lightgbmAbl = ablationRow("lightgbm", true);
+```
+
+Day-ahead load/wind/solar forecasts are backfilled (Energy-Charts, from
+2019) but excluded from the published information set above: the historical
+archive carries no publication timestamp, so every value is assigned the
+D-1 noon gate as a research-policy vintage rather than an observed
+retrieval instant (see [methodology](./methodology)). Adding them anyway,
+as a labelled ablation run on the identical ${ridgeBase ? ridgeBase.test_start : "?"}
+to ${ridgeBase ? ridgeBase.test_end : "?"} evaluation window used above:
+
+```js
+ridgeBase && ridgeAbl && lightgbmBase && lightgbmAbl
+  ? Inputs.table([
+      {Model: "Ridge", "MAE, published": ridgeBase.mae, "MAE, with fundamentals": ridgeAbl.mae, "Change": (1 - ridgeAbl.mae / ridgeBase.mae) * 100},
+      {Model: "LightGBM", "MAE, published": lightgbmBase.mae, "MAE, with fundamentals": lightgbmAbl.mae, "Change": (1 - lightgbmAbl.mae / lightgbmBase.mae) * 100},
+    ], {format: {"MAE, published": number, "MAE, with fundamentals": number, "Change": percent}, layout: "auto"})
+  : html`<p class="note">Ablation not yet run locally: <code>gpa fundamentals-ablation</code>.</p>`
+```
+
+**This is a labelled diagnostic, not the published forecast.** Adopting
+these features into a new frozen release is a separate decision this
+project has not made; the scoreboard, chart and every other number on this
+page use the published, fundamentals-free information set. A positive
+change above is measured on the identical frozen test window as the
+published run, using the exact same protocol with one flag added — not a
+reselected model or a different evaluation period.
+
 ## Where the models fail
 
 ```js
@@ -221,6 +257,7 @@ Plot.plot({
 pip install -e ".[dev,tracking]"
 gpa backtest --track --scope all
 mlflow ui --backend-store-uri sqlite:///.gpa/mlflow/mlflow.db
+gpa fundamentals-ablation
 gpa export
 ```
 
@@ -229,5 +266,10 @@ Tracking is optional and local. Each MLflow run records the comparison metrics, 
 The prospective path is now operationalised by `gpa issue` and `gpa reconcile`: a scheduled job seeds an isolated store, refreshes a short input window, reconciles older ledger rows and issues before the market gate. The first separately recorded run is still needed before its metrics can be accepted. Historical battery dispatch and economic evaluation are published on the Battery page; the prospective battery result follows reconciliation and remains separate from the retrospective scores above.
 
 <style>
+.note {
+  border-left: 3px solid var(--theme-foreground-focus);
+  padding: .5rem 0 .5rem 1rem;
+  color: var(--theme-foreground-muted);
+}
 main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
 </style>

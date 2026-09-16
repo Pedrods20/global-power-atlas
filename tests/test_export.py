@@ -25,6 +25,7 @@ from gpa.export import (
     _daily_load,
     _drop_incomplete_trailing_day,
     _forecast_page_predictions,
+    _fundamentals_ablation,
     _json_values_close,
     _overview,
     export_all,
@@ -142,6 +143,35 @@ def test_daily_load_drops_a_trailing_partial_day(tmp_path, monkeypatch):
 def test_capacity_is_empty_before_anything_is_fetched(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
     assert _capacity().is_empty()
+
+
+def test_fundamentals_ablation_is_empty_before_anything_is_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    assert _fundamentals_ablation().is_empty()
+
+
+def test_fundamentals_ablation_reads_the_reference_file_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path))
+    from gpa import fundamentals_ablation as ablation_module
+
+    ablation_module.write(
+        pl.DataFrame(
+            {
+                "zone": ["DE-LU"],
+                "model": ["ridge"],
+                "include_fundamentals": [False],
+                "n": [1000],
+                "mae": [22.07],
+                "rmse": [28.0],
+                "skill_vs_best_baseline_pct": [24.3],
+                "test_start": ["2020-01-03"],
+                "test_end": ["2026-09-12"],
+            },
+            schema=ablation_module.ABLATION_COLUMNS,
+        )
+    )
+    result = _fundamentals_ablation()
+    assert result["mae"].to_list() == [22.07]
 
 
 def test_capacity_tags_the_delu_zone_alongside_the_raw_country(tmp_path, monkeypatch):

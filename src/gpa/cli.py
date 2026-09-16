@@ -9,6 +9,7 @@ The main portfolio commands are:
 ``gpa validate``   re-check everything on disk against the schema contracts
 ``gpa stats``      report what the store holds
 ``gpa backtest``   walk-forward price forecast, scored against naive baselines
+``gpa fundamentals-ablation``  compare with/without fundamentals, a labelled diagnostic
 ``gpa issue``      issue a feature-only forecast and retain its evidence
 ``gpa reconcile``  attach observed prices to issued forecasts
 ``gpa battery``    evaluate reconciled forecasts through the battery dispatch
@@ -570,6 +571,50 @@ def backtest(
             f"{row['skill_vs_best_baseline_pct']:+.1f}% against the best baseline, "
             f"MAE {row['mae']:.2f}"
         )
+
+
+@app.command("fundamentals-ablation")
+def fundamentals_ablation(
+    zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to compare.")] = "DE-LU",
+    verbose: VerboseOption = False,
+) -> None:
+    """Compare the published information set against one with fundamentals added.
+
+    Runs the identical walk-forward protocol twice, at every default
+    (min_train_days, validation_days, alpha selection, window, LightGBM
+    tuning), once without and once with day-ahead load/wind/solar forecast
+    features -- the same protocol the published release uses, so the only
+    difference between the two runs is that one flag. Writes only the
+    overall-scope scorecard to data/reference/fundamentals_ablation/, never
+    a full snapshot: this never calls gpa.forecast.snapshot.save() and never
+    touches data/experiments/current.json. Adopting these features as a new
+    frozen release is a separate decision this command does not make.
+    """
+    _configure_logging(verbose)
+    from gpa import fundamentals_ablation as ablation_module
+    from gpa.forecast import backtest as harness
+
+    market = get_zone(zone)
+    rows: list[pl.DataFrame] = []
+    for include_fundamentals in (False, True):
+        typer.echo(f"Running with include_fundamentals={include_fundamentals}...")
+        result = harness.run(market, include_fundamentals=include_fundamentals)
+        overall = result.scores.filter(
+            (pl.col("scope") == "overall") & pl.col("model").is_in(["ridge", "lightgbm"])
+        )
+        rows.append(
+            overall.select("model", "n", "mae", "rmse", "skill_vs_best_baseline_pct").with_columns(
+                pl.lit(market.code).alias("zone"),
+                pl.lit(include_fundamentals).alias("include_fundamentals"),
+                pl.lit(str(result.test_start)).alias("test_start"),
+                pl.lit(str(result.test_end)).alias("test_end"),
+            )
+        )
+    combined = pl.concat(rows, how="vertical_relaxed")
+    destination = ablation_module.write(combined)
+    with pl.Config(tbl_rows=-1, tbl_width_chars=160, float_precision=2):
+        typer.echo(str(combined))
+    typer.secho(f"Wrote {combined.height} rows to {destination}.", fg=typer.colors.GREEN)
 
 
 @app.command()
