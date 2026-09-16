@@ -34,10 +34,17 @@ The stored inputs contain the providers' latest revisions. Publication-time vers
 
 ## Target and information set
 
-- **Target:** duration-weighted hourly average of the DE-LU day-ahead prices, in EUR/MWh. Since the move to 15-minute products, this is an analytical hourly benchmark, not a forecast of each traded quarter-hour.
-- **Forecast gate:** noon in the market timezone on the day before delivery. Prices for that preceding delivery day have already cleared in the previous auction.
-- **Inputs:** lagged prices, calendar variables, and residual load from at least two delivery days earlier. Residual load is demand minus wind and solar; both fuels must actually be reported, including explicit zeros.
+- **Target:** duration-weighted hourly average of the DE-LU day-ahead prices, in EUR/MWh. European day-ahead coupling moved from hourly to 15-minute market time units on the trading day of 30 September 2025, for delivery on 1 October 2025; from that point the hourly figure is an analytical aggregate rather than a traded product, so this benchmark is deliberately not presented as a forecast of each traded quarter-hour.
+- **Forecast gate:** noon in the market timezone on the day before delivery — the moment the day-ahead auction's order book closes for the following delivery day. The gate is set by the market's own deadline rather than by data convenience: it is the last instant at which a real bidder's information set is fixed. Prices for the preceding delivery day have already cleared in the previous auction and are therefore legitimately available.
+- **Inputs:** lagged prices, calendar variables, and residual load from at least two delivery days earlier. Residual load is demand minus wind and solar; both fuels must actually be reported, including explicit zeros. Residual load is used because it, not raw demand, is what the remaining dispatchable stack has to serve — and therefore what sets the price.
 - **Published benchmark inputs:** operator forecasts of demand, wind and solar for the delivery day are not part of this retrospective run. The prospective panel accepts publication-time snapshots when supplied; realised delivery-day values are never substituted for them.
+
+The restriction matters commercially, not just methodologically. Delivery-day
+wind, solar and demand explain a great deal of the price, so a model given the
+realised values will report an error a desk could never achieve — the number
+would describe hindsight, not skill. The honest cost of that discipline is
+visible further down this page: the labelled ablation shows what the same
+protocol produces when day-ahead fundamentals are allowed in.
 
 Only complete, contiguous UTC hours enter the panel. A provider transition left hourly-spaced records marked as 15-minute intervals in September 2025; those incomplete hours are excluded rather than assigned an inferred duration. Missing observations stay missing.
 
@@ -48,6 +55,8 @@ The spring clock change has no invented hour. The two occurrences of an autumn c
 Training begins ${run.train_start}; validation begins ${run.validation_start}. The evaluation runs from ${run.test_start} to ${run.test_end}. All five models are scored on the same ${run.scored_hours.toLocaleString("en")} clock-hour cells, out of ${run.eligible_hours.toLocaleString("en")} target cells in that period. Missing lagged features and insufficient per-hour training history explain excluded cells.
 
 The ridge penalty and LightGBM tree configuration are selected on the preceding validation window and frozen for evaluation. Every model refits with dates strictly before its forecast day. LightGBM uses one model across hours, with market-local hour as an additional known input; ridge conditions on hour through separate regressions. The published run records the candidate grid, chosen settings, refit cadence and seed 42. No early stopping or tuning uses evaluation prices.
+
+The two fitted models are a deliberate contrast of designs rather than a search for a winner. Each delivery hour is close to its own product — the morning ramp, the midday solar trough and the evening peak are priced by different parts of the stack — so per-hour ridge gives every hour its own coefficients on a smaller sample, while pooled LightGBM shares all hours' data and has to recover the hour effect from a feature. The three naive baselines are not straw men: repeating yesterday's price, last week's price or the last similar day is what a desk actually falls back on when no model is trusted, so they are the standard any fitted model has to clear before it earns its complexity.
 
 ```js
 Inputs.table(overall.map((d) => ({
@@ -68,6 +77,8 @@ Plot.plot({
 ```
 
 Ridge MAE is **${number(ridge.mae)} EUR/MWh**; LightGBM MAE is **${number(trees.mae)} EUR/MWh**. The LightGBM change relative to ridge is **${percent((1 - trees.mae / ridge.mae) * 100)}**: positive means lower error. This comparison describes this sample; it is not a claim of future trading profitability.
+
+**How to read these numbers.** MAE is the average absolute distance between the forecast and the price that actually cleared, in EUR per MWh, over every scored hour. Skill against the best naive baseline is the fraction of that error removed relative to the strongest simple alternative — a relative measure, so it says nothing on its own about how much money the improvement is worth. Bias is realised price minus forecast, so a positive bias means the model systematically underpredicts. None of these translate mechanically into margin: an error reduction concentrated in flat hours is worth far less to a storage asset than the same reduction around the daily spread. That translation is measured separately, on the [battery page](./battery), and it is the reason this project reports both.
 
 ## Does more information help?
 

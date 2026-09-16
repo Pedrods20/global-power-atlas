@@ -12,17 +12,63 @@ provider directly and no browser credential is required.
 
 The historical context covers four zones. Forecasting and battery valuation are
 focused on Germany-Luxembourg (DE-LU), where the project has its deepest price,
-load and generation history.
+load and generation history — roughly seven and a half years against about two
+years for the context zones. That asymmetry is deliberate: DE-LU is the only
+market here with enough history to support a walk-forward benchmark, and the
+other zones are shown as context rather than modelled.
 
-| Zone | Data | Provider | Use |
-|---|---|---|---|
-| DE-LU | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Forecast reference market |
-| France | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Historical comparison |
-| Spain | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Historical comparison |
-| Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | System comparison |
+| Zone | Data | Provider | Committed coverage | Use |
+|---|---|---|---|---|
+| DE-LU | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2018-12-31, 94 monthly partitions | Forecast reference market |
+| DE-LU | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation only |
+| France | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2024-09-01 | Historical comparison |
+| Spain | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2024-09-01 | Historical comparison |
+| Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | From 2024-09-01 | System comparison |
 
 The dashboard refreshes monthly. Its purpose is historical context around the
 forecast study, not continuous market monitoring.
+
+## Sources, lineage and revisions
+
+No page fetches a provider directly, and no source in this project requires a
+credential. Each adapter is documented here because provenance, publication lag
+and revision behaviour change how far a result can be pushed.
+
+**Energy-Charts** (`api.energy-charts.info`) is published by the Fraunhofer
+Institute for Solar Energy Systems ISE under CC BY 4.0. It republishes ENTSO-E
+and SMARD figures through an open API, which is why it carries the European
+zones here while an ENTSO-E Transparency token is obtained: the underlying
+numbers are the ones the system operators publish. Four endpoints are used —
+`/price` for day-ahead prices, `/public_power` for load and generation by fuel,
+`/public_power_forecast` for the day-ahead fundamentals used only in the
+labelled ablation, and `/installed_power` for installed capacity by technology
+together with the government's own 2030 targets. Two provider behaviours are
+handled explicitly rather than assumed: the `end` parameter is inclusive, and
+the German series changed resolution without notice, so interval length is
+measured from the returned timestamps instead of being hardcoded.
+
+**SMARD** (`smard.de/app/chart_data`) is the Bundesnetzagentur's market-data
+platform and is implemented as a second, independent German adapter. It can
+backfill the long DE-LU price and fundamentals history without depending on the
+rate-limited Energy-Charts mirror, and it supplies the prospective path's
+forecast snapshots, where an actual retrieval time can be recorded rather than
+assigned. Every row in the committed store today records Energy-Charts or ONS
+as its source.
+
+**ONS** is read through two endpoints on purpose, because they do not share a
+publication lag. Generation comes from the hourly energy balance, one CSV per
+calendar year on a public S3 bucket, whose contents trail real time by roughly
+two days; load comes from the verified-load API, which stays within about an
+hour. Timestamps are Brasília local time, and the pre-2019 daylight-saving
+transitions are resolved explicitly rather than left to a library default.
+
+**Revisions.** Stored observations are the providers' latest revisions, not
+publication-time snapshots. Lagging every fundamental prevents a delivery-day
+value from entering a forecast, but it cannot prove that the exact stored
+revision was the one visible at the historical gate. This is the single most
+important limitation on the retrospective result, and it is restated wherever a
+figure depends on it. A prospective run does not share it, because it records
+its own fetch time.
 
 ## Time and units
 
@@ -130,6 +176,26 @@ not a German asset calibration. Cost rates apply to charge plus discharge at
 the grid boundary; capital and fixed/lifetime costs remain outside the model.
 See the [Battery page](./battery) for exact definitions and source attribution.
 
+## Assumptions register
+
+Every published figure rests on the assumptions below. The battery's physical
+parameters are in the table above; this register collects the rest, with the
+reason each one was chosen and what it costs the result.
+
+| Assumption | Choice | Rationale | Consequence if wrong |
+|---|---|---|---|
+| Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so this is the last instant a bidder's information set is fixed | A later gate would report hindsight as skill |
+| Target resolution | Local clock-hour, duration-weighted | Day-ahead coupling moved to 15-minute market time units for delivery from 1 October 2025; the hourly figure is an analytical aggregate from then on | The benchmark does not price a traded quarter-hour product |
+| Information set | Lagged prices, calendar features, residual load lagged ≥ 2 delivery days | Stored revisions cannot certify publication-time vintages, so realised delivery-day fundamentals are excluded | Reported skill is lower than a fundamentals-driven model would show; the ablation quantifies the gap |
+| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage | The historical archive exposes no publication timestamp | Those features inform only the labelled ablation, never the published baseline |
+| Walk-forward protocol | Expanding window, refit with dates strictly before each forecast day | Mirrors how a model would actually be maintained in production | A fixed split would hide regime-dependent decay |
+| Hyperparameter selection | Frozen on a validation window preceding the test period | Selection inside the evaluation window reports a tuned fit as out-of-sample | Published scores would be optimistically biased |
+| Evaluation stance | Retrospective development benchmark on already-inspected history | Honest label for a sample that has been examined during development | Not an untouched holdout; a prospective ledger is still required |
+| Common sample | All five strategies scored on identical days and hours | Prevents a model from winning by being evaluated on easier cells | Comparisons would not be like-for-like |
+| Missing data | Left missing; incomplete intervals excluded, never imputed | A provider gap is information, not a zero | Fewer scored cells, but no invented observations |
+| Costs | Zero in the base case; illustrative non-zero cases rerun separately | Rates are not calibrated German project estimates | Margins are gross of asset-specific costs and of all capital costs |
+| Scope | Zonal, not nodal | The day-ahead auction clears at bidding-zone level | Congestion, basis and transmission constraints are outside the result |
+
 ## Quality controls
 
 Validation happens at the source boundary with strict schemas for price, load
@@ -157,6 +223,40 @@ The [source repository](https://github.com/Pedrods20/global-power-atlas) contain
 the validated monthly Parquet store, forecast code, battery optimizer and test
 suite. The historical output is deliberately versioned so the figures shown on
 the site are reproducible.
+
+## References
+
+Data providers, whose terms govern the underlying observations:
+
+- Energy-Charts, Fraunhofer Institute for Solar Energy Systems ISE —
+  [energy-charts.info](https://www.energy-charts.info/), API at
+  `api.energy-charts.info`, licensed CC BY 4.0
+- SMARD, Bundesnetzagentur — [smard.de](https://www.smard.de/)
+- ONS, Operador Nacional do Sistema Elétrico —
+  [ons.org.br](https://www.ons.org.br/)
+- ENTSO-E Transparency Platform, upstream of the European figures —
+  [transparency.entsoe.eu](https://transparency.entsoe.eu/)
+
+Market rules and structure:
+
+- EPEX SPOT, basics of the power market, for the day-ahead auction's midday gate
+  closure — [epexspot.com](https://www.epexspot.com/en/basicspowermarket)
+- NEMO Committee, Single Day-Ahead Coupling: the transition from hourly to
+  15-minute market time units on the trading day of 30 September 2025, for
+  delivery on 1 October 2025 —
+  [nemo-committee.eu/sdac](https://www.nemo-committee.eu/sdac)
+- Bundesnetzagentur, consolidated onshore wind auction statistics —
+  [bundesnetzagentur.de](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html)
+- EEG 2023 and WindSeeG 2030 capacity targets, as republished in Energy-Charts'
+  `/installed_power` series
+
+Technical and cost references, used as stated external comparisons and never as
+calibration for this project's own figures:
+
+- NREL Annual Technology Baseline 2024, utility-scale battery storage —
+  [atb.nrel.gov](https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage)
+- BloombergNEF, 2025 Lithium-Ion Battery Price Survey, published 9 December 2025 —
+  [about.bnef.com](https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/)
 
 ## Limitations
 

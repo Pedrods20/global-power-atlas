@@ -104,10 +104,130 @@ is gone. `npm run build` and `npm run test:browser` both pass after the fix.
 No data, export or CLI code was touched -- this was a `site/*.md` reactivity
 bug, not a pipeline bug. Not yet committed.
 
-**Next:** no further task requested; open items are the deferred commercial
+**P5, the editorial pass below, is done** (16 September 2026): the README, all
+four site pages and one module docstring were rewritten or extended for
+executive framing, consolidated premises, full source provenance and a
+references section, with no data, model or reactive-cell change and no
+published number altered. **Next:** open items are the deferred commercial
 comparison, GitHub metadata, and the still-undecided fundamentals-adoption
-question. The `site/forecast.md` and `site/index.md` UI fixes above are made
-but uncommitted.
+question.
+
+### P5 — editorial pass: executive framing, premises, sources and references — recorded before editing
+
+User request (16 September 2026): make the prose more executive, explain the
+study, its premises, the sources and the references more fully; the portfolio
+"feels incomplete". Explicit constraint: **text only** -- no data, model, export
+or reactive-cell changes.
+
+Diagnosis of what is actually missing. The five texts are technically careful
+and well hedged, but they document *what* was done far better than *why it is
+the right market convention*, and the provenance layer is thin:
+
+1. **Sources are under-documented relative to what the code actually does.**
+   `site/methodology.md` lists four zones against two bare provider links.
+   The repository in fact uses three upstream providers plus one documented
+   lineage: Energy-Charts (published by Fraunhofer ISE, CC BY 4.0,
+   credential-free, `api.energy-charts.info`, endpoints `/price`,
+   `/public_power`, `/public_power_forecast`, `/installed_power`, and itself a
+   republisher of ENTSO-E and SMARD figures); SMARD (operated by the
+   Bundesnetzagentur, `smard.de/app/chart_data`, used for the German backfill
+   and as the prospective path's forecast-snapshot source); and ONS for Brazil
+   through two endpoints with different publication lags (hourly energy-balance
+   CSV on public S3, about two days behind; verified-load API, about one hour
+   behind). None of that reaches the reader today.
+2. **No consolidated premises.** Assumptions are correct but scattered across
+   four pages, so no reader can see the whole assumption set at once.
+3. **The market rationale for the D-1 noon gate is never stated in prose**,
+   although the run metadata itself already records it ("12:00 market time on
+   the day before delivery, when the day-ahead auction closes").
+4. **No references section anywhere.** NREL ATB, BloombergNEF and the
+   Bundesnetzagentur auction statistics are cited inline on the battery page
+   only; nothing is collected where a reviewer would look for it.
+5. **Coverage is never quantified.** The committed store holds DE-LU from
+   2018-12-31 (94 monthly partitions) against FR/ES/BR-SIN from 2024-09-01
+   (25 partitions) -- a materially different depth that the text never admits.
+
+Facts verified for this pass before writing (nothing below is asserted from
+memory): store coverage and row counts read from `data/curated/`; provider,
+licence and endpoint details read from the adapter docstrings; SMARD's operator
+confirmed against smard.de itself; the SDAC move from hourly to 15-minute
+market time units (trading day 30 September 2025, delivery 1 October 2025)
+confirmed against the NEMO Committee's own SDAC page. EPEX SPOT blocks
+automated retrieval, so the 12:00 CET day-ahead order-book closure is cited to
+EPEX SPOT as market convention and matches this project's own recorded gate
+definition; no figure sourced only from a search snippet is presented as a
+computed result.
+
+Plan, page by page. Every existing number stays as it is, and site pages keep
+using their interpolated values rather than hardcoded figures, so nothing here
+can drift away from the data:
+
+- `README.md`: sharpen the opening into an executive statement; add what the
+  project demonstrates; replace the thin scope table with a full provenance
+  table (provider, institution, licence, coverage, role); add a consolidated
+  premises section and a references section.
+- `site/index.md`: add why this market and this question (market context), and
+  a compact premises block naming the five assumptions that drive every number.
+- `site/forecast.md`: state why the D-1 noon gate is the auction gate, why the
+  information set is restricted the way it is, and why ridge is fitted per hour
+  while LightGBM is pooled; add how to read MAE commercially.
+- `site/battery.md`: put the asset specification and the commercial logic of the
+  naive comparison in prose before the tables.
+- `site/methodology.md`: full provenance table, a data-lineage and revisions
+  note, a consolidated assumptions register, and a references section.
+- `src/gpa/battery_sensitivity.py`: fix a broken reference URL in the module
+  docstring (`atb.nlr.gov` -> `atb.nrel.gov`); text-only, no behaviour change.
+
+Acceptance: `npm run build` and `npm run test:browser` still pass (markdown
+interpolation errors would surface there), `gpa export --check` still clean,
+and no committed number changes.
+
+### P5 handoff evidence — done, verified
+
+All six files edited as planned, text only; no reactive cell, data file, export
+path or model parameter was touched, and every pre-existing number is unchanged
+and still interpolated from the data rather than hardcoded.
+
+What was added. `README.md` gained an executive opening ("why this market and
+this question"), a "what this project is meant to demonstrate" section, a
+premises table with the rationale for each assumption, a provenance table
+carrying publisher and committed coverage per zone, prose on each of the three
+adapters, an explicit revisions caveat, and a references section.
+`site/index.md` gained a market-context paragraph, a consolidated premises
+block and a sources block, placed after the implication so the "under a minute"
+path (question, findings, implication) stays intact. `site/forecast.md` now
+explains why the D-1 noon gate is the auction's own deadline, why residual load
+rather than raw demand, why per-hour ridge is contrasted with pooled LightGBM,
+why the three naive baselines are the standard to clear, and how to read MAE,
+skill and bias commercially. `site/battery.md` states the asset specification
+and the commercial logic of the naive comparison in prose before the tables.
+`site/methodology.md` gained a "sources, lineage and revisions" section, a
+coverage column on the scope table, an eleven-row assumptions register with
+rationale and consequence-if-wrong for each entry, and a references section.
+
+Accuracy corrections made during the pass rather than after review: a first
+draft of the README described SMARD as backing the committed German history.
+The store disagrees -- every committed row records `energy_charts` or `ons` as
+its source -- so the text now describes SMARD as a second, independent adapter
+for backfill and for the prospective path's forecast snapshots, and says
+explicitly what the committed store records. One real defect was fixed:
+`src/gpa/battery_sensitivity.py` cited the NREL ATB as `atb.nlr.gov`, a
+transposition of `atb.nrel.gov`, so the module docstring's only external
+reference was a dead link.
+
+Verification. `npm run build` passes and now validates 9 internal links (was 7);
+`npm run test:browser` passes on all four pages at 1440px and 390px with no
+console errors and no horizontal overflow; `ruff check`, `ruff format --check`
+and `mypy` are clean; the full pytest suite passes; `gpa export --check`
+reports the exported tables still match the committed observations. The new
+four-column assumptions register was inspected in a real browser to confirm it
+renders without overflow. External claims were verified before being written:
+SMARD's operator against smard.de itself, and the SDAC move to 15-minute market
+time units (trading day 30 September 2025, delivery 1 October 2025) against the
+NEMO Committee's own page. EPEX SPOT blocks automated retrieval, so the midday
+day-ahead gate closure is cited to EPEX SPOT as market convention and matches
+the run metadata this project already records; it is not presented as a
+computed or quoted figure.
 
 ### P4 — package the evidence for recruiting — recorded before implementation
 

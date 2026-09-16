@@ -1,8 +1,9 @@
 # Global Power Atlas
 
-Reproducible electricity-market analytics with a focused research question:
-can a temporally evaluated day-ahead price forecast create measurable value for battery
-dispatch?
+A reproducible research study on the German-Luxembourg (DE-LU) power market,
+built to answer one commercial question end to end: **does a statistically
+validated day-ahead price forecast create measurable battery-dispatch value —
+and where does it fail to?**
 
 [![CI](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml)
 [![Deploy](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml)
@@ -13,9 +14,22 @@ dispatch?
 
 ![Dashboard preview](docs/screenshots/dashboard-1440.png)
 
-## Portfolio case
+## Why this market and this question
 
-The project turns public power-system data into a compact decision workflow:
+DE-LU is the deepest power market in Europe and the reference for continental
+price formation. The nuclear phase-out completed in April 2023 left a system
+where wind and solar set the price for a large and growing share of hours, and
+where negative prices are routine rather than exceptional. That price shape is
+exactly what a storage asset is paid to exploit — and exactly what a forecast
+has to get right on the days that matter.
+
+The practical question for a trading or origination desk is not whether a model
+lowers mean absolute error. It is whether the error reduction survives the
+translation into a dispatch decision that clears against realised prices, under
+real physical constraints and real costs. Those two questions have different
+answers, and this project measures both separately.
+
+The project turns public system-operator data into a compact decision workflow:
 
 1. Validate interval prices, demand and generation by fuel in market time.
 2. Benchmark the DE-LU day-ahead price with lagged inputs and explicit
@@ -23,18 +37,18 @@ The project turns public power-system data into a compact decision workflow:
 3. Convert the forecast into a constrained battery dispatch and settle it on
    realised prices.
 
-The dashboard is intentionally small: monthly historical context, the forecast
-benchmark, the battery value translation and one methodology page. The value is
-in the research design and the audit trail, not in a large collection of charts.
-
 ```text
 Operator data → validated Parquet → walk-forward forecast → battery dispatch → static site
 ```
 
+The dashboard is intentionally small: monthly historical context, the forecast
+benchmark, the battery value translation and one methodology page. The value is
+in the research design and the audit trail, not in a large collection of charts.
+
 Designed and built end to end, solo: ingestion pipelines across two public
-system operators, leakage-safe walk-forward forecasting, the constrained
-battery-dispatch and stress-testing engine, and this site.
-[github.com/Pedrods20](https://github.com/Pedrods20).
+system-data providers covering four markets, leakage-safe walk-forward
+forecasting, the constrained battery-dispatch and stress-testing engine, and
+this site. [github.com/Pedrods20](https://github.com/Pedrods20).
 
 ## Featured result
 
@@ -63,6 +77,85 @@ valuable, and larger absolute battery margin does not establish the best
 investment duration without CAPEX and fixed/lifetime costs.
 Reproduce with `gpa export --check` against the committed snapshot.
 
+## What this project is meant to demonstrate
+
+- **Market judgment before modelling.** The information set, the forecast gate
+  and the evaluation window are chosen from how the day-ahead auction actually
+  works, not from what the data would allow.
+- **Leakage discipline that is testable, not asserted.** The gate, the lags and
+  the walk-forward refit boundaries are enforced in code and covered by tests.
+- **Honest evaluation.** Every model is scored on one common sample against
+  three naive alternatives, and the breakdowns are published where the model
+  loses, not only where it wins.
+- **Translation into a decision.** Forecast error becomes a constrained dispatch
+  schedule settled on realised prices, with costs, downtime and signal quality
+  stressed separately.
+- **Reproducibility as an engineering property.** A frozen, content-addressed
+  release, a committed data store, and `gpa export --check` to prove the
+  published site matches the Python analysis.
+
+## Premises
+
+Every number in this repository rests on the assumptions below. They are stated
+here once; each page repeats the ones it depends on.
+
+| Premise | Value | Why |
+|---|---|---|
+| Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so noon on D-1 is the last moment a real bidder holds information |
+| Target | Duration-weighted local clock-hour mean of the day-ahead price | Since the market moved to 15-minute products this is an analytical hourly benchmark, not a per-quarter-hour trade forecast |
+| Information set | Lagged prices, calendar features, residual load lagged at least two delivery days | Stored provider revisions cannot prove what was available at the historical gate, so realised delivery-day fundamentals are excluded |
+| Evaluation | Expanding walk-forward, common sample, three naive baselines | A model that cannot beat "repeat a known price" has not earned its complexity |
+| Model selection | Hyperparameters frozen on a validation window before the test period | Selection inside the evaluation window would report a tuned result as an out-of-sample one |
+| Battery | 1 MW; 1/2/4 MWh; 90% round-trip; one cycle/day; zero initial and terminal SOC | A deliberately simple, auditable asset, not a specific commercial project |
+| Costs | Zero in the base case; illustrative 2/3 and 5/10 EUR per grid MWh reruns | Cost rates are not calibrated German project estimates, so they are shown as stresses rather than folded into the headline |
+| Settlement | Schedules chosen on forecast prices, settled on realised prices | The only economically meaningful test of a forecast-driven decision |
+
+The two boundaries that most limit the claim: this is **already-inspected
+history**, not an untouched holdout or a prospective record; and the study is
+**zonal, not nodal**, so congestion and basis are outside scope.
+
+## Data and provenance
+
+The committed historical store covers four zones from two public, credential-free
+providers. European figures ultimately originate from the system operators and are
+redistributed by the platforms below.
+
+| Zone | Series | Provider | Publisher | Committed coverage |
+|---|---|---|---|---|
+| Germany-Luxembourg (DE-LU) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2018-12-31, 94 monthly partitions |
+| Germany-Luxembourg (DE-LU) | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2019-01-05, ablation only |
+| France (FR) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2024-09-01 |
+| Spain (ES) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2024-09-01 |
+| Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | Operador Nacional do Sistema Elétrico | From 2024-09-01 |
+
+DE-LU is the only market with the depth this study needs; the other three zones
+are historical context and are deliberately not used for forecasting or valuation.
+
+- **Energy-Charts** (`api.energy-charts.info`) republishes ENTSO-E and SMARD
+  figures through an open API under CC BY 4.0, which is why it carries the
+  European zones here while an ENTSO-E Transparency token is obtained. The
+  adapter uses `/price`, `/public_power`, `/public_power_forecast` and
+  `/installed_power`, and measures each series' resolution from the returned
+  timestamps rather than assuming it.
+- **SMARD** (`smard.de/app/chart_data`), the Bundesnetzagentur's market-data
+  platform, is implemented as a second, independent German adapter: it can
+  backfill the long DE-LU price and fundamentals history without depending on
+  the rate-limited Energy-Charts mirror, and it supplies the prospective path's
+  forecast snapshots, where a real retrieval time can be recorded. Every row in
+  the committed store today records Energy-Charts or ONS as its source.
+- **ONS** is read through two endpoints on purpose, because they do not share a
+  publication lag: generation from the hourly energy-balance CSV (about two days
+  behind real time) and load from the verified-load API (within about an hour).
+
+Stored inputs carry the providers' **latest revisions**. Lagging every
+fundamental avoids using future delivery dates, but it cannot prove that the
+exact stored revision was the one available at the historical forecast gate;
+that limitation is stated wherever a number depends on it.
+
+The monthly ingestion workflow refreshes the historical dashboard. A separate
+market-clock workflow can issue and reconcile DE-LU forecasts; prospective
+acceptance remains deliberately separate from the static historical pages.
+
 ## Research design
 
 - **Information set:** lagged prices, calendar variables and lagged residual
@@ -85,21 +178,6 @@ Reproduce with `gpa export --check` against the committed snapshot.
 - **Time and units:** UTC-aware source timestamps are interpreted through each
   market's local clock. Interval duration is carried explicitly, including the
   European hourly-to-quarter-hour transition.
-
-## Scope and data
-
-The committed historical store covers four zones from two public sources:
-
-| Area | Historical series | Role in the portfolio |
-|---|---|---|
-| Germany-Luxembourg (DE-LU) | Price, load, generation | Forecast and battery reference market |
-| France (FR) | Price, load, generation | Cross-market historical context |
-| Spain (ES) | Price, load, generation | Cross-market historical context |
-| Brazil (SIN) | Load, generation | Non-price system comparison |
-
-The monthly ingestion workflow refreshes the historical dashboard. A separate
-market-clock workflow can issue and reconcile DE-LU forecasts; prospective
-acceptance remains deliberately separate from the static historical pages.
 
 ## Run locally
 
@@ -170,6 +248,36 @@ quarter-hour trade. The study is zonal rather than nodal, so congestion and
 basis are outside scope. The next credible step is a separately recorded
 four-to-six-week prospective ledger, followed by reconciliation and battery
 acceptance; extending the historical backtest would not answer that question.
+
+## References
+
+Data providers:
+
+- Energy-Charts, Fraunhofer Institute for Solar Energy Systems ISE —
+  <https://www.energy-charts.info/> (API: `https://api.energy-charts.info`, CC BY 4.0)
+- SMARD, Bundesnetzagentur — <https://www.smard.de/>
+- ONS, Operador Nacional do Sistema Elétrico — <https://www.ons.org.br/>
+- ENTSO-E Transparency Platform, the upstream of the European figures —
+  <https://transparency.entsoe.eu/>
+
+Market rules and structure:
+
+- EPEX SPOT, day-ahead market basics, for the midday auction gate closure —
+  <https://www.epexspot.com/en/basicspowermarket>
+- NEMO Committee, Single Day-Ahead Coupling: the move from hourly to 15-minute
+  market time units, trading day 30 September 2025 for delivery 1 October 2025 —
+  <https://www.nemo-committee.eu/sdac>
+- Bundesnetzagentur, onshore wind auction statistics —
+  <https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html>
+- EEG 2023 and WindSeeG 2030 capacity targets, as republished in Energy-Charts'
+  `/installed_power` series
+
+Technical and cost references used as stated comparisons, not as calibration:
+
+- NREL Annual Technology Baseline 2024, utility-scale battery storage —
+  <https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage>
+- BloombergNEF, 2025 Lithium-Ion Battery Price Survey, published 9 December 2025 —
+  <https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/>
 
 ## License
 

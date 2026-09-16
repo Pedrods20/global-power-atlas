@@ -34,6 +34,13 @@ battery-dispatch decision. This page states the question, the qualified
 findings and the caveats in under a minute; the [forecast](./forecast) and
 [battery](./battery) pages carry the full protocol and evidence.
 
+**Why this market.** Germany-Luxembourg is the deepest power market in Europe
+and the reference for continental price formation. With the nuclear phase-out
+completed in April 2023, wind and solar now set the price for a large and
+growing share of hours and negative prices are routine — the price shape a
+storage asset is paid to exploit, and the one a forecast has to get right on
+the days that carry the value.
+
 **Question.** Does a statistically validated day-ahead price forecast create
 measurable battery-dispatch value — and where does it fail to?
 
@@ -64,6 +71,25 @@ several independent stress tests — but the value is duration- and
 model-dependent, and rewards disciplined evaluation over defaulting to the
 most complex model.
 
+**Premises.** Five assumptions drive every number above. The forecast may use
+only information available at **12:00 market time on the day before delivery**,
+the moment the day-ahead auction's order book closes. The information set is
+therefore lagged prices, calendar features and residual load lagged at least two
+delivery days — no realised delivery-day fundamentals. The target is the
+duration-weighted local clock-hour price, an analytical benchmark rather than a
+per-quarter-hour trade. The asset is a deliberately simple 1 MW battery at 1, 2
+or 4 MWh, 90% round-trip, one cycle per day, starting and ending each day empty.
+The base case carries zero operating and degradation cost; non-zero cases are
+rerun and shown separately rather than folded into the headline. Full definitions
+are on the [methodology page](./methodology).
+
+**Sources.** Prices, load and generation come from Energy-Charts (Fraunhofer
+ISE, CC BY 4.0), which republishes ENTSO-E and SMARD figures; Brazilian system
+data comes from ONS. Capacity and the official 2030 targets come from
+Energy-Charts' installed-capacity series. Two figures on the battery page are
+external citations — BloombergNEF and the Bundesnetzagentur — and are dated
+where they appear.
+
 **Limitations.** This is retrospective development evidence — already-inspected
 history, not an untouched holdout or a prospective result. Costs are
 illustrative, not sourced or calibrated; CAPEX, financing and other revenue
@@ -71,9 +97,10 @@ streams are excluded. The benchmark is hourly, not each traded quarter-hour.
 A separately recorded prospective pilot has not yet run.
 
 **Personal contribution.** Designed and built end to end, solo: ingestion
-pipelines across two public system operators, leakage-safe walk-forward
-forecasting, the constrained battery-dispatch and stress-testing engine, and
-this site. [github.com/Pedrods20](https://github.com/Pedrods20).
+pipelines across two public system-data providers covering four markets,
+leakage-safe walk-forward forecasting, the constrained battery-dispatch and
+stress-testing engine, and this site.
+[github.com/Pedrods20](https://github.com/Pedrods20).
 
 ## Historical context
 

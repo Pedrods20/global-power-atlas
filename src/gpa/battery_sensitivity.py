@@ -4,7 +4,7 @@ Prices and model parameters are frozen. Signal attenuation never reads actuals.
 Calendar downtime represents a battery unavailable for an entire known day,
 with zero initial/terminal SOC; it does not simulate a mid-cycle forced outage.
 The 85% efficiency reference is NREL ATB 2024, not a German asset calibration:
-https://atb.nlr.gov/electricity/2024/utility-scale_battery_storage
+https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage
 """
 
 from __future__ import annotations

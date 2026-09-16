@@ -87,6 +87,24 @@ The exploratory paired 95% interval for that incremental margin is
 EUR ${euro(headline.ci_low_eur_mw)}–${euro(headline.ci_high_eur_mw)}/MW.
 It is conditional on already-inspected history, not proof of future performance.
 
+**What is being valued.** A deliberately simple asset: 1 MW of power at
+${duration} MWh of energy, 90% round-trip efficiency in the base case, at most
+one charge-then-discharge episode per day, starting and ending every day empty,
+with no rolling intraday re-optimization. The schedule for a whole delivery day
+is chosen from the forecast at the day-ahead gate and then settled against the
+prices that actually cleared. The simplicity is the point: every euro of
+difference between strategies comes from the price signal each one acted on,
+not from a more sophisticated optimizer, because all of them share the same
+physics, the same days and the same settlement.
+
+**Why the comparison is against naive strategies.** The commercially relevant
+question is never "does the model have skill in the abstract" but "is it worth
+more than what the desk would have done anyway". Repeating the previous day,
+the previous week or the last similar day requires no model, no data pipeline
+and no maintenance. The incremental margin reported here is therefore the value
+of the forecast *over that free alternative* — not the battery's total revenue,
+which a naive strategy also earns most of.
+
 ## Compare the alternatives
 
 All five forecast strategies use the same eligible days and physical constraints.
