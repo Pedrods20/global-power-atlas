@@ -1,10 +1,23 @@
 """Leakage-safe fundamental forecast inputs.
 
-SMARD exposes German TSO forecasts for demand, wind and solar, while the
-curated store currently contains only realised series.  This module defines a
-small interchange format for those snapshots and selects the latest snapshot
-that was published before the day-ahead gate.  Historical panels can therefore
-use archived vintages when available, and a live issue can use the same code.
+German TSO forecasts of demand, wind and solar are collected for DE-LU into the
+curated ``fundamentals`` dataset, today from Energy-Charts'
+``/public_power_forecast``; :class:`gpa.sources.smard.SmardSource` implements the
+same series independently but no zone is routed to it yet. This module defines a
+small interchange format for those snapshots and selects, for each panel row,
+the latest snapshot published before that row's own day-ahead gate.
+
+What the archive cannot supply is a publication vintage, and the three builders
+below differ only in the vintage they assign, which is the whole reason these
+features are published as a labelled ablation rather than folded into the frozen
+release:
+
+- :func:`from_store` assigns each row the gate of its own delivery day, a stated
+  research policy, for the retrospective ablation.
+- :func:`from_store_observed` assigns one observed retrieval instant to every
+  row. Honest, and correct only where no training history is needed.
+- :func:`from_store_prospective` is what a live issue uses: the policy vintage
+  across the training history, the observed instant on the delivery day alone.
 """
 
 from __future__ import annotations
@@ -20,7 +33,9 @@ from gpa.calendar import attach_local_time
 from gpa.zones import Zone
 
 __all__ = [
+    "FUNDAMENTAL_COLUMNS",
     "FUNDAMENTAL_FEATURES",
+    "FUNDAMENTAL_METADATA",
     "SMARD_FORECAST_FILTERS",
     "attach",
     "combine_smard_series",
@@ -28,6 +43,7 @@ __all__ = [
     "from_smard_series",
     "from_store",
     "from_store_observed",
+    "from_store_prospective",
     "normalize",
 ]
 
@@ -36,9 +52,26 @@ FUNDAMENTAL_FEATURES: Final[tuple[str, ...]] = (
     "da_wind_forecast",
     "da_solar_forecast",
     "da_residual_load_forecast",
-    "da_forecast_age_hours",
 )
-"""Names added to a modelling panel when fundamental snapshots are supplied."""
+"""Names a modelling panel fits when fundamental snapshots are supplied."""
+
+FUNDAMENTAL_METADATA: Final[tuple[str, ...]] = ("da_forecast_age_hours",)
+"""Attached beside the features as recorded evidence, and never fitted.
+
+The age is the interval between the snapshot's vintage and the delivery day's
+gate, so it is identically zero wherever the vintage *is* the gate -- which is
+every row of the retrospective research policy (:func:`from_store`) and every
+training row of the prospective mixed vintage (:func:`from_store_prospective`).
+A column that is constant across a training window carries no information:
+:func:`gpa.forecast.linalg.ridge_from_moments` already excludes it and returns a
+zero coefficient, so fitting it was harmless but also meaningless, and offering
+it as a feature invited the reader to believe the model had learned something
+from a measured retrieval lag. It is kept on the panel because an auditor
+checking what an issue knew should be able to read the age off the evidence.
+"""
+
+FUNDAMENTAL_COLUMNS: Final[tuple[str, ...]] = FUNDAMENTAL_FEATURES + FUNDAMENTAL_METADATA
+"""Every column :func:`attach` adds, fitted or not."""
 
 SMARD_FORECAST_FILTERS: Final[dict[str, int]] = {
     "wind_onshore": 123,
@@ -108,7 +141,7 @@ def attach(panel: pl.DataFrame, fundamentals: pl.DataFrame, zone: Zone) -> pl.Da
     """
     if fundamentals.is_empty():
         return panel.with_columns(
-            *(pl.lit(None, dtype=pl.Float64).alias(name) for name in FUNDAMENTAL_FEATURES)
+            *(pl.lit(None, dtype=pl.Float64).alias(name) for name in FUNDAMENTAL_COLUMNS)
         )
     snapshots = normalize(fundamentals, zone)
     keys = (
@@ -146,7 +179,7 @@ def attach(panel: pl.DataFrame, fundamentals: pl.DataFrame, zone: Zone) -> pl.Da
             pl.col("wind_forecast_mw").alias("da_wind_forecast"),
             pl.col("solar_forecast_mw").alias("da_solar_forecast"),
         )
-        .select("local_date", "local_hour", *FUNDAMENTAL_FEATURES)
+        .select("local_date", "local_hour", *FUNDAMENTAL_COLUMNS)
     )
     return panel.join(snapshots, on=["local_date", "local_hour"], how="left")
 
@@ -210,37 +243,26 @@ def from_store(zone: Zone) -> pl.DataFrame:
     row, which is why these features are published only as a labelled ablation
     and never folded into the frozen release.
 
-    A live, prospective issue must not use this function. It records an observed
-    retrieval instant instead; see :func:`from_store_observed`.
+    A live, prospective issue must not use this function for the day it is
+    forecasting: it can observe its own retrieval instant there. It does still
+    use this policy vintage across its training history, where no observed
+    instant exists; :func:`from_store_prospective` combines the two.
     """
     local = _hourly_wide(zone)
     if local is None:
         return empty()
-
-    # One gate per distinct delivery day, not per row: a multi-year hourly
-    # frame has far fewer unique dates than rows, and _gate() is Python-level.
-    gates = (
-        local.select("local_date")
-        .unique()
-        .with_columns(
-            pl.struct("local_date")
-            .map_elements(
-                lambda value: _gate(value["local_date"], zone),
-                return_dtype=pl.Datetime("us", "UTC"),
-            )
-            .alias("published_at")
-        )
+    return local.join(_gates(local, zone, "published_at"), on="local_date").select(
+        empty().schema.names()
     )
-    return local.join(gates, on="local_date").select(empty().schema.names())
 
 
 def from_store_observed(zone: Zone, *, retrieved_at: dt.datetime) -> pl.DataFrame:
     """The same archive rows, stamped with an instant that was actually observed.
 
-    This is the *prospective* counterpart to :func:`from_store`, and the
-    difference between them is the whole reason these features are not in the
-    published retrospective release. ``retrieved_at`` is when this run read the
-    forecast, so it is a real, varying instant rather than a policy constant:
+    This is the *observed* counterpart to :func:`from_store`, and the difference
+    between them is the whole reason these features are not in the published
+    retrospective release. ``retrieved_at`` is when this run read the forecast,
+    so it is a real, varying instant rather than a policy constant:
     :func:`attach` measures ``da_forecast_age_hours`` from it, and a snapshot
     read after the gate is correctly dropped instead of being assumed eligible.
 
@@ -248,6 +270,12 @@ def from_store_observed(zone: Zone, *, retrieved_at: dt.datetime) -> pl.DataFram
     was published at or before the moment this project retrieved it. That
     direction is the safe one: a later stamp can only make a row less eligible,
     never more.
+
+    Applying it to a whole archive is what a caller must not do when the result
+    has to be fitted: one present-day stamp fails every historical row's gate and
+    leaves no training history at all. :func:`from_store_prospective` is the
+    builder a live issue wants; this one is the primitive underneath it and the
+    right choice only where no history is needed.
 
     Args:
         zone: Supplies the market timezone and the store partition.
@@ -268,6 +296,61 @@ def from_store_observed(zone: Zone, *, retrieved_at: dt.datetime) -> pl.DataFram
     return local.with_columns(
         pl.lit(stamp).cast(pl.Datetime(time_unit="us", time_zone="UTC")).alias("published_at")
     ).select(empty().schema.names())
+
+
+def from_store_prospective(
+    zone: Zone, *, delivery_date: dt.date, retrieved_at: dt.datetime
+) -> pl.DataFrame:
+    """The vintage a live issue can actually defend, for a panel that must train.
+
+    :func:`from_store_observed` is the honest primitive, and handing it to a
+    modelling panel is still wrong, because it stamps the *whole* archive with
+    one instant. :func:`attach` keeps a snapshot only when its vintage precedes
+    that row's own D-1 gate, and every historical gate is in the past, so a
+    single present-day stamp erases the fundamental features from all of
+    history. The model then has nothing to fit and every delivery hour abstains
+    -- which is precisely what the first version of the prospective arm did.
+
+    This splits the two roles the vintage plays. Training rows keep the
+    research-policy gate :func:`from_store` assigns, because there the vintage
+    only decides which rows may be *fitted*. The delivery day carries
+    ``retrieved_at``, because there it decides what the issued forecast is
+    allowed to know -- and that is the claim a reader would challenge. A
+    retrieval after the delivery day's gate is still refused rather than
+    backdated, so the arm abstains on a day the provider published too late
+    instead of quietly issuing from a later information set.
+
+    The assigned vintage therefore survives in the fit and nowhere else, which
+    is a disclosed limitation of this arm rather than a hidden one: see the
+    Methodology page.
+
+    Args:
+        zone: Supplies the market timezone and the store partition.
+        delivery_date: The market-local day being forecast.
+        retrieved_at: Timezone-aware instant at which this run read the archive.
+
+    Raises:
+        ValueError: If ``retrieved_at`` is naive, which would leave the vintage
+            unanchored and silently comparable against UTC gates.
+    """
+    if retrieved_at.tzinfo is None:
+        raise ValueError("retrieved_at must be timezone-aware")
+
+    local = _hourly_wide(zone)
+    if local is None:
+        return empty()
+
+    stamp = retrieved_at.astimezone(dt.UTC)
+    return (
+        local.join(_gates(local, zone, "_policy_vintage"), on="local_date")
+        .with_columns(
+            pl.when(pl.col("local_date") == delivery_date)
+            .then(pl.lit(stamp).cast(pl.Datetime(time_unit="us", time_zone="UTC")))
+            .otherwise(pl.col("_policy_vintage"))
+            .alias("published_at")
+        )
+        .select(empty().schema.names())
+    )
 
 
 def from_smard_series(
@@ -321,6 +404,26 @@ def combine_smard_series(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
         .agg(*(pl.col(column).drop_nulls().first().alias(column) for column in _FLOATS))
         .select(empty().schema.names())
         .sort(["ts_utc", "published_at"])
+    )
+
+
+def _gates(frame: pl.DataFrame, zone: Zone, name: str) -> pl.DataFrame:
+    """One D-1 gate per distinct delivery day present in ``frame``.
+
+    Per day rather than per row: a multi-year hourly frame holds far fewer
+    unique dates than rows, and :func:`_gate` is Python-level.
+    """
+    return (
+        frame.select("local_date")
+        .unique()
+        .with_columns(
+            pl.struct("local_date")
+            .map_elements(
+                lambda value: _gate(value["local_date"], zone),
+                return_dtype=pl.Datetime("us", "UTC"),
+            )
+            .alias(name)
+        )
     )
 
 

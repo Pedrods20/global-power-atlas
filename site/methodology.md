@@ -40,20 +40,22 @@ and SMARD figures through an open API, which is why it carries the European
 zones here while an ENTSO-E Transparency token is obtained: the underlying
 numbers are the ones the system operators publish. Four endpoints are used —
 `/price` for day-ahead prices, `/public_power` for load and generation by fuel,
-`/public_power_forecast` for the day-ahead fundamentals used only in the
-labelled ablation, and `/installed_power` for installed capacity by technology
+`/public_power_forecast` for the day-ahead fundamentals, which feed the labelled
+ablation below and the prospective `ridge_da` arm but never the published
+retrospective baseline, and `/installed_power` for installed capacity by technology
 together with the government's own 2030 targets. Two provider behaviours are
 handled explicitly rather than assumed: the `end` parameter is inclusive, and
 the German series changed resolution without notice, so interval length is
 measured from the returned timestamps instead of being hardcoded.
 
 **SMARD** (`smard.de/app/chart_data`) is the Bundesnetzagentur's market-data
-platform and is implemented as a second, independent German adapter. It can
-backfill the long DE-LU price and fundamentals history without depending on the
-rate-limited Energy-Charts mirror, and it supplies the prospective path's
-forecast snapshots, where an actual retrieval time can be recorded rather than
-assigned. Every row in the committed store today records Energy-Charts or ONS
-as its source.
+platform and is implemented as a second, independent German adapter, so the long
+DE-LU price and fundamentals history can be backfilled without depending on the
+rate-limited Energy-Charts mirror. It is registered and tested but no zone is
+routed to it yet: DE-LU currently takes every dataset, fundamentals included,
+from Energy-Charts, and every row in the committed store records Energy-Charts
+or ONS as its source. The retrospective archive and the prospective run read the
+same provider; what separates them is the publication vintage each can claim.
 
 **ONS** is read through two endpoints on purpose, because they do not share a
 publication lag. Generation comes from the hourly energy balance, one CSV per
@@ -119,13 +121,25 @@ adopting it as a new frozen release is a separate decision this project has
 not made, and the assigned vintage is precisely why it cannot be made from the
 archive alone.
 
-The prospective path resolves that differently, because it is not reading an
-archive: it records the instant it actually retrieved the forecast. A live
-issue therefore uses these features when the provider has already published
-the delivery day at that moment, and falls back to the information set above
-when it has not — and its manifest records which of the two it used, so the
-distinction never rests on trust. The forecast age is a measured quantity
-there, rather than the constant zero an assigned vintage produces.
+The prospective path resolves that differently, because for the day it is
+forecasting it is not reading an archive: it records the instant it actually
+retrieved the forecast. Rather than one arm that silently changes inputs with
+provider timing, each run issues two frozen identities — `ridge` on the
+information set above, `ridge_da` on that set plus these features — and the
+ledger records both, so they can be scored against each other. `ridge_da`
+abstains, and says so, when the provider has not published the delivery day
+before the gate.
+
+The limitation that remains is stated rather than hidden. Only the delivery
+day's snapshot carries an observed vintage; `ridge_da`'s training history keeps
+the assigned D-1 gate, because the archive holds no observed instant for it and
+a model cannot be fitted on an empty history. The assumption therefore shapes
+how that arm is fitted, never what its issued forecast was permitted to know —
+which is the claim a reader would challenge. Training on observed vintages
+throughout becomes possible only once this ledger has accumulated enough of
+them. For the same reason the retrieval age is recorded on every issue as
+evidence but is not itself a fitted feature: it is identically zero across any
+training window, so it could only decorate the model, never inform it.
 
 See the complete result on the [Forecasting page](./forecast).
 
@@ -196,7 +210,7 @@ reason each one was chosen and what it costs the result.
 | Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so this is the last instant a bidder's information set is fixed | A later gate would report hindsight as skill |
 | Target resolution | Local clock-hour, duration-weighted | Day-ahead coupling moved to 15-minute market time units for delivery from 1 October 2025; the hourly figure is an analytical aggregate from then on | The benchmark does not price a traded quarter-hour product |
 | Information set | Lagged prices, calendar features, residual load lagged ≥ 2 delivery days | Stored revisions cannot certify publication-time vintages, so realised delivery-day fundamentals are excluded | Reported skill is lower than a fundamentals-driven model would show; the ablation quantifies the gap |
-| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage; a prospective issue records the instant it actually read them | The historical archive exposes no publication timestamp, while a live run can observe its own | Retrospectively those features inform only the labelled ablation, never the published baseline; prospectively they are used when the delivery day is already published, and the issue records which set it used |
+| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage; a prospective issue records the instant it actually read the delivery day's snapshot | The historical archive exposes no publication timestamp, while a live run can observe its own for the day it is forecasting | Retrospectively those features inform only the labelled ablation, never the published baseline; prospectively they define a separate `ridge_da` arm whose training history still carries the assigned vintage, so the assumption reaches the fit and not the issued information set |
 | Walk-forward protocol | Expanding window, refit with dates strictly before each forecast day | Mirrors how a model would actually be maintained in production | A fixed split would hide regime-dependent decay |
 | Hyperparameter selection | Frozen on a validation window preceding the test period | Selection inside the evaluation window reports a tuned fit as out-of-sample | Published scores would be optimistically biased |
 | Evaluation stance | Retrospective development benchmark on already-inspected history | Honest label for a sample that has been examined during development | Not an untouched holdout; a prospective ledger is still required |
@@ -274,9 +288,11 @@ prospective period is complete. The published information set uses lagged
 realised fundamentals, not operator forecasts: day-ahead load/wind/solar
 forecasts are backfilled but carry an assigned, not observed, publication
 vintage, so they inform only the labelled ablation on the Forecasting page,
-not the published baseline. Whether they earn a place in the information set
-is left to the prospective ledger, where the vintage is observed rather than
-assumed; until that ledger has run, the question is open rather than settled.
+not the published baseline. Whether they earn a place in the information set is
+left to the prospective ledger, which issues them as a separate `ridge_da` arm
+beside the published one and observes the delivery day's vintage rather than
+assuming it; until that ledger has run, the question is open rather than
+settled.
 The study is zonal, not nodal;
 congestion, basis and transmission constraints are outside scope. Brazilian
 data is a national system comparison, not a wholesale price market.

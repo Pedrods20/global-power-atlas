@@ -22,15 +22,16 @@ on:
     # `ledger.canonical` selects the earliest complete, verified pre-gate issue
     # per model and delivery day. Every issue stays recorded either way.
     #
-    # The two slots also serve the day-ahead fundamentals question. Those
-    # features enter a prospective panel only when the provider has already
-    # published the delivery day; checked at 05:45 CEST on 16 September 2026,
-    # Energy-Charts had not, so an early run falls back to the published
-    # information set and says so in its own manifest. The later slot has the
-    # better chance of catching them. Which run wins the canonical slot is
-    # deliberately not made to depend on that: the conservative, published
-    # information set stays canonical, exactly as in the retrospective release,
-    # and a fundamentals-bearing issue is recorded alongside it as evidence.
+    # The two slots also serve the day-ahead fundamentals question, which each
+    # run answers twice: `ridge` issues from the published information set and
+    # `ridge_da` from that set plus the operators' day-ahead forecasts. They are
+    # separate frozen identities rather than one arm that varies with whatever
+    # the provider happened to have published, so `ledger.canonical` keeps both
+    # and the ledger can score them against each other. Checked at 05:45 CEST on
+    # 16 September 2026, Energy-Charts had not yet published the next delivery
+    # day, so the early slot will often see `ridge_da` abstain and the later slot
+    # is the one likelier to catch it -- an abstention that is recorded rather
+    # than papered over with a different information set.
     - cron: "17 2 * * *"
     - cron: "47 6 * * *"
   workflow_dispatch:
@@ -52,7 +53,13 @@ jobs:
       # the seed's own checkpoint before reconciliation and issuance, so a
       # stale monthly seed is recovered rather than capped at a fixed window.
       GPA_DATA_ROOT: /tmp/gpa-curated
+      # The published information set, and the arm the retrospective release
+      # already describes. It must always issue; the job fails if it does not.
       FORECAST_MODEL: ridge
+      # The same estimator on a wider information set, run beside it as the
+      # experiment that settles whether the fundamentals earn a place. It may
+      # abstain without failing the run: see the issue step below.
+      FORECAST_MODEL_DA: ridge_da
       # Revision overlap behind that checkpoint, not the length of the refresh.
       FORECAST_LOOKBACK: "7"
       FORECAST_DELIVERY_DATE: ""
@@ -69,22 +76,30 @@ jobs:
 
       - name: Register this run as a tracked attempt before any refresh
         # A setup or ingestion failure below must still leave local evidence
-        # that this scheduled slot was attempted, not silently absent.
+        # that this scheduled slot was attempted, not silently absent. One
+        # attempt per arm: they finish independently, so an abstaining
+        # fundamentals arm never closes the published arm's record.
         run: |
           ATTEMPT_ID="gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          ATTEMPT_ID_DA="$ATTEMPT_ID-da"
           echo "ATTEMPT_ID=$ATTEMPT_ID" >> "$GITHUB_ENV"
+          echo "ATTEMPT_ID_DA=$ATTEMPT_ID_DA" >> "$GITHUB_ENV"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ORIGIN=workflow_dispatch
           else
             ORIGIN=schedule
           fi
-          if [ -n "$FORECAST_DELIVERY_DATE" ]; then
-            gpa forecast-attempt start --attempt-id "$ATTEMPT_ID" --zone DE-LU \
-              --model "$FORECAST_MODEL" --origin "$ORIGIN" --delivery-date "$FORECAST_DELIVERY_DATE"
-          else
-            gpa forecast-attempt start --attempt-id "$ATTEMPT_ID" --zone DE-LU \
-              --model "$FORECAST_MODEL" --origin "$ORIGIN"
-          fi
+          for pair in "$ATTEMPT_ID:$FORECAST_MODEL" "$ATTEMPT_ID_DA:$FORECAST_MODEL_DA"; do
+            id="${pair%%:*}"
+            model="${pair##*:}"
+            if [ -n "$FORECAST_DELIVERY_DATE" ]; then
+              gpa forecast-attempt start --attempt-id "$id" --zone DE-LU \
+                --model "$model" --origin "$ORIGIN" --delivery-date "$FORECAST_DELIVERY_DATE"
+            else
+              gpa forecast-attempt start --attempt-id "$id" --zone DE-LU \
+                --model "$model" --origin "$ORIGIN"
+            fi
+          done
 
       - name: Seed an isolated forecast store
         run: |
@@ -105,18 +120,35 @@ jobs:
       - name: Evaluate reconciled battery dispatch
         run: gpa battery --zone DE-LU --output data/forecast_issues/evaluations
 
-      - name: Issue before the market gate
+      - name: Issue the published information set before the market gate
         # Reuses the attempt registered above; its delivery date and origin
         # carry over, so a late or failed issue still finalizes the same
         # tracked attempt instead of leaving it open.
         run: gpa issue --zone DE-LU --model "$FORECAST_MODEL" --attempt-id "$ATTEMPT_ID"
+
+      - name: Issue the day-ahead fundamentals arm beside it
+        # `gpa issue` exits non-zero on anything but a complete issue, and this
+        # arm abstains by design whenever the provider has not published the
+        # delivery day in time. That abstention is the experiment's evidence,
+        # not a fault: the commit step below records it either way and the
+        # attempt carries its status. Failing the job on it would make an honest
+        # abstention indistinguishable from a broken run, and would hide it
+        # behind a red cross on days the published arm succeeded. The published
+        # arm above is the one that gates this job.
+        continue-on-error: true
+        run: gpa issue --zone DE-LU --model "$FORECAST_MODEL_DA" --attempt-id "$ATTEMPT_ID_DA"
 
       - name: Record a failed attempt if an earlier step never completed it
         # gpa issue always finalizes its own attempt, so --if-open is a no-op
         # there; this only closes attempts left open by an earlier failure
         # (ingest, validate, reconcile or battery).
         if: failure()
-        run: gpa forecast-attempt finish --attempt-id "$ATTEMPT_ID" --status failed --if-open
+        run: |
+          for id in "$ATTEMPT_ID" "$ATTEMPT_ID_DA"; do
+            if [ -n "$id" ]; then
+              gpa forecast-attempt finish --attempt-id "$id" --status failed --if-open
+            fi
+          done
 
       - name: Commit the prospective ledger
         # Runs even after an earlier failure so failed-attempt evidence is

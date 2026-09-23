@@ -60,7 +60,7 @@ browser again, and a live spot-check across five years confirmed the wind bug
 never actually corrupted the already-published fundamentals-ablation numbers.
 **Next:** user chose P4 (package the evidence for recruiting) over the
 fundamentals-adoption decision. Plan recorded immediately below, before any
-edit. **P4 is now done except one deferred item** (17 September 2026): site
+edit. **P4 is now done except one deferred item** (15 September 2026): site
 disclosures, methodology accuracy fixes and README's personal-contribution
 line are all in; the fundamentals ablation is now shown on the forecast page
 as a labelled diagnostic (Ridge 22.07 -> 19.17, LightGBM 25.56 -> 20.56
@@ -73,7 +73,7 @@ proved unverifiable in this environment (paywalled, 403, or unparseable).
 GitHub About/topics text was drafted for the user to apply; no `gh` access
 exists here. Full evidence below.
 
-**UI review pass (17 September 2026, user-requested): three broken interactive
+**UI review pass (15 September 2026, user-requested): three broken interactive
 charts on the forecast page found and fixed, plus one cosmetic Plot warning.**
 Reviewed every page (index, forecast, battery, methodology) at four viewports
 with Playwright, checking for horizontal overflow, chart-vs-container fit,
@@ -102,7 +102,7 @@ because its `x` scale used a `"MM.YYYY"`-style field without an explicit type;
 fixed with `x: {type: "band", ...}` in `site/index.md`, confirmed the warning
 is gone. `npm run build` and `npm run test:browser` both pass after the fix.
 No data, export or CLI code was touched -- this was a `site/*.md` reactivity
-bug, not a pipeline bug. Not yet committed.
+bug, not a pipeline bug. Committed as `c0ae798`.
 
 **P5, the editorial pass, is done** (16 September 2026): the README, all four
 site pages and one module docstring were rewritten or extended for executive
@@ -119,6 +119,266 @@ a decision, not work — GitHub Actions needs this branch pushed (41 commits
 ahead of `origin/main`), which has never been authorized here, and a local
 scheduler is the alternative. The deferred commercial comparison and the GitHub
 About/topics metadata remain open too.
+
+**P7 — the P6 review pass — is recorded below and in progress** (16 September
+2026): a line-by-line review of P6 reproduced a defect that makes the
+fundamentals arm unable to issue at all, found that the two arms are not
+separable in the ledger, and found three published statements that promise what
+the code does not do. Plan immediately below, evidence after it.
+
+**P8 — full product review and repositioning — recorded below, in progress**
+(22 September 2026): the user asked for a complete review of everything already
+built — texts, titles, findings and insights — against one question: is this
+useful to someone hiring for European power-market analysis? The review found
+the project technically healthy and commercially mispositioned, and found that
+the repositioning work of the last five increments was never published at all.
+Plan immediately below, evidence after it.
+
+### P8 — reposition as a market research note, publish it, and start the ledger — recorded before code
+
+**Review findings (22 September 2026), verified rather than recalled.** The
+working tree passes 415 tests, `ruff check`, `ruff format --check`, `mypy` and
+`gpa export --check`. Three failures, in order of severity:
+
+1. **The public product does not exist.** `main` here is 42 commits ahead of
+   `origin/main`, which still points at `074ad42`. Fetching the live site
+   confirms it: the home page's H1 is "Historical dashboard" with no headline
+   numbers, and `/battery` carries only "Economic scoreboard" and "Dispatch
+   example" — no durability section, no cannibalisation, no capacity, no BNEF
+   citation. Every increment from P3 through P7 is invisible to any reader who
+   opens the README's badge link.
+2. **The project is organised as a model-validation report**, not as market
+   research. The central question — does a validated forecast create battery
+   value — is applied data science. None of the home page's three findings is a
+   statement about the German market.
+3. **The strongest market analysis in the project is buried and written
+   defensively.** It sits in section 5 of page 3, and the hedging markers in the
+   running prose count 6 on `index.md`, 30 on `forecast.md` and 26 on
+   `battery.md`. `site/battery.md:309` carries a double negative over a
+   correlation.
+
+Supporting detail found in the review, all read from the committed site tables:
+
+- The market story is already computed. Solar capture rate 0.93 (2019) to 0.51
+  (2026 YTD); on/off-peak spread +10.6 to **-13.7 EUR/MWh**, so peak hours are
+  now on average cheaper than off-peak; negative hours 2.4% to 7.2%; solar 46 to
+  118 GW; the battery fleet 1.6 to 21.1 GW and 2.3 to 32.9 GWh. Against all of
+  that, the value a 4h battery can extract rose from 253 EUR/MW/day (2023) to
+  **451 EUR/MW/day (2026 YTD)**, the highest since the gas crisis. The daily
+  shape moved from peak-versus-offpeak to midday-trough-versus-evening-peak; it
+  did not flatten. The fleet's ~1.6h average duration says it is mostly domestic
+  storage, not grid-scale competing for this spread — an argument the site has
+  the data for and does not make.
+- Scale is never stated the way a desk thinks. EUR 29,014/MW spans 2,404 days,
+  about 4,400 EUR/MW/year or 12 EUR/MW/day. The exported
+  `mean_daily_incremental_eur_mw` is 12.07 and is not shown anywhere.
+- The one-cycle-per-day cap binds on 2,403 of 2,404 days
+  (`equivalent_cycles = 2403.69`). A real German BESS cycles 1.5-2.5 times daily
+  across day-ahead and intraday.
+- `site/index.md`'s front matter still reads `title: Historical dashboard`,
+  contradicting its own executive H1 and supplying the live site's title.
+- This document's tail ("Positioning", "Baseline findings before
+  implementation") still quotes MAE 21.04, 8,971 cells, 369 days and EUR 7,024 —
+  superseded by 22.07, 58,645, 2,404 and 29,014 in the checkpoint above. P3's
+  original text (Marktstammdatenregister, 2027-2030 scenarios, a CAPEX screening
+  sheet) was correctly redirected during planning but still reads as the standing
+  plan.
+
+What the review found worth protecting, unchanged: the 12:00 gate and the
+vintage discipline; Ridge beating LightGBM in the tails (scarcity skill +16.0%
+against -56.7%; negative-price -3.9% against -35.1%); `naive_similar_day` being
+the best dispatch comparator despite being the second-worst price forecaster;
+publishing the 827 of 2,404 days on which the model loses; the frozen
+content-addressed release with `gpa export --check`; and the two-armed
+prospective design with recorded abstentions.
+
+**User decisions taken before this plan was written** (22 September 2026), each
+chosen from three options: publish now and again at the end; reposition the
+whole product around the market thesis rather than patching it; answer the
+asset-realism gap with a price-shape decomposition plus a two-cycle sensitivity
+instead of re-freezing the release; and start the prospective ledger now,
+presenting it as a running counter rather than a promise.
+
+**The thesis the product will argue.** Solar killed the German peak premium and
+doubled the spread a battery monetises. The forecast and battery studies stop
+being the product and become the two pieces of evidence supporting it.
+
+**Steps.**
+
+1. Publish what already exists. Commit P7, push, let CI gate the deploy, verify
+   the live site, and let `forecast.yml` begin accumulating the ledger.
+2. New analysis: mean hourly price profile by year (2019 against 2026), the
+   annual intraday max-minus-min spread shown beside the on/off-peak spread, and
+   a two-cycles-per-day battery scenario added as a sensitivity without
+   re-freezing the release.
+3. Rewrite the home page as a research note: market-first H1 and findings, and an
+   explicit "what would make me wrong" block naming the gas-premium unwind, a
+   lengthening fleet duration and market reform.
+4. Editorial pass on the evidence pages: fix the front-matter title, retitle
+   around market facts, cut the hedging to one disciplined block per page, remove
+   the double negative, report every incremental figure in EUR/MW/year and
+   EUR/MW/day beside the cumulative, add a sourced paragraph on FCR/aFRR and
+   intraday positioning this study as a lower bound, and show an honest
+   issued/abstained counter.
+5. Documentation hygiene: README led by the thesis; this document's stale tail
+   marked superseded; P3's original text marked as not executed as written.
+6. Publish again and verify: tests, lint, types, `gpa export --check`, build,
+   browser smoke, push, live check.
+
+**Acceptance.** A power-market analyst opening the live URL can state the market
+claim, the evidence behind it and the main risk to it within a minute, without
+reading a methodology page first. Every number on the site is reproducible from
+the committed release, and no figure appears only as a multi-year cumulative.
+
+### P7 — fix the prospective fundamentals arm and make it an experiment — recorded before code
+
+Review finding (16 September 2026), reproduced rather than argued. P6 wired
+`from_store_observed` into `gpa issue`, which stamps **every** archived row with
+the single instant the run read the store. :func:`attach` then keeps a snapshot
+only when `published_at <= gate` for that row's own delivery day. Every
+historical row's gate is in the past and the stamp is now, so the whole training
+history loses its fundamental features:
+
+    observed vintage (prospective path):  trainable rows = 0
+    policy vintage  (retrospective path): trainable rows = 67,399
+
+`Ridge.predict_day` fits on `panel.complete()`, which requires every feature to
+be present, so with zero training rows every delivery hour falls through and the
+run abstains. Reproduced end-to-end against an isolated store with the clock
+moved into a real pre-gate window, on a delivery day the archive does cover:
+
+    DE-LU 2026-09-15: abstained, 0 forecasts, 24 abstentions
+    status = abstain_missing_inputs (24/24), eligible = true, pre_gate
+
+`gpa issue` exits 1 on any status other than `issued`, so this is a red workflow
+on every day the provider publishes the delivery day in time — the opposite of
+the intended behaviour. P6's live proof did not catch it because Energy-Charts
+had not published 2026-09-17 at that moment, so only the fallback arm ran. The
+six tests added with P6 use a single-delivery-day panel and therefore cannot
+observe a training history at all.
+
+Two further findings from the same pass:
+
+- *The two arms are not separable.* Both scheduled runs issue
+  `FORECAST_MODEL: ridge`, `POLICY_ID` is a constant that does not name the
+  information set, and `ledger.canonical` de-duplicates on
+  `(zone, model, delivery_date)`. Two issues carrying different information sets
+  therefore collide on one key, and only the manifest distinguishes them. The
+  set is also chosen implicitly, by whatever the provider happened to have
+  published that minute, which contradicts this roadmap's own pilot rule:
+  "Freeze the eligible models, naive comparators, issuance policy, scoring and
+  battery assumptions before starting."
+- *Three published statements over-promise.* `README.md`, `site/forecast.md` and
+  `site/methodology.md` all state that the prospective run uses these features
+  and that the ledger will answer the adoption question. It cannot yet. Separately,
+  README and methodology both say SMARD "supplies the prospective path's forecast
+  snapshots"; it does not — DE-LU maps every dataset including `fundamentals` to
+  `energy_charts`, and `SmardSource`, `from_smard_series` and
+  `combine_smard_series` are reachable only from tests. methodology also still
+  describes `/public_power_forecast` as "used only in the labelled ablation" ten
+  lines above the paragraph that says otherwise.
+
+**Plan.**
+
+1. *Mixed vintage, so the arm can train.* Add
+   `fundamentals.from_store_prospective(zone, delivery_date=, retrieved_at=)`:
+   historical rows keep the research-policy gate that `from_store` assigns, and
+   only the delivery day carries the observed retrieval instant. The vintage
+   assumption then affects the fit alone, never the information set of the
+   forecast actually issued, and a post-gate retrieval is still refused for the
+   delivery day. `from_store_observed` stays as the honest primitive it is; it is
+   simply not the right thing to hand a panel that needs a training history.
+2. *`da_forecast_age_hours` becomes metadata.* It is constant zero under the
+   policy vintage and constant zero across training under the mixed one, so it
+   carries no information in either; `ridge_from_moments` already drops constant
+   columns to a zero coefficient, which is why this was silent rather than
+   harmful. Split `FUNDAMENTAL_FEATURES` (modelled) from `FUNDAMENTAL_METADATA`
+   (attached as evidence, never fitted). Verify — do not assume — that the
+   published ablation numbers are unchanged by re-running
+   `gpa fundamentals-ablation` and comparing against the committed artifact.
+3. *Two frozen arms, not one variable one.* Register `ridge_da` as a distinct
+   model identity and make `policy_id` name the information set. `gpa issue
+   --model ridge` never attaches fundamentals; `--model ridge_da` always attaches
+   them, and abstains honestly when the provider has not published the delivery
+   day. That deletes the availability-driven branch entirely: each identity has
+   one frozen information set, `canonical` keys them apart, and scoring compares
+   instead of pooling. The workflow issues both daily, with the fundamentals arm
+   allowed to fail without failing the job, so an honest abstention stays visible
+   evidence rather than a red run.
+4. *Align the published text* with what the code does, and correct the SMARD
+   attribution, the `/public_power_forecast` contradiction, two "17 September
+   2026" dates for work committed on the 15th, and a "Not yet committed" line for
+   the UI fix committed as `c0ae798`.
+
+Acceptance: a multi-delivery-day test asserting the fundamentals arm issues 24
+forecasts; `ridge` and `ridge_da` distinguishable in the ledger without opening a
+manifest; the published ablation numbers byte-identical; `ruff`, `mypy`, the full
+suite, `gpa export --check`, the site build and the browser smoke all clean; the
+frozen retrospective release and every published site number unchanged.
+
+### P7 handoff evidence — both arms issue, and the ledger can tell them apart
+
+**The defect is fixed and the fix is demonstrated, not asserted.** Replaying the
+same scenario that produced twenty-four abstentions, against an isolated store
+seeded from `data/curated` with the clock inside a genuine pre-gate window and a
+delivery day the archive fully covers (2026-09-10, retrieved 2026-09-09 02:17Z):
+
+    DE-LU 2026-09-10 ridge     issued, 24 forecasts, 0 abstentions
+    DE-LU 2026-09-10 ridge_da  issued, 24 forecasts, 0 abstentions
+    canonical arms: ['ridge', 'ridge_da'], 48 rows
+    ridge     policy_id = de-lu-development-v1-ridge-train270-published-set
+    ridge_da  policy_id = de-lu-development-v1-ridge_da-train270-da-fundamentals
+    mean |ridge_da - ridge| = 10.487 EUR/MWh
+
+The last line matters as much as the first: the two arms are the same estimator
+at the same alpha, so a non-zero difference is the information set doing work
+rather than a relabelled copy of one forecast. `canonical` now returns both
+instead of discarding one as a duplicate key.
+
+A second replay on 2026-09-15 returned `partial, 16 forecasts, 8 abstentions`
+for `ridge_da`, and the eight were local hours 16-23 — exactly the tail beyond
+the local archive's last fundamentals row at 2026-09-15 14:00Z. That is stale
+local data, not the code: a scheduled run ingests the delivery day first. It is
+recorded here because it is also what a genuine late-provider day will look
+like, and the arm degrades into a recorded abstention rather than a wrong
+number.
+
+**Regression cover for the thing that was missed.** The P6 tests could not see
+this defect because a single-delivery-day panel has no training history to lose.
+Three of the eight new tests work on a five-day panel:
+`test_a_single_observed_stamp_erases_the_whole_training_history` pins the old
+behaviour so the reason for the mixed vintage cannot be optimised away,
+`test_the_prospective_vintage_keeps_the_history_the_model_has_to_fit` pins the
+new one, and
+`test_the_prospective_vintage_still_refuses_a_delivery_day_read_after_the_gate`
+confirms a late retrieval still costs the delivery day and only the delivery
+day. Two CLI tests run the arms the way the workflow does, asserting
+`issued, 24 forecasts, 0 abstentions` for both, distinct policy identifiers, and
+that the published arm's manifest carries no `da_*` feature even with
+fundamentals sitting in the store.
+
+**Scheduling.** Each slot now issues both arms. The published arm gates the job;
+the fundamentals arm carries `continue-on-error: true`, because `gpa issue`
+exits non-zero on any status but `issued` and this arm abstains by design when
+the provider is late. Failing the run on that would make an honest abstention
+indistinguishable from a broken job, and the pilot's own readiness criteria ask
+for a visible abstention denominator. Both arms get their own tracked attempt,
+so one never closes the other's record. The workflow YAML parses and every
+`run:` block passes `bash -n`.
+
+**Published text.** The three over-promising passages in `README.md`,
+`site/forecast.md` and `site/methodology.md` now describe two frozen arms and
+disclose the limitation that remains: only the delivery day's snapshot carries
+an observed vintage, so the assigned vintage reaches how `ridge_da` is fitted
+and never what its issued forecast was allowed to know. The SMARD attribution is
+corrected everywhere — it is a registered, tested adapter that no zone is routed
+to, and DE-LU takes fundamentals from Energy-Charts like everything else — and
+methodology no longer describes `/public_power_forecast` as ablation-only ten
+lines above the paragraph that says otherwise. `fundamentals.py`'s module
+docstring, which still claimed SMARD as the source and the store as
+realised-only, now names the three vintage builders and what separates them.
+Two "17 September 2026" dates were corrected to the 15th, and the UI review's
+"Not yet committed" now names `c0ae798`.
 
 ### P6 — start the prospective ledger — diagnosis and plan, recorded before code
 

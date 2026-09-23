@@ -625,7 +625,13 @@ def issue(
         typer.Option(help="Delivery date YYYY-MM-DD. Default: tomorrow in market time."),
     ] = None,
     model: Annotated[
-        str, typer.Option(help="ridge, lightgbm or an existing naive comparator.")
+        str,
+        typer.Option(
+            help=(
+                "ridge (published set), ridge_da (adds day-ahead fundamentals), "
+                "lightgbm or an existing naive comparator."
+            )
+        ),
     ] = "ridge",
     allow_late: Annotated[
         bool, typer.Option(help="Allow a late issue for diagnostics; labels it in the ledger.")
@@ -642,8 +648,12 @@ def issue(
 
     Every delivery hour is retained, including explicit abstentions when a
     required feature or enough training history is unavailable.
+
+    The chosen model fixes the information set: ``ridge`` issues from the
+    published set, ``ridge_da`` from that set plus the day-ahead operator
+    forecasts. Running both daily is what makes the prospective ledger an
+    experiment rather than a single unlabelled record.
     """
-    from gpa.calendar import attach_local_time
     from gpa.forecast import attempts, fundamentals, ledger, provenance
     from gpa.forecast.panel import build_panel
 
@@ -688,30 +698,28 @@ def issue(
             if market.has(dataset):
                 sources[dataset] = store.read(dataset, market.code)
                 observations[dataset] = ledger.now_utc()
-        # A prospective issue may use day-ahead fundamentals because it can
-        # record when it actually read them. The retrospective release cannot:
-        # its archive carries an assigned vintage, so those features stay a
-        # labelled ablation there. See fundamentals.from_store_observed.
-        #
-        # Fundamentals are supplied only when they actually cover this delivery
-        # day. Supplying a snapshot that does not would add the fundamental
-        # features to the panel with nothing behind them for the hours being
-        # forecast, and every one of them would abstain for missing inputs --
-        # turning "the provider has not published tomorrow yet" into a lost day
-        # rather than a forecast from the published information set. The archive
-        # always holds older days, so emptiness alone is not the test; coverage
-        # of the target day is. Which information set was actually used is not
-        # silent: the issue's provenance metadata records the panel's features.
+        # The information set follows the model identity, never the weather of
+        # the moment. An earlier version attached fundamentals whenever the
+        # provider happened to have published the delivery day, which made one
+        # model name mean two different experiments on different days and left
+        # the ledger unable to score either: `canonical` keys on
+        # (zone, model, delivery_date), so the two arms collided. `ridge` is the
+        # published information set, always. `ridge_da` is that set plus the
+        # day-ahead operator forecasts, always -- and on a day the provider has
+        # not published the delivery day in time, it abstains and records that,
+        # which is the honest outcome for a frozen information set rather than a
+        # silent substitution. See provenance.uses_fundamentals.
         snapshots = None
-        if "fundamentals" in sources:
-            observed = fundamentals.from_store_observed(
-                market, retrieved_at=observations["fundamentals"]
-            )
-            if not observed.is_empty():
-                covered = attach_local_time(observed, market).filter(
-                    pl.col("local_date") == target_date
+        if provenance.uses_fundamentals(model):
+            if "fundamentals" not in sources:
+                raise typer.BadParameter(
+                    f"{market.code} does not collect fundamentals; {model} cannot be issued"
                 )
-                snapshots = observed if not covered.is_empty() else None
+            snapshots = fundamentals.from_store_prospective(
+                market,
+                delivery_date=target_date,
+                retrieved_at=observations["fundamentals"],
+            )
         as_of = ledger.now_utc()
         prepared = build_panel(
             sources["price"],
@@ -729,7 +737,7 @@ def issue(
             allow_late=allow_late,
             input_as_of=as_of,
             min_train_rows=provenance.MIN_TRAIN_ROWS,
-            policy_id=provenance.POLICY_ID,
+            policy_id=provenance.policy_id(model),
             source_frames=sources,
             observed_at=observations,
         )

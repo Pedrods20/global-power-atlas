@@ -23,8 +23,35 @@ from gpa.forecast.models import Model, Naive, Ridge
 from gpa.forecast.panel import RESIDUAL_LOAD_FUELS, Panel, hourly_residual_load
 from gpa.zones import get_zone
 
-POLICY_ID = "de-lu-development-v1-ridge-a0.1-train270"
 MIN_TRAIN_ROWS = 270
+
+FUNDAMENTALS_SUFFIX = "_da"
+"""Marks the model identity whose frozen information set includes fundamentals.
+
+The prospective arm runs two information sets side by side, and the ledger keys
+an issue on ``(zone, model, delivery_date)``. Without a distinct identity the
+two arms collide on one key and :func:`gpa.forecast.ledger.canonical` keeps
+whichever was issued first, silently pooling two different experiments. Encoding
+the information set in the model name, and again in the policy identifier below,
+is what lets them be compared instead.
+"""
+
+
+def uses_fundamentals(name: str) -> bool:
+    """Whether this model identity fits day-ahead operator forecasts."""
+    return name.endswith(FUNDAMENTALS_SUFFIX)
+
+
+def policy_id(name: str) -> str:
+    """The frozen issuance policy for a model name, information set included.
+
+    Recorded on every issue so a later reader can tell the two prospective arms
+    apart from the ledger index alone, without opening each manifest.
+    """
+    information_set = "da-fundamentals" if uses_fundamentals(name) else "published-set"
+    return f"de-lu-development-v1-{name}-train{MIN_TRAIN_ROWS}-{information_set}"
+
+
 _BASE = Path(__file__).resolve().parent
 _SOURCE_FILES = {f"forecast/{p.name}": p.read_bytes() for p in sorted(_BASE.glob("*.py"))}
 _SOURCE_FILES.update(
@@ -46,9 +73,26 @@ def digest(value: Any) -> str:
 
 
 def default_model(name: str) -> Model:
-    """Frozen development configuration; never select on prospective outcomes."""
+    """Frozen development configuration; never select on prospective outcomes.
+
+    ``ridge`` and ``ridge_da`` are the same estimator at the same alpha and
+    differ only in the information set the caller is required to feed them, so
+    the comparison between the two arms is about the inputs and nothing else.
+    They are separate identities rather than one flag because the ledger records
+    a model name, and a name that meant different inputs on different days would
+    make the prospective record unscoreable.
+    """
     if name == "ridge":
         return Ridge(alpha=0.1)
+    if name == "ridge_da":
+        return Ridge(
+            alpha=0.1,
+            name="ridge_da",
+            description=(
+                "Per-hour ridge on the published set plus day-ahead operator "
+                "forecasts of load, wind and solar."
+            ),
+        )
     if name == "lightgbm":
         return LightGBM()
     columns = {
@@ -58,7 +102,7 @@ def default_model(name: str) -> Model:
     }
     if name in columns:
         return Naive(name, columns[name], "Fixed lagged-price comparator.")
-    raise ValueError("model must be ridge, lightgbm or an existing naive comparator")
+    raise ValueError("model must be ridge, ridge_da, lightgbm or an existing naive comparator")
 
 
 def describe(model: Model) -> dict[str, Any]:

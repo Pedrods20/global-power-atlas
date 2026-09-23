@@ -136,13 +136,18 @@ are historical context and are deliberately not used for forecasting or valuatio
   European zones here while an ENTSO-E Transparency token is obtained. The
   adapter uses `/price`, `/public_power`, `/public_power_forecast` and
   `/installed_power`, and measures each series' resolution from the returned
-  timestamps rather than assuming it.
+  timestamps rather than assuming it. `/public_power_forecast` feeds both the
+  labelled retrospective ablation and the prospective `ridge_da` arm; what
+  differs between them is the publication vintage each can honestly claim, not
+  the provider.
 - **SMARD** (`smard.de/app/chart_data`), the Bundesnetzagentur's market-data
-  platform, is implemented as a second, independent German adapter: it can
-  backfill the long DE-LU price and fundamentals history without depending on
-  the rate-limited Energy-Charts mirror, and it supplies the prospective path's
-  forecast snapshots, where a real retrieval time can be recorded. Every row in
-  the committed store today records Energy-Charts or ONS as its source.
+  platform, is implemented as a second, independent German adapter so that the
+  long DE-LU price and fundamentals history can be backfilled without depending
+  on the rate-limited Energy-Charts mirror. It is registered and tested but not
+  yet routed to: DE-LU currently takes every dataset, fundamentals included,
+  from Energy-Charts, and every row in the committed store records Energy-Charts
+  or ONS as its source. Both the historical archive and the prospective run
+  therefore read the same provider today.
 - **ONS** is read through two endpoints on purpose, because they do not share a
   publication lag: generation from the hourly energy-balance CSV (about two days
   behind real time) and load from the verified-load API (within about an hour).
@@ -254,11 +259,21 @@ and solar forecasts measurably reduce error in the labelled ablation, but the
 historical archive cannot certify when each value became available, so they are
 not in the published information set and adopting them from history alone would
 mean trusting an assumption instead of an observation. A live issue does not
-have that problem: it records the instant it read the forecast. The prospective
-run therefore uses those features when the provider has already published the
-delivery day and falls back to the published set when it has not, recording
-which of the two it used — turning a stalled decision into an experiment with
-an observable answer.
+have that problem for the day it is forecasting: it records the instant it read
+the forecast. Each scheduled run therefore issues twice, as two frozen
+identities rather than one arm that varies with provider timing — `ridge` from
+the published information set and `ridge_da` from that set plus the operator
+forecasts — and the ledger keeps both, so the comparison accumulates instead of
+being argued. `ridge_da` abstains, and records the abstention, on a day the
+provider has not published the delivery day before the gate.
+
+One limitation of that arm is disclosed rather than buried. Only the delivery
+day's snapshot carries an observed retrieval instant; the training history still
+carries the assigned D-1 vintage, because no observed one exists for it and a
+model needs a history to fit. The vintage assumption therefore affects how
+`ridge_da` is fitted, never what the issued forecast was allowed to know. An arm
+whose training history is also observed becomes possible only after this ledger
+has run long enough to supply one.
 
 ## References
 

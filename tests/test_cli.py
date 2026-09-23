@@ -524,6 +524,167 @@ def test_a_same_morning_ingest_lets_issue_forecast_every_hour(
     assert "issued, 24 forecasts, 0 abstentions" in issued.stdout
 
 
+def _seed_fundamentals(start: dt.datetime, end: dt.datetime) -> None:
+    """Hourly day-ahead operator forecasts across a whole training window.
+
+    Written straight to the store rather than fetched: the point under test is
+    the vintage the issue assigns, not the adapter that collected the values.
+    """
+    stamps = pl.datetime_range(start, end, "1h", time_zone="UTC", eager=True, closed="left")
+    rows = stamps.to_list()
+    frames = []
+    for series, level in (("load", 55_000.0), ("wind", 12_000.0), ("solar", 4_000.0)):
+        frames.append(
+            pl.DataFrame(
+                {
+                    "zone": ["DE-LU"] * len(rows),
+                    "ts_utc": rows,
+                    "resolution_min": [60] * len(rows),
+                    "series": [series] * len(rows),
+                    # Ridge is fitted per clock hour, so a shape varying by hour
+                    # alone would be constant within every fit and dropped as a
+                    # constant column. The day term gives it something to explain.
+                    "forecast_mw": [
+                        level
+                        + 1_000.0 * ((stamp.hour + 3) % 24)
+                        + 900.0 * ((stamp.toordinal() * 7) % 11)
+                        for stamp in rows
+                    ],
+                    "source": ["seeded"] * len(rows),
+                },
+                schema={
+                    "zone": pl.String,
+                    "ts_utc": pl.Datetime("us", "UTC"),
+                    "resolution_min": pl.Int16,
+                    "series": pl.String,
+                    "forecast_mw": pl.Float64,
+                    "source": pl.String,
+                },
+            )
+        )
+    store.write(pl.concat(frames), "fundamentals")
+
+
+def test_the_two_prospective_arms_both_issue_and_stay_separable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression the P6 review found, at the level the workflow runs.
+
+    ``ridge_da`` previously abstained on all twenty-four hours whenever the
+    fundamentals covered the delivery day, because the observed vintage erased
+    the training history. Both arms must issue a full day, and the ledger must
+    keep them apart without anyone opening a manifest: they carry different
+    model names and different policy identifiers, and ``canonical`` therefore
+    selects both instead of treating one as a duplicate of the other.
+    """
+    import json
+
+    from gpa import pipeline
+    from gpa.forecast import ledger
+    from tests.test_pipeline import PublishedPrices
+
+    now = dt.datetime(2026, 6, 30, 8, tzinfo=dt.UTC)
+    monkeypatch.setattr(pipeline, "now_utc", lambda: now)
+    monkeypatch.setattr(pipeline, "get_source", lambda name: PublishedPrices(now))
+    monkeypatch.setattr("gpa.forecast.ledger.now_utc", lambda: now)
+    monkeypatch.setattr("gpa.forecast.provenance.MIN_TRAIN_ROWS", 5)
+    ledger_root = tmp_path / "ledger"
+
+    assert (
+        runner.invoke(
+            app, ["ingest", "--zone", "DE-LU", "--dataset", "price", "--days", "60"]
+        ).exit_code
+        == 0
+    )
+    _seed_fundamentals(now - dt.timedelta(days=70), now + dt.timedelta(days=2))
+
+    for model in ("ridge", "ridge_da"):
+        result = runner.invoke(
+            app,
+            [
+                "issue",
+                "--zone",
+                "DE-LU",
+                "--model",
+                model,
+                "--delivery-date",
+                "2026-07-01",
+                "--attempt-id",
+                f"att-{model}",
+                "--output",
+                str(ledger_root),
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+        assert "issued, 24 forecasts, 0 abstentions" in result.stdout
+
+    rows = pl.read_parquet([str(p) for p in (ledger_root / "zone=DE-LU").rglob("*.parquet")])
+    assert sorted(rows["model"].unique().to_list()) == ["ridge", "ridge_da"]
+    policies = {
+        model: json.loads(rows.filter(pl.col("model") == model)["configuration"][0])["policy_id"]
+        for model in ("ridge", "ridge_da")
+    }
+    assert policies["ridge"] != policies["ridge_da"]
+    assert "published-set" in policies["ridge"]
+    assert "da-fundamentals" in policies["ridge_da"]
+
+    chosen = ledger.canonical(rows, root=ledger_root)
+    assert sorted(chosen["model"].unique().to_list()) == ["ridge", "ridge_da"]
+    assert chosen.height == 48
+
+    # Same estimator, same alpha: any difference is the information set.
+    wide = chosen.pivot(on="model", index="local_hour", values="forecast")
+    assert (wide["ridge_da"] - wide["ridge"]).abs().max() > 0.0
+
+
+def test_the_published_arm_never_reads_fundamentals_even_when_they_are_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ridge`` is a frozen information set, not a best-effort one.
+
+    Before this, the arm attached fundamentals whenever the provider happened to
+    have published the delivery day, so one model name meant two experiments.
+    """
+    import json
+
+    from gpa import pipeline
+    from tests.test_pipeline import PublishedPrices
+
+    now = dt.datetime(2026, 6, 30, 8, tzinfo=dt.UTC)
+    monkeypatch.setattr(pipeline, "now_utc", lambda: now)
+    monkeypatch.setattr(pipeline, "get_source", lambda name: PublishedPrices(now))
+    monkeypatch.setattr("gpa.forecast.ledger.now_utc", lambda: now)
+    monkeypatch.setattr("gpa.forecast.provenance.MIN_TRAIN_ROWS", 5)
+    ledger_root = tmp_path / "ledger"
+
+    runner.invoke(app, ["ingest", "--zone", "DE-LU", "--dataset", "price", "--days", "60"])
+    _seed_fundamentals(now - dt.timedelta(days=70), now + dt.timedelta(days=2))
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "--zone",
+            "DE-LU",
+            "--model",
+            "ridge",
+            "--delivery-date",
+            "2026-07-01",
+            "--attempt-id",
+            "att-published-only",
+            "--output",
+            str(ledger_root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    rows = pl.read_parquet([str(p) for p in (ledger_root / "zone=DE-LU").rglob("*.parquet")])
+    manifest = json.loads(
+        (ledger_root / "issues" / rows["issue_id"][0] / "manifest.json").read_text()
+    )
+    assert not [name for name in manifest["features"] if name.startswith("da_")]
+
+
 # --- ingest and backfill ----------------------------------------------------
 
 
