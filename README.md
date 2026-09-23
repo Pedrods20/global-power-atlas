@@ -31,6 +31,8 @@ show up in different statistics.
 | Hours below zero | 2.4% | 0.8% | **7.2%** |
 | Installed solar | 46 GW | 63 | **118** |
 | Battery fleet | — | 4.2 GW | **21.1 GW / 32.9 GWh** |
+| Battery fleet average duration | — | 1.51 h | 1.56 h |
+| Pumped hydro (the incumbent) | 9.3 GW (2011) | 10.0 GW | 9.9 GW |
 | Arbitrage value, 1 MW / 4 MWh, perfect foresight | — | 487 EUR/MW/day | **451** |
 
 Three things follow, and each is on the site with its evidence.
@@ -38,16 +40,23 @@ Three things follow, and each is on the site with its evidence.
 1. **The block spread and the within-day range moved in opposite directions.** A
    fixed block contract is paid the first; a battery is paid the second. Reading
    only the block spread says storage arbitrage is dying exactly when it is not.
-2. **2022 was a price-level shock; what followed is a change in shape.** Scaled
-   by each year's own average price, the crisis year's daily range was no wider
-   than 2019's. The widening since is structural, and shape is what storage is
-   paid for. Solar did this; wind's capture rate barely moved, because wind
-   blows across the day and the seasons while solar arrives in the same six hours
-   in every plant at once.
-3. **21 GW of batteries have not compressed it yet**, and the fleet's ~1.6 hour
-   average duration suggests why: that is the signature of household storage
-   behind the meter, not of grid-scale assets bidding the same midday trough.
-   Gigawatts installed is not the same as capacity competing for this spread.
+2. **2022 was a price-level shock; what followed is a change in shape.** In
+   euros 2022 is still the best year for the battery (487 against 451 EUR/MW/day),
+   and that is not a contradiction: 2026 delivers **95% of 2022's absolute daily
+   range on a baseload price 55% lower**. A spread that came from a fuel shock
+   left with the gas price; a spread that comes from 118 GW of solar is one a
+   lender can underwrite. Solar did this, not wind — wind's capture rate barely
+   moved, because it blows across the day and the seasons while solar arrives in
+   the same six hours in every plant at once.
+3. **Storage competition has not compressed it yet**, and two things explain
+   why. Germany's ~9.9 GW of pumped hydro — the incumbent that actually arbitrages
+   this spread — has been flat since at least 2011, so the capable fleet did not
+   grow. And the batteries that did arrive are the wrong shape: average duration
+   held at 1.47–1.56 hours through a fivefold build-out, which is what a
+   behind-the-meter home system is sized for, not a four-hour midday trough. The
+   provider publishes no residential/grid-scale split, so that composition is
+   inferred from the duration ratio; the tick from 1.47 to 1.56 hours in two
+   years is the early signal against the argument.
 
 ## Does forecasting the shape pay? Partly — and that is the result
 
@@ -57,7 +66,8 @@ D-1** cuts day-ahead price error **24.3%** against the best naive alternative
 
 Converted into dispatch on a 1 MW / 4 MWh battery, that skill is worth about
 **EUR 4,400/MW per year** — EUR 12/MW on an average day — more than repeating
-the last similar day. That is roughly **5%** of the battery's gross margin. The
+the last similar day. Against that battery's whole gross margin of about **EUR
+97,000/MW per year** before costs, the forecast contributes roughly **5%**. The
 naive strategy earns the rest, because most of the value sits in the shape,
 which repeats, rather than in the day-to-day deviation, which is what a forecast
 adds. Ridge loses to that naive on **827 of 2,404 days**.
@@ -66,6 +76,12 @@ adds. Ridge loses to that naive on **827 of 2,404 days**.
 honest commercial summary, and it points away from where most of the engineering
 went — which is the sort of conclusion a portfolio is supposed to be willing to
 publish.
+
+So why build the forecast? Because that 5% is only trustworthy if the protocol
+producing it is. The 12:00 gate, the vintage discipline and the walk-forward
+boundaries are what stop a model from scoring itself on information no bidder
+held, and they are what turn "our model beats the market" into a claim someone
+can check. That discipline is the transferable part.
 
 Two further results are worth the click:
 

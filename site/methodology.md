@@ -47,6 +47,17 @@ leaves. Partial days are dropped rather than scaled, because a day the provider
 covered until noon has a genuinely smaller range and averaging it in would report
 a falling spread that is really a reporting gap.
 
+**Seasonality, and what a partial year costs.** The within-day range is
+seasonal: averaged over 2019-2025 it runs about 65-70 EUR/MWh in January and
+February against 113-134 in August and September, because a solar-shaped day has
+a deeper midday trough in summer. A year that ends in September therefore sits
+above its own full-year average. Measured on the complete years in this store,
+January-to-September runs **+4.0% (2022), +3.5% (2023) and +5.2% (2025)** above
+the full year, with 2019, 2020 and 2024 within ±4.5% in the other direction and
+2021 an outlier at −36% because the gas spike landed in its fourth quarter.
+Discount the current partial year's range figures by roughly that much. Reproduce
+with `gpa.metrics.price.intraday_spread(period="month")` over the committed store.
+
 Both series are published as a percentage of the same year's own average price.
 That normalisation is what separates a price-level shock from a change in daily
 shape; without it, 2022 dominates every chart and the structural change since is
@@ -255,6 +266,8 @@ reason each one was chosen and what it costs the result.
 | Costs | Zero in the base case; illustrative non-zero cases rerun separately | Rates are not calibrated German project estimates | Margins are gross of asset-specific costs and of all capital costs |
 | Daily cycling | One charge-then-discharge episode in the headline | The conservative reading of a one-cycle-a-day asset, and the binding constraint on almost every day in the sample | Understates a real German battery, which cycles more than once; the two-episode stress measures by how much, and shows the extra margin needs no forecast |
 | Revenue stack | Day-ahead arbitrage only | The only market this project ingests prices for | A lower bound on a German battery's revenue: continuous intraday and the balancing markets (FCR, aFRR, mFRR, tendered via [regelleistung.net](https://www.regelleistung.net/)) are not modelled, nor is the fact that capacity committed to balancing cannot simultaneously arbitrage |
+| Storage fleet composition | Inferred from the duration ratio, not observed | Energy-Charts publishes installed battery power and energy as one aggregate with no residential/grid-scale split, and the ratio is the only composition signal the store contains | The market view's third finding rests on ~1.5 hours being a home-storage signature. If the aggregate is in fact grid-scale heavy, the argument that competition has not arrived loses its mechanism, though not the observation that margin has not compressed. The Marktstammdatenregister would settle it and is outside this project's ingestion |
+| Storage competition set | Batteries and pumped hydro, both from the installed-capacity series | Pumped hydro arbitrages the same daily spread and is the incumbent a battery-only view would miss | Demand-side response, industrial flexibility and cross-border flexibility are not counted, so the competing fleet here is a lower bound |
 | Scope | Zonal, not nodal | The day-ahead auction clears at bidding-zone level | Congestion, basis and transmission constraints are outside the result |
 
 ## Quality controls

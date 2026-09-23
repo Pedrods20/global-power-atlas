@@ -230,6 +230,82 @@ claim, the evidence behind it and the main risk to it within a minute, without
 reading a methodology page first. Every number on the site is reproducible from
 the committed release, and no figure appears only as a multi-year cumulative.
 
+### P9 — adversarial review of the published site, and the fixes it forced
+
+The user asked for a brutal review of the live version. It was read rendered, in
+a browser, against the published URL rather than the working tree, and the
+claims were tested against the committed tables before being asserted. Six of
+the findings were real enough to fix; all six made the argument stronger, which
+is the tell that they were worth fixing rather than arguing with.
+
+**1. The page contradicted itself and did not say so.** Section 2 argued that
+2022 was "a price-level shock" while the table three paragraphs below showed 2022
+as the best year in the sample for the battery: 487 against 451 EUR/MW/day. A
+reader who noticed that concluded the normalisation was chosen to suit the story.
+The fix states the fact first and then makes the actual argument, which is
+sharper than the one it replaced: 2026 delivers **95% of 2022's absolute daily
+range on a baseload price 55% lower**. A spread that came from a fuel shock left
+with the gas price; a spread that comes from 118 GW of solar is one a lender can
+underwrite.
+
+**2. Ten gigawatts of incumbent storage were missing.** The page argued
+competition had not arrived without mentioning pumped hydro, which arbitrages
+this exact spread and which the store already carries: 9.3 GW in 2011, 9.9 GW
+now, essentially flat throughout. Omitting it read as not knowing the market.
+Including it strengthens the argument, because flat incumbent capacity is
+precisely why the spread was free to widen.
+
+**3. The most interesting finding rested on an unsourced inference.** "1.6 hours
+average duration, therefore household storage" divided two numbers and asserted a
+composition the provider does not publish. The fix adds the evidence that makes
+the inference reasonable — duration held at 1.51, 1.49, 1.47, 1.51, 1.56 hours
+across a fivefold build-out, so the fleet is adding more of the same rather than
+changing shape — states plainly that Energy-Charts publishes no
+residential/grid-scale split, names the Marktstammdatenregister as the register
+that would settle it, and points at the 1.47 → 1.56 tick as the early signal
+against the argument. The assumptions register carries the same caveat.
+
+**4. Part of "the peak premium is gone" is the block definition.** DE-LU's
+on-peak block is 08:00-20:00, so it now straddles the cheapest and most expensive
+hours at once. Saying so is a better observation than the one it replaces, and it
+explains why the within-day range — which assumes nothing about *when* the
+extremes fall — is the measure that still works.
+
+**5. The partial year was labelled, not quantified.** Measured with
+`intraday_spread(period="month")` over the committed store: January-to-September
+runs +4.0% (2022), +3.5% (2023) and +5.2% (2025) above the full year, because the
+range peaks in late summer. The home page now gives the direction and the size
+and tells the reader to discount accordingly; methodology carries the full check
+with the monthly figures and the 2021 outlier.
+
+**6. Packaging.** Above the fold there had been no number and no chart — 760px of
+prose. A quantified strip now sits at roughly y=250. The home page never stated
+what the battery earns in total, so the forecast's EUR 4,400/MW/year had no
+denominator; the gross margin of about EUR 97,000/MW/year is now beside it. The
+page never answered why the forecast was built if it is worth 5%, so it now says
+what the honest answer is: the protocol is the transferable part. And the author
+line became a section with the repository link rather than a clause at the end of
+the premises.
+
+**Two rendering defects were introduced and caught before publishing.** A nested
+template literal inside a markdown interpolation — a table built with
+`${rows.map((y) => \`...${y}...\`)}` — made Observable's parser read the inner
+`${y}` as an outer interpolation and throw `y is not defined`, blanking every
+chart on the page. Rebuilt as an `Inputs.table` cell, which is the pattern the
+rest of the page already uses. Then the new reproduce command, one unbreakable
+377px token, pushed the page sideways on a phone; `overflow-wrap: anywhere` on
+inline code fixes it, the same fix `forecast.md` already carried. An attempt to
+solve the same symptom with `display: block` on every table was reverted: it
+destabilises `Inputs.table`'s sticky header and did not actually fix the overhang,
+which came from a `form` parent the CSS never matched. Short column headers did.
+
+**Verification.** No Python changed in this pass, so the frozen release and
+`gpa export --check` are untouched; 422 tests still pass. `npm run build`
+validates 11 links, and all four pages render with zero console errors, zero
+horizontal overflow and no `NaN`, `undefined` or uninterpolated tokens at 1440,
+390 and 360 pixels. Screenshots were regenerated with the capture retried until
+four charts rendered with no error element.
+
 ### P8 handoff evidence — published, repositioned, and the shape thesis measured
 
 **Step 1, publish, is done and verified against the live site.** `main` was
