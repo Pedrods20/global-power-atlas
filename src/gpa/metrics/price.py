@@ -28,6 +28,8 @@ __all__ = [
     "block_prices",
     "capture_rate",
     "duration_curve",
+    "hourly_shape",
+    "intraday_spread",
     "negative_price_summary",
     "price_spikes",
     "realised_volatility",
@@ -122,6 +124,141 @@ def block_prices(frame: pl.DataFrame, zone: Zone, *, period: str = "month") -> p
         .with_columns((pl.col("on_peak") - pl.col("off_peak")).alias("spread"))
         .select("period", "on_peak", "off_peak", "spread", "all_hours", "n_on_peak", "n_off_peak")
         .sort("period")
+    )
+
+
+_PERIOD_FORMATS = {"day": "%Y-%m-%d", "month": "%Y-%m", "year": "%Y"}
+
+_COMPLETE_DAY_HOURS = 23.0
+"""A day is complete at 23 observed hours: the spring clock change has only 23.
+
+Partial days are dropped rather than scaled. A day the provider covered until
+noon has a genuinely smaller high-to-low range, and averaging it in would report
+a falling spread that is really a reporting gap.
+"""
+
+
+def intraday_spread(frame: pl.DataFrame, zone: Zone, *, period: str = "year") -> pl.DataFrame:
+    """Mean within-day high-minus-low price range, by period.
+
+    This is the other spread, and the distinction matters commercially. The
+    on-peak-minus-off-peak figure from :func:`block_prices` is what a fixed
+    block contract pays; it is defined by the clock, so solar pushing midday
+    below the surrounding hours drives it toward zero and past it. The
+    within-day range is what a storage asset is paid, because a battery charges
+    at the day's low and discharges at its high wherever in the day those fall.
+
+    The two series can move in opposite directions, and in Germany they have:
+    the block spread collapsed while the daily range widened, because solar
+    moved the shape rather than flattening it. Reading only the block spread
+    would say storage arbitrage is dying exactly when it is not.
+
+    This is an upper bound on one cycle's gross value before efficiency losses,
+    power and energy limits and the need to know in advance which hours those
+    are. :mod:`gpa.battery` measures what survives those constraints.
+
+    Args:
+        frame: Rows matching the ``price`` schema.
+        zone: Supplies the market timezone.
+        period: ``"day"``, ``"month"`` or ``"year"``.
+
+    Returns:
+        Columns ``period``, ``mean_spread``, ``median_spread`` and ``n_days``,
+        over complete local days only.
+
+    Raises:
+        ValueError: If ``period`` is not a supported grouping.
+    """
+    if period not in _PERIOD_FORMATS:
+        raise ValueError(f"period must be one of {sorted(_PERIOD_FORMATS)}, got {period!r}")
+
+    empty = pl.DataFrame(
+        schema={
+            "period": pl.String,
+            "mean_spread": pl.Float64,
+            "median_spread": pl.Float64,
+            "n_days": pl.UInt32,
+        }
+    )
+    if frame.is_empty():
+        return empty
+
+    daily = (
+        attach_local_time(frame, zone)
+        .group_by("local_date")
+        .agg(
+            (pl.col("price").max() - pl.col("price").min()).alias("spread"),
+            _INTERVAL_HOURS.sum().alias("observed_hours"),
+        )
+        .filter(pl.col("observed_hours") >= _COMPLETE_DAY_HOURS)
+    )
+    if daily.is_empty():
+        return empty
+
+    return (
+        daily.with_columns(
+            pl.col("local_date").dt.strftime(_PERIOD_FORMATS[period]).alias("period")
+        )
+        .group_by("period")
+        .agg(
+            pl.col("spread").mean().alias("mean_spread"),
+            pl.col("spread").median().alias("median_spread"),
+            pl.len().cast(pl.UInt32).alias("n_days"),
+        )
+        .sort("period")
+    )
+
+
+def hourly_shape(frame: pl.DataFrame, zone: Zone, *, period: str = "year") -> pl.DataFrame:
+    """Duration-weighted mean price for each local clock hour, by period.
+
+    The average price of a year says nothing about when a battery earns. The
+    shape does: comparing one year's profile against another shows where the
+    money moved. In a solar-heavy system the midday hours sink while the evening
+    ramp holds, so the profile turns from a single daytime plateau into a trough
+    between two peaks — and that trough is the charging window.
+
+    Weighted by interval duration, so hourly and quarter-hourly history combine
+    without the finer periods counting more. Incomplete hours are averaged over
+    what the provider published rather than being scaled up to a full hour.
+
+    Args:
+        frame: Rows matching the ``price`` schema.
+        zone: Supplies the market timezone.
+        period: ``"day"``, ``"month"`` or ``"year"``.
+
+    Returns:
+        Columns ``period``, ``local_hour``, ``price``, ``observed_hours`` and
+        ``n_intervals``, sorted by period then hour.
+
+    Raises:
+        ValueError: If ``period`` is not a supported grouping.
+    """
+    if period not in _PERIOD_FORMATS:
+        raise ValueError(f"period must be one of {sorted(_PERIOD_FORMATS)}, got {period!r}")
+
+    empty = pl.DataFrame(
+        schema={
+            "period": pl.String,
+            "local_hour": pl.Int8,
+            "price": pl.Float64,
+            "observed_hours": pl.Float64,
+            "n_intervals": pl.UInt32,
+        }
+    )
+    if frame.is_empty():
+        return empty
+
+    return (
+        attach_local_time(frame, zone)
+        .with_columns(pl.col("local_date").dt.strftime(_PERIOD_FORMATS[period]).alias("period"))
+        .group_by("period", "local_hour")
+        .agg(
+            ((pl.col("price") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias("price"),
+            _INTERVAL_HOURS.sum().alias("observed_hours"),
+            pl.len().cast(pl.UInt32).alias("n_intervals"),
+        )
+        .sort("period", "local_hour")
     )
 
 

@@ -19,7 +19,7 @@ from typing import Any, Final
 import numpy as np
 import polars as pl
 
-from gpa.battery import DEFAULT_MODELS, BatterySpec, backtest_predictions
+from gpa.battery import DEFAULT_MODELS, BatterySpec, SpecKwargs, backtest_predictions
 
 BASELINES: Final = DEFAULT_MODELS[:3]
 _KEYS: Final = ["strategy", "power_mw", "energy_mwh"]
@@ -301,7 +301,7 @@ def evaluate(
     *,
     model_names: Sequence[str] = DEFAULT_MODELS,
     durations_mwh: Sequence[float] = (1.0, 2.0, 4.0),
-    spec_kwargs: dict[str, float] | None = None,
+    spec_kwargs: SpecKwargs | None = None,
     block_days: int = 7,
     resamples: int = 2000,
     seed: int = 20260914,

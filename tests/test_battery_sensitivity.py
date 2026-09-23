@@ -6,7 +6,13 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from gpa.battery_sensitivity import OUTAGE_ANCHOR, calendar_outages, scenario_tables, weaken_signal
+from gpa.battery_sensitivity import (
+    OUTAGE_ANCHOR,
+    SCENARIOS,
+    calendar_outages,
+    scenario_tables,
+    weaken_signal,
+)
 from gpa.battery_study import evaluate
 from tests.test_battery import DAY, predictions
 
@@ -80,8 +86,11 @@ def test_scenarios_keep_all_comparators_and_rerun_costs_on_the_same_days():
     frame = predictions(days=(DAY, DAY + dt.timedelta(days=1)))
     base = evaluate(frame, durations_mwh=(1.0,))
     costs, stresses = scenario_tables(frame, base, durations_mwh=(1.0,))
-    assert costs.height == 3 * 7
-    assert stresses.height == 7 * 7
+    # Derived from the registry rather than hardcoded, so adding a stress does
+    # not fail this test for a reason that has nothing to do with what it checks.
+    strategies = base.summary.height
+    assert costs.height == 3 * strategies
+    assert stresses.height == len(SCENARIOS) * strategies
     assert set(stresses["days"]) == {2}
     assert set(stresses["available_days"] + stresses["unavailable_days"]) == {2}
     assert stresses.filter(pl.col("scenario") == "base")["profit_eur"].sum() == pytest.approx(
@@ -97,6 +106,25 @@ def test_scenarios_keep_all_comparators_and_rerun_costs_on_the_same_days():
     # All models are identical in this fixture, even after attenuation.
     ridge = stresses.filter(pl.col("strategy") == "ridge")
     assert ridge["incremental_vs_best_naive_eur_mw"].abs().max() < 1e-9
+
+
+def test_a_second_episode_can_only_add_margin_and_leaves_one_episode_untouched():
+    """The published benchmark must be bit-identical to the one-episode optimum.
+
+    A wider feasible set cannot pay less, so a two-episode day is bounded below
+    by the one-episode day it contains. If this ever fails, the phase transition
+    is dropping a schedule rather than adding one.
+    """
+    frame = predictions(days=(DAY, DAY + dt.timedelta(days=1)))
+    base = evaluate(frame, durations_mwh=(1.0,))
+    _, stresses = scenario_tables(frame, base, durations_mwh=(1.0,))
+    one = stresses.filter(pl.col("scenario") == "base").sort("strategy")
+    two = stresses.filter(pl.col("scenario") == "two_episodes").sort("strategy")
+    assert one.height == two.height
+    assert set(one["episodes_per_day"]) == {1}
+    assert set(two["episodes_per_day"]) == {2}
+    for single, double in zip(one["profit_eur"], two["profit_eur"], strict=True):
+        assert double >= single - 1e-9
 
 
 def test_sensitivity_rejects_sample_drift():

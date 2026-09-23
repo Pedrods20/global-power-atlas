@@ -1,10 +1,20 @@
 ---
-title: Price forecasting
+title: Forecast evidence
 ---
 
-# Forecasting the day-ahead price
+# The linear model wins where the money is
 
-A reproducible comparison of three naive forecasts, per-hour ridge regression and a pooled LightGBM model for Germany-Luxembourg. The question is whether a fitted model improves on repeating a known price, and where it falls short.
+A reproducible comparison of three naive forecasts, a per-hour ridge regression
+and a pooled LightGBM model for Germany-Luxembourg, under one rule: the forecast
+may use only what a bidder holds when the day-ahead order book closes at noon on
+D-1.
+
+Ridge wins overall, which is unremarkable. What is worth reading is *where* the
+gradient-boosted model loses. Its accuracy in ordinary hours does not survive
+into negative-price and scarcity hours — the tails a storage asset is paid to
+get right — and a model that is better on average while worse in the tails is
+the wrong model for a dispatch decision. That is the finding this page exists to
+document, alongside the protocol that makes it checkable.
 
 ```js
 const metadata = await FileAttachment("data/forecast.json").json();
@@ -28,9 +38,7 @@ const trees = overall.find((d) => d.model === "lightgbm");
 const color = {domain: [...names.values()], range: ["#999999", "#CC79A7", "#009E73", "#0072B2", "#D55E00"], legend: true};
 ```
 
-**Retrospective development benchmark.** This history was already inspected during development. The comparison is not an untouched final test or a record of forecasts issued before delivery. The historical evaluation is capped at ${run.benchmark_end}, so daily ingestion cannot silently consume the future evaluation period.
-
-The stored inputs contain the providers' latest revisions. Publication-time versions of load and generation are unavailable: lagging the values avoids using future delivery dates but cannot prove that the exact stored revision was available at the historical forecast gate.
+**Retrospective development benchmark.** This history was already inspected during development, so it is development evidence rather than an untouched final test or a record of forecasts issued before delivery. The evaluation is capped at ${run.benchmark_end}, so daily ingestion cannot silently consume the future evaluation period. Stored inputs carry the providers' latest revisions: lagging every fundamental avoids using future delivery dates, but it cannot prove the exact stored revision was the one available at the historical gate.
 
 ## Target and information set
 
@@ -287,7 +295,7 @@ gpa fundamentals-ablation
 gpa export
 ```
 
-Tracking is optional and local. Each MLflow run records the comparison metrics, selected LightGBM parameters and search, ridge validation search, predictions, input panel, source snapshot, dependency versions and Git state. The input-panel SHA-256 is `${run.input_sha256}`. `gpa backtest` and the site build work without MLflow installed.
+Tracking is optional and local. Each MLflow run records the comparison metrics, selected LightGBM parameters and search, ridge validation search, predictions, input panel, source snapshot, dependency versions and Git state. The input-panel SHA-256 is ${html`<code>${run.input_sha256}</code>`}. `gpa backtest` and the site build work without MLflow installed.
 
 The prospective path is operationalised by `gpa issue` and `gpa reconcile`: a scheduled job seeds an isolated store, refreshes a short input window, reconciles older ledger rows and issues before the market gate. Each issue keeps its own immutable evidence — the input panel, the source frames it read, the feature list, the model configuration and the instant each input was observed — so a later reader can check what the forecast knew rather than take it on trust.
 
@@ -302,4 +310,7 @@ The first separately recorded run is still needed before any of these metrics ca
   color: var(--theme-foreground-muted);
 }
 main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
+/* The input-panel hash is 64 unbroken characters and would push the page
+   sideways on a phone. */
+main.observablehq p code { overflow-wrap: anywhere; }
 </style>

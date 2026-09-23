@@ -5,6 +5,13 @@ Calendar downtime represents a battery unavailable for an entire known day,
 with zero initial/terminal SOC; it does not simulate a mid-cycle forced outage.
 The 85% efficiency reference is NREL ATB 2024, not a German asset calibration:
 https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage
+
+The two-episode stresses relax the asset definition rather than the forecast:
+the same frozen predictions, the same days and the same settlement, dispatched
+by a battery permitted two charge-then-discharge episodes instead of one. They
+answer how much of the published margin is the one-cycle benchmark's own
+conservatism. They still model day-ahead only, so they remain a lower bound on
+what a real asset earns across day-ahead, intraday and balancing markets.
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ class Scenario:
     efficiency: float = 0.9
     retained_signal: float = 1.0
     outage_every_days: int = 0
+    episodes: int = 1
 
 
 # Registered in the roadmap before running these scenarios. No selection on P&L.
@@ -44,6 +52,8 @@ SCENARIOS = (
     Scenario("efficiency_85", efficiency=0.85),
     Scenario("signal_50", retained_signal=0.5),
     Scenario("calendar_downtime", outage_every_days=20),
+    Scenario("two_episodes", episodes=2),
+    Scenario("two_episodes_cost_2_3", variable=2.0, degradation=3.0, episodes=2),
     Scenario("combined", 2.0, 3.0, 0.85, 0.5, 20),
 )
 OUTAGE_ANCHOR = dt.date(2025, 1, 1)
@@ -121,6 +131,10 @@ def scenario_tables(
     for scenario in SCENARIOS:
         study = base
         if scenario.name not in {"base", "calendar_downtime"}:
+            # The published benchmark allows one charge-then-discharge episode a
+            # day. A German battery facing a midday solar trough between two
+            # demand peaks runs two, so the two-episode rows say how much of the
+            # headline is the asset definition rather than the forecast.
             inputs = (
                 weaken_signal(predictions, scenario.retained_signal)
                 if scenario.retained_signal != 1
@@ -134,6 +148,7 @@ def scenario_tables(
                     "round_trip_efficiency": scenario.efficiency,
                     "variable_cost_eur_mwh": scenario.variable,
                     "degradation_cost_eur_mwh": scenario.degradation,
+                    "max_episodes_per_day": float(scenario.episodes),
                 },
             )
         dispatched = study.dispatch
@@ -184,6 +199,7 @@ def scenario_tables(
             pl.lit(scenario.degradation).alias("degradation_cost_eur_mwh"),
             pl.lit(scenario.efficiency).alias("round_trip_efficiency"),
             pl.lit(scenario.retained_signal).alias("retained_signal"),
+            pl.lit(scenario.episodes).alias("episodes_per_day"),
             pl.lit(outage_days).alias("unavailable_days"),
             pl.lit(len(base_days) - outage_days).alias("available_days"),
             pl.lit(min(base_days).isoformat()).alias("sample_start"),

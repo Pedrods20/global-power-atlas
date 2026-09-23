@@ -449,3 +449,64 @@ def test_price_metrics_handle_empty_input(call) -> None:  # type: ignore[no-unty
     from gpa.schema import empty_frame
 
     assert call(empty_frame("price")).is_empty()
+
+
+# --- Shape: the two spreads that move in opposite directions ---------------
+
+
+def test_intraday_range_and_block_spread_separate_under_a_midday_trough() -> None:
+    """A solar-shaped day where the two spread definitions disagree in sign.
+
+    German peakload is 08:00-20:00 CET. Build a day whose on-peak block averages
+    *below* its off-peak block -- the cannibalisation signature -- while the
+    high-to-low range within the day is large. A block contract loses money on
+    this day; a battery makes its best day of the year on it. Both numbers are
+    hand-checkable: on-peak is twelve hours averaging (6*10 + 6*40)/12 = 25,
+    off-peak twelve hours at 60, and the range is 90 minus 10.
+    """
+    start = JUNE_15_BERLIN_MIDNIGHT
+    values = [10.0 if 8 <= hour < 14 else 40.0 if 14 <= hour < 20 else 60.0 for hour in range(24)]
+    values[20] = 90.0  # the evening peak, off-peak by the clock definition
+    frame = price_frame(values, start=start)
+
+    blocks = price_metrics.block_prices(frame, GERMANY, period="day").row(0, named=True)
+    assert blocks["on_peak"] == APPROX(25.0)
+    assert blocks["spread"] < 0
+
+    ranges = price_metrics.intraday_spread(frame, GERMANY, period="day").row(0, named=True)
+    assert ranges["mean_spread"] == APPROX(80.0)
+    assert ranges["n_days"] == 1
+
+
+def test_intraday_range_drops_a_partial_day_rather_than_shrinking_it() -> None:
+    """A half-reported day has a genuinely smaller range and must not be averaged in.
+
+    Including it would report falling spreads that are really a reporting gap,
+    which is the failure this filter exists to prevent.
+    """
+    start = JUNE_15_BERLIN_MIDNIGHT
+    frame = price_frame([float(hour) for hour in range(24)], start=start)
+    assert price_metrics.intraday_spread(frame, GERMANY, period="day").height == 1
+    assert price_metrics.intraday_spread(frame.head(12), GERMANY, period="day").is_empty()
+
+
+def test_hourly_shape_is_duration_weighted_and_indexes_to_baseload() -> None:
+    """Quarter-hours must not outvote hours inside the same clock hour."""
+    start = JUNE_15_BERLIN_MIDNIGHT
+    frame = price_frame([float(hour) for hour in range(24)], start=start)
+    shape = price_metrics.hourly_shape(frame, GERMANY, period="day")
+    assert shape.height == 24
+    assert shape.sort("local_hour")["price"].to_list() == [float(h) for h in range(24)]
+
+    quarters = price_frame([0.0, 0.0, 0.0, 100.0], start=start, resolution=15)
+    hour = price_metrics.hourly_shape(quarters, GERMANY, period="day").row(0, named=True)
+    assert hour["price"] == APPROX(25.0)
+    assert hour["observed_hours"] == APPROX(1.0)
+    assert hour["n_intervals"] == 4
+
+
+def test_shape_metrics_reject_an_unsupported_period() -> None:
+    frame = price_frame([1.0], start=JUNE_15_BERLIN_MIDNIGHT)
+    for metric in (price_metrics.intraday_spread, price_metrics.hourly_shape):
+        with pytest.raises(ValueError, match="period must be one of"):
+            metric(frame, GERMANY, period="decade")

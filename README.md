@@ -1,112 +1,110 @@
-# Global Power Atlas
+# German Power Market Research — DE-LU day-ahead and storage
 
-A reproducible research study on the German-Luxembourg (DE-LU) power market,
-built to answer one commercial question end to end: **does a statistically
-validated day-ahead price forecast create measurable battery-dispatch value —
-and where does it fail to?**
+**Solar killed Germany's peak premium. The spread a battery earns doubled.**
+A reproducible study of the German-Luxembourg power market that establishes that
+claim from primary system-operator data, then tests it the only way that settles
+it — by dispatching a battery against realised prices and measuring what the
+shape is actually worth.
 
 [![CI](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml)
 [![Deploy](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml)
 
-**[Open the live dashboard](https://pedrods20.github.io/global-power-atlas/)** ·
-[Forecast case study](site/forecast.md) · [Battery case study](site/battery.md) ·
-[Methodology](site/methodology.md)
+**[Open the live site](https://pedrods20.github.io/global-power-atlas/)** ·
+[Market view](site/index.md) · [Forecast evidence](site/forecast.md) ·
+[Storage value](site/battery.md) · [Methodology](site/methodology.md)
 
 ![Dashboard preview](docs/screenshots/dashboard-1440.png)
 
-## Why this market and this question
+## The finding
 
-DE-LU is the deepest power market in Europe and the reference for continental
-price formation. The nuclear phase-out completed in April 2023 left a system
-where wind and solar set the price for a large and growing share of hours, and
-where negative prices are routine rather than exceptional. That price shape is
-exactly what a storage asset is paid to exploit — and exactly what a forecast
-has to get right on the days that matter.
+Germany's day-ahead price no longer pays a premium for the hours the market used
+to call peak. It pays for the hours solar cannot reach. Those are different
+statements about the same market, and they are routinely confused because they
+show up in different statistics.
 
-The practical question for a trading or origination desk is not whether a model
-lowers mean absolute error. It is whether the error reduction survives the
-translation into a dispatch decision that clears against realised prices, under
-real physical constraints and real costs. Those two questions have different
-answers, and this project measures both separately.
+| DE-LU | 2019 | 2022 (gas crisis) | 2026 YTD |
+|---|---|---|---|
+| On-peak minus off-peak block | +10.6 EUR/MWh | +49.6 | **−13.7** |
+| Within-day high minus low, % of that year's baseload | 80% | 79% | **169%** |
+| Solar capture rate | 0.93 | 0.94 | **0.51** |
+| Wind capture rate | 0.87 | 0.74 | 0.90 |
+| Hours below zero | 2.4% | 0.8% | **7.2%** |
+| Installed solar | 46 GW | 63 | **118** |
+| Battery fleet | — | 4.2 GW | **21.1 GW / 32.9 GWh** |
+| Arbitrage value, 1 MW / 4 MWh, perfect foresight | — | 487 EUR/MW/day | **451** |
 
-The project turns public system-operator data into a compact decision workflow:
+Three things follow, and each is on the site with its evidence.
 
-1. Validate interval prices, demand and generation by fuel in market time.
-2. Benchmark the DE-LU day-ahead price with lagged inputs and explicit
-   publication-vintage limitations.
-3. Convert the forecast into a constrained battery dispatch and settle it on
-   realised prices.
+1. **The block spread and the within-day range moved in opposite directions.** A
+   fixed block contract is paid the first; a battery is paid the second. Reading
+   only the block spread says storage arbitrage is dying exactly when it is not.
+2. **2022 was a price-level shock; what followed is a change in shape.** Scaled
+   by each year's own average price, the crisis year's daily range was no wider
+   than 2019's. The widening since is structural, and shape is what storage is
+   paid for. Solar did this; wind's capture rate barely moved, because wind
+   blows across the day and the seasons while solar arrives in the same six hours
+   in every plant at once.
+3. **21 GW of batteries have not compressed it yet**, and the fleet's ~1.6 hour
+   average duration suggests why: that is the signature of household storage
+   behind the meter, not of grid-scale assets bidding the same midday trough.
+   Gigawatts installed is not the same as capacity competing for this spread.
 
-```text
-Operator data → validated Parquet → walk-forward forecast → battery dispatch → static site
-```
+## Does forecasting the shape pay? Partly — and that is the result
 
-The dashboard is intentionally small: monthly historical context, the forecast
-benchmark, the battery value translation and one methodology page. The value is
-in the research design and the audit trail, not in a large collection of charts.
+A per-hour ridge regression using only what a bidder holds at the **12:00 gate on
+D-1** cuts day-ahead price error **24.3%** against the best naive alternative
+(EUR 22.07/MWh against EUR 29.14/MWh, over 58,645 scored clock-hours, 2020-2026).
 
-Designed and built end to end, solo: ingestion pipelines across two public
-system-data providers covering four markets, leakage-safe walk-forward
-forecasting, the constrained battery-dispatch and stress-testing engine, and
-this site. [github.com/Pedrods20](https://github.com/Pedrods20).
+Converted into dispatch on a 1 MW / 4 MWh battery, that skill is worth about
+**EUR 4,400/MW per year** — EUR 12/MW on an average day — more than repeating
+the last similar day. That is roughly **5%** of the battery's gross margin. The
+naive strategy earns the rest, because most of the value sits in the shape,
+which repeats, rather than in the day-to-day deviation, which is what a forecast
+adds. Ridge loses to that naive on **827 of 2,404 days**.
 
-## Featured result
+**The shape is the asset; the forecast is a margin on top of it.** That is the
+honest commercial summary, and it points away from where most of the engineering
+went — which is the sort of conclusion a portfolio is supposed to be willing to
+publish.
 
-The current release is a frozen, content-addressed DE-LU backtest
-(`data/experiments/`, committed alongside the site data it produced), not a
-live recompute that would silently drift as the historical store grows.
-Ridge's day-ahead price MAE is EUR 22.07/MWh over 58,645 scored clock-hour
-cells, a 24.3% reduction against the best naive baseline (EUR 29.14/MWh,
-previous day). On the resulting 2,404-day common sample, a 1 MW / 4 MWh battery
-captures 90.1% of the constrained perfect-foresight value with Ridge (81.8%
-with LightGBM). Ridge adds **EUR 29,014/MW (4.8%)** over similar-day dispatch,
-the strongest of all three fixed naive comparators in this observed sample.
-The exploratory paired 95% interval is EUR 22,515-35,347/MW; removing the five
-largest positive incremental days still leaves EUR 26,093/MW. These are
-sample-period figures, not annualized returns.
+Two further results are worth the click:
 
-These are retrospective development results from a reproducible release, not
-prospective trading returns. The published base case has zero asset-specific
-operating and degradation cost; both costs are explicit optimizer inputs, and
-the site reports both illustrative non-zero cost cases and fixed efficiency,
-signal-attenuation and calendar-downtime stresses. The combined case leaves
-EUR 18,623/MW incremental margin, not a forecast of future profit. All five
-models are compared at 1/2/4h; LightGBM underperforms the best naive by EUR 14,573/MW
-at 1h in the zero-cost case. Higher model complexity is not automatically more
-valuable, and larger absolute battery margin does not establish the best
-investment duration without CAPEX and fixed/lifetime costs.
-Reproduce with `gpa export --check` against the committed snapshot.
+- **A linear model wins where the money is.** LightGBM is competitive in ordinary
+  hours and collapses in the tails: skill of −57% in the scarcest 5% of hours and
+  −35% in negative-price hours, against Ridge's +16% and −4%. A model better on
+  average and worse in the tails is the wrong model for a dispatch decision.
+- **The best price forecaster is not the best dispatcher.** Similar-day is the
+  second-worst of the five by MAE and the strongest naive comparator by margin.
+- **A second daily cycle adds margin and shrinks the forecast's edge.** Allowing
+  two charge-then-discharge episodes raises gross margin 16% but cuts Ridge's
+  advantage over the naive by 15%, because the second episode is the midday
+  solar trough — the most predictable feature of the German day.
 
-## What this project is meant to demonstrate
+## Reproducibility
 
-- **Market judgment before modelling.** The information set, the forecast gate
-  and the evaluation window are chosen from how the day-ahead auction actually
-  works, not from what the data would allow.
-- **Leakage discipline that is testable, not asserted.** The gate, the lags and
-  the walk-forward refit boundaries are enforced in code and covered by tests.
-- **Honest evaluation.** Every model is scored on one common sample against
-  three naive alternatives, and the breakdowns are published where the model
-  loses, not only where it wins.
-- **Translation into a decision.** Forecast error becomes a constrained dispatch
-  schedule settled on realised prices, with costs, downtime and signal quality
-  stressed separately.
-- **Reproducibility as an engineering property.** A frozen, content-addressed
-  release, a committed data store, and `gpa export --check` to prove the
-  published site matches the Python analysis.
+The published release is a frozen, content-addressed backtest under
+`data/experiments/`, committed alongside the site data it produced, not a live
+recompute that would drift as the store grows. `gpa export --check` proves the
+published site matches the Python analysis.
+
+These are **retrospective development results** from an already-inspected
+history — not an untouched holdout, not prospective trading returns. The base
+case carries zero operating and degradation cost; both are explicit optimizer
+inputs, and the site reports illustrative non-zero cases plus efficiency,
+signal-attenuation, downtime and two-episode stresses separately. Day-ahead
+arbitrage alone is a **lower bound** on a German battery's revenue: intraday and
+balancing (FCR/aFRR/mFRR) markets are outside this study.
 
 ## Premises
 
-Every number in this repository rests on the assumptions below. They are stated
-here once; each page repeats the ones it depends on.
-
 | Premise | Value | Why |
 |---|---|---|
-| Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so noon on D-1 is the last moment a real bidder holds information |
+| Forecast gate | 12:00 market time on D-1 | The day-ahead order book closes at midday for next-day delivery, so noon on D-1 is the last moment a real bidder holds information |
 | Target | Duration-weighted local clock-hour mean of the day-ahead price | Since the market moved to 15-minute products this is an analytical hourly benchmark, not a per-quarter-hour trade forecast |
 | Information set | Lagged prices, calendar features, residual load lagged at least two delivery days | Stored provider revisions cannot prove what was available at the historical gate, so realised delivery-day fundamentals are excluded |
 | Evaluation | Expanding walk-forward, common sample, three naive baselines | A model that cannot beat "repeat a known price" has not earned its complexity |
 | Model selection | Hyperparameters frozen on a validation window before the test period | Selection inside the evaluation window would report a tuned result as an out-of-sample one |
-| Battery | 1 MW; 1/2/4 MWh; 90% round-trip; one cycle/day; zero initial and terminal SOC | A deliberately simple, auditable asset, not a specific commercial project |
+| Battery | 1 MW; 1/2/4 MWh; 90% round-trip; one episode/day in the headline; zero initial and terminal SOC | A deliberately simple, auditable asset, not a specific commercial project; a two-episode case is run and reported separately |
 | Costs | Zero in the base case; illustrative 2/3 and 5/10 EUR per grid MWh reruns | Cost rates are not calibrated German project estimates, so they are shown as stresses rather than folded into the headline |
 | Settlement | Schedules chosen on forecast prices, settled on realised prices | The only economically meaningful test of a forecast-driven decision |
 
@@ -114,16 +112,34 @@ The two boundaries that most limit the claim: this is **already-inspected
 history**, not an untouched holdout or a prospective record; and the study is
 **zonal, not nodal**, so congestion and basis are outside scope.
 
+## What this project is meant to demonstrate
+
+- **A market read, argued from data and falsifiable.** The site names what would
+  make the thesis wrong — a further gas-premium unwind, a lengthening fleet
+  duration, market-design change — rather than only what supports it.
+- **Market judgment before modelling.** The information set, the forecast gate
+  and the evaluation window come from how the day-ahead auction actually works,
+  not from what the data would allow.
+- **Leakage discipline that is testable, not asserted.** The gate, the lags and
+  the walk-forward refit boundaries are enforced in code and covered by tests.
+- **Honest evaluation.** Every model is scored on one common sample against three
+  naive alternatives, and the breakdowns are published where the model loses.
+- **Translation into a decision.** Forecast error becomes a constrained dispatch
+  schedule settled on realised prices, with costs, downtime, signal quality and
+  cycle count stressed separately.
+- **Reproducibility as an engineering property.** A frozen, content-addressed
+  release, a committed data store, and `gpa export --check`.
+
 ## Data and provenance
 
-The committed historical store covers four zones from two public, credential-free
-providers. European figures ultimately originate from the system operators and are
-redistributed by the platforms below.
+The committed historical store covers four zones from two public,
+credential-free providers. European figures originate from the system operators
+and are redistributed by the platforms below.
 
 | Zone | Series | Provider | Publisher | Committed coverage |
 |---|---|---|---|---|
 | Germany-Luxembourg (DE-LU) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2018-12-31, 94 monthly partitions |
-| Germany-Luxembourg (DE-LU) | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2019-01-05, ablation only |
+| Germany-Luxembourg (DE-LU) | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2019-01-05, ablation and prospective arm |
 | France (FR) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2024-09-01 |
 | Spain (ES) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2024-09-01 |
 | Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | Operador Nacional do Sistema Elétrico | From 2024-09-01 |
@@ -132,22 +148,17 @@ DE-LU is the only market with the depth this study needs; the other three zones
 are historical context and are deliberately not used for forecasting or valuation.
 
 - **Energy-Charts** (`api.energy-charts.info`) republishes ENTSO-E and SMARD
-  figures through an open API under CC BY 4.0, which is why it carries the
-  European zones here while an ENTSO-E Transparency token is obtained. The
-  adapter uses `/price`, `/public_power`, `/public_power_forecast` and
-  `/installed_power`, and measures each series' resolution from the returned
-  timestamps rather than assuming it. `/public_power_forecast` feeds both the
-  labelled retrospective ablation and the prospective `ridge_da` arm; what
-  differs between them is the publication vintage each can honestly claim, not
-  the provider.
+  figures through an open API under CC BY 4.0. The adapter uses `/price`,
+  `/public_power`, `/public_power_forecast` and `/installed_power`, and measures
+  each series' resolution from the returned timestamps rather than assuming it.
+  `/public_power_forecast` feeds both the labelled retrospective ablation and the
+  prospective `ridge_da` arm; what differs between them is the publication
+  vintage each can honestly claim, not the provider.
 - **SMARD** (`smard.de/app/chart_data`), the Bundesnetzagentur's market-data
-  platform, is implemented as a second, independent German adapter so that the
-  long DE-LU price and fundamentals history can be backfilled without depending
-  on the rate-limited Energy-Charts mirror. It is registered and tested but not
-  yet routed to: DE-LU currently takes every dataset, fundamentals included,
-  from Energy-Charts, and every row in the committed store records Energy-Charts
-  or ONS as its source. Both the historical archive and the prospective run
-  therefore read the same provider today.
+  platform, is implemented as a second, independent German adapter. It is
+  registered and tested but not yet routed to: DE-LU currently takes every
+  dataset, fundamentals included, from Energy-Charts, and every row in the
+  committed store records Energy-Charts or ONS as its source.
 - **ONS** is read through two endpoints on purpose, because they do not share a
   publication lag: generation from the hourly energy-balance CSV (about two days
   behind real time) and load from the verified-load API (within about an hour).
@@ -157,29 +168,21 @@ fundamental avoids using future delivery dates, but it cannot prove that the
 exact stored revision was the one available at the historical forecast gate;
 that limitation is stated wherever a number depends on it.
 
-The monthly ingestion workflow refreshes the historical dashboard. A separate
-market-clock workflow can issue and reconcile DE-LU forecasts; prospective
-acceptance remains deliberately separate from the static historical pages.
-
 ## Research design
 
 - **Information set:** lagged prices, calendar variables and lagged residual
   load; no realised delivery-day fundamentals enter the retrospective forecast.
-  Stored provider revisions cannot certify original publication-time vintages.
 - **Validation:** expanding walk-forward evaluation with naive baselines, Ridge
-  and pooled LightGBM. Hyperparameters are selected before the evaluation
-  period; this already-inspected history remains development evidence, not an
-  untouched final test. Sensitivities do not reselect the models or parameters.
+  and pooled LightGBM. Hyperparameters are selected before the evaluation period.
+  Sensitivities do not reselect the models or parameters.
 - **Battery:** explicit power, energy, efficiency, SOC, terminal SOC and
-  one-cycle-per-day constraints. Forecast-guided dispatch is settled against
-  observed prices; perfect foresight is an upper bound under the same physics.
-- **Market structure:** the battery page also correlates Germany's
-  renewable and storage capacity (Energy-Charts, including Germany's official
-  2030 targets) against solar's capture-rate erosion (0.93 to 0.51,
-  2019-2026, with 2026 partial), the on/off-peak spread going negative, and
-  this project's own DE-LU arbitrage margin. Annual fleet-margin correlations
-  are positive in this sample; shared trends and price shocks prevent these
-  small-sample correlations from identifying a causal competition effect.
+  episode-count constraints. Forecast-guided dispatch is settled against observed
+  prices; perfect foresight is an upper bound under the same physics.
+- **Market structure:** installed capacity (Energy-Charts, including Germany's
+  official EEG 2023 / WindSeeG 2030 targets) is set against solar's capture-rate
+  erosion, the block spread going negative, the within-day range widening, and
+  this project's own DE-LU arbitrage margin. Annual correlations are descriptive;
+  shared trends and price shocks prevent them from identifying causation.
 - **Time and units:** UTC-aware source timestamps are interpreted through each
   market's local clock. Interval duration is carried explicitly, including the
   European hourly-to-quarter-hour transition.
@@ -205,20 +208,14 @@ gpa backtest --zone DE-LU --scope all
 gpa issue --zone DE-LU
 gpa reconcile --zone DE-LU
 gpa battery --zone DE-LU
+gpa battery-study --predictions site/data/forecast_predictions.parquet
 ```
 
 The repository has no runtime backend. The site reads only the small,
 pre-computed files under `site/data`; browser-visible credentials are never
-required.
-
-The forecast chart loads `site/data/forecast_preview.parquet` (12 sampled
-weeks). The separate `site/data/forecast_predictions.parquet` retains every
-rounded clock-hour prediction for reproducible battery studies; it is not
-downloaded by the forecast page. To rerun that study locally:
-
-```bash
-gpa battery-study --predictions site/data/forecast_predictions.parquet
-```
+required. The forecast chart loads `site/data/forecast_preview.parquet` (12
+sampled weeks); the separate `site/data/forecast_predictions.parquet` retains
+every rounded clock-hour prediction for reproducible battery studies.
 
 ## Quality checks
 
@@ -230,50 +227,48 @@ pytest -q
 npm run build
 ```
 
-The forecast and battery pages state their assumptions and limitations beside
-the result. The historical dashboard is descriptive; it is not investment or
-trading advice.
+The historical dashboard is descriptive; it is not investment or trading advice.
 
 ## Repository map
 
 ```text
 src/gpa/forecast/   leakage-safe panel, models, walk-forward scoring and ledger
 src/gpa/battery.py  constrained dispatch and economic backtest
+src/gpa/metrics/    price shape, blocks, capture rates, negative prices
 src/gpa/export.py   deterministic static-site data products
 site/               four focused Observable Framework pages
 data/curated/       versioned interval observations, partitioned by month
 tests/              schema, source, forecast, dispatch and site-contract tests
-scripts/             browser smoke test used by CI
+scripts/            browser smoke test used by CI
 ```
 
 ## Limitations and next step
 
 The forecast is an hourly analytical benchmark and does not predict each
-quarter-hour trade. The study is zonal rather than nodal, so congestion and
-basis are outside scope. The next credible step is a separately recorded
-four-to-six-week prospective ledger, followed by reconciliation and battery
-acceptance; extending the historical backtest would not answer that question.
+quarter-hour trade. The study is zonal rather than nodal, so congestion and basis
+are outside scope. Day-ahead arbitrage is a lower bound on a German battery's
+revenue; quantifying the intraday and balancing stacks would need data this
+project does not ingest.
 
-That ledger also carries the one open modelling question. Day-ahead load, wind
-and solar forecasts measurably reduce error in the labelled ablation, but the
-historical archive cannot certify when each value became available, so they are
-not in the published information set and adopting them from history alone would
-mean trusting an assumption instead of an observation. A live issue does not
-have that problem for the day it is forecasting: it records the instant it read
-the forecast. Each scheduled run therefore issues twice, as two frozen
-identities rather than one arm that varies with provider timing — `ridge` from
-the published information set and `ridge_da` from that set plus the operator
-forecasts — and the ledger keeps both, so the comparison accumulates instead of
-being argued. `ridge_da` abstains, and records the abstention, on a day the
-provider has not published the delivery day before the gate.
+The next credible step is the separately recorded prospective ledger, now
+running. It also carries the one open modelling question. Day-ahead load, wind
+and solar forecasts measurably reduce error in the labelled ablation (Ridge
+22.07 → 19.17, LightGBM 25.56 → 20.56 EUR/MWh on the identical frozen test
+window), but the historical archive cannot certify when each value became
+available, so they are not in the published information set. A live issue does
+not have that problem for the day it is forecasting: it records the instant it
+read the forecast. Each scheduled run therefore issues twice, as two frozen
+identities — `ridge` from the published information set and `ridge_da` from that
+set plus the operator forecasts — and the ledger keeps both, so the comparison
+accumulates instead of being argued. `ridge_da` abstains, and records the
+abstention, on a day the provider has not published the delivery day before the
+gate.
 
 One limitation of that arm is disclosed rather than buried. Only the delivery
 day's snapshot carries an observed retrieval instant; the training history still
 carries the assigned D-1 vintage, because no observed one exists for it and a
 model needs a history to fit. The vintage assumption therefore affects how
-`ridge_da` is fitted, never what the issued forecast was allowed to know. An arm
-whose training history is also observed becomes possible only after this ledger
-has run long enough to supply one.
+`ridge_da` is fitted, never what the issued forecast was allowed to know.
 
 ## References
 
@@ -293,6 +288,8 @@ Market rules and structure:
 - NEMO Committee, Single Day-Ahead Coupling: the move from hourly to 15-minute
   market time units, trading day 30 September 2025 for delivery 1 October 2025 —
   <https://www.nemo-committee.eu/sdac>
+- regelleistung.net, the German TSOs' joint balancing-reserve platform
+  (FCR, aFRR, mFRR tenders) — <https://www.regelleistung.net/>
 - Bundesnetzagentur, onshore wind auction statistics —
   <https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html>
 - EEG 2023 and WindSeeG 2030 capacity targets, as republished in Energy-Charts'
@@ -304,6 +301,13 @@ Technical and cost references used as stated comparisons, not as calibration:
   <https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage>
 - BloombergNEF, 2025 Lithium-Ion Battery Price Survey, published 9 December 2025 —
   <https://about.bnef.com/insights/clean-transport/lithium-ion-battery-pack-prices-fall-to-108-per-kilowatt-hour-despite-rising-metal-prices-bloombergnef/>
+
+## Author
+
+Designed and built end to end, solo: ingestion pipelines across two public
+system-data providers covering four markets, leakage-safe walk-forward
+forecasting, the constrained battery-dispatch and stress-testing engine, and this
+site. [github.com/Pedrods20](https://github.com/Pedrods20).
 
 ## License
 

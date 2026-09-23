@@ -18,6 +18,7 @@ from gpa.export import (
     _battery_margin_yearly,
     _battery_tables,
     _cannibalisation,
+    _canonical_sort,
     _capacity,
     _capacity_extrapolation_flags,
     _capacity_price_correlation,
@@ -746,3 +747,47 @@ def test_battery_costs_table_covers_the_illustrative_scenarios():
         expected.sort(["strategy", "energy_mwh"]),
         check_row_order=False,
     )
+
+
+def test_canonical_sort_survives_float_noise_that_would_reorder_an_all_column_sort() -> None:
+    """Row order must not hinge on the last bits of a computed float.
+
+    This is the failure it was written for: two scenarios whose economics agree
+    to well inside any comparison tolerance swapped places between two runs of
+    `gpa export`, because sorting by every column let a summation-noise
+    difference in an early float decide the order. The mismatch then surfaced in
+    the `scenario` column, which was not where the difference was.
+    """
+    first = pl.DataFrame(
+        {
+            # Column order matters to the bug: the float sits ahead of the label
+            # in the real table, so an all-column sort consults it first.
+            "strategy": ["no_trade", "no_trade", "ridge"],
+            "profit_eur": [0.0, 0.0, 100.0],
+            "scenario": ["two_episodes", "base", "base"],
+            "energy_mwh": [4.0, 4.0, 4.0],
+        }
+    )
+    # The same table from another run: identical to within any tolerance a
+    # comparison would accept, and different in the bits an exact sort reads.
+    noisy = first.with_columns(pl.Series("profit_eur", [0.0, 1e-13, 100.0], dtype=pl.Float64))
+
+    ordered_first = _canonical_sort(first)
+    ordered_noisy = _canonical_sort(noisy)
+
+    assert ordered_first["scenario"].to_list() == ordered_noisy["scenario"].to_list()
+    assert ordered_first["strategy"].to_list() == ordered_noisy["strategy"].to_list()
+    assert_frame_equal(ordered_first, ordered_noisy)
+
+    # An all-column sort is exactly what this replaces: it reorders here, and
+    # the resulting mismatch is reported against `scenario`, not `profit_eur`.
+    assert first.sort(first.columns)["scenario"].to_list() != (
+        noisy.sort(noisy.columns)["scenario"].to_list()
+    )
+
+
+def test_canonical_sort_still_orders_a_float_only_table() -> None:
+    """With nothing exactly comparable to sort on, the floats are the key."""
+    frame = pl.DataFrame({"value": [3.0, 1.0, 2.0]})
+    assert _canonical_sort(frame)["value"].to_list() == [1.0, 2.0, 3.0]
+    assert _canonical_sort(pl.DataFrame()).is_empty()

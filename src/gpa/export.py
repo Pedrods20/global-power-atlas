@@ -118,6 +118,29 @@ def site_root() -> Path:
     return Path(__file__).resolve().parents[2] / "site" / "data"
 
 
+def _canonical_sort(frame: pl.DataFrame) -> pl.DataFrame:
+    """Order rows reproducibly, without letting computed floats decide.
+
+    The published tables are compared across runs by ``gpa export --check``, so
+    their row order has to be a function of the data rather than of whichever
+    order an aggregation happened to produce. Sorting by every column is the
+    obvious way to get that, but it makes the order depend on floats that carry
+    summation noise: two rows whose economics agree to within any tolerance a
+    comparison would accept can still swap places, and the mismatch then surfaces
+    in whatever column happens to differ first, which is never the real cause.
+
+    Sorting by the exactly-comparable columns first and using the floats only as
+    a final tie-break keeps the order stable under that noise while remaining a
+    total order in practice.
+    """
+    if not frame.columns:
+        return frame
+    floats = {pl.Float32, pl.Float64}
+    exact = [name for name in frame.columns if frame.schema[name] not in floats]
+    approximate = [name for name in frame.columns if frame.schema[name] in floats]
+    return frame.sort([*exact, *approximate])
+
+
 def export_all(output: Path | None = None) -> dict[str, int]:
     """Write every site table, returning row counts by file name.
 
@@ -138,6 +161,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "generation_mix": _generation_mix(),
         "capacity": _capacity(),
         "cannibalisation": _cannibalisation(),
+        "price_shape": _price_shape(),
         "fundamentals_ablation": _fundamentals_ablation(),
         "capacity_price_yearly": capacity_price_yearly,
         "capacity_price_correlation": _capacity_price_correlation(
@@ -183,9 +207,7 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     written: dict[str, int] = {}
     for name, frame in tables.items():
         path = destination / f"{name}.parquet"
-        result = _stringify_dates(frame)
-        if result.columns:
-            result = result.sort(result.columns)
+        result = _canonical_sort(_stringify_dates(frame))
         result.write_parquet(path, compression="zstd", statistics=True)
         written[path.name] = frame.height
 
@@ -226,10 +248,12 @@ def check_exports(destination: Path | None = None) -> list[str]:
                     differences.append(f"{name} ({detail})" if detail else name)
             else:
                 try:
-                    expected = pl.read_parquet(expected_path)
-                    observed = pl.read_parquet(actual / name)
-                    if expected.columns:
-                        expected = expected.sort(expected.columns)
+                    # Both sides go through the same canonical ordering: the
+                    # committed file was written by an older rule if the sort
+                    # changed, and re-sorting here compares content rather than
+                    # whichever ordering happened to be in force when it was written.
+                    expected = _canonical_sort(pl.read_parquet(expected_path))
+                    observed = _canonical_sort(pl.read_parquet(actual / name))
                     assert_frame_equal(expected, observed, check_row_order=True)
                 except (AssertionError, pl.exceptions.PolarsError) as exc:
                     differences.append(f"{name} ({exc})")
@@ -480,6 +504,16 @@ def _capacity_price_yearly() -> pl.DataFrame:
         pl.col("period").alias("year"),
         "spread",
         (pl.col("spread") / pl.col("all_hours") * 100.0).alias("spread_pct_of_price"),
+        pl.col("all_hours").alias("baseload_price"),
+    )
+    # The block spread and the within-day range answer different questions and,
+    # in this market, point in opposite directions. Carrying both in one table
+    # is what lets the site show the divergence rather than assert it.
+    intraday = price_metrics.intraday_spread(prices, zone, period="year").select(
+        pl.col("period").alias("year"),
+        pl.col("mean_spread").alias("intraday_spread"),
+        pl.col("median_spread").alias("intraday_spread_median"),
+        pl.col("n_days").alias("intraday_n_days"),
     )
     negative = (
         price_metrics.negative_price_summary(prices, zone)
@@ -504,11 +538,62 @@ def _capacity_price_yearly() -> pl.DataFrame:
         .join(negative, on="year", how="left")
         .join(solar_capture, on="year", how="left")
         .join(wind_capture, on="year", how="left")
+        .join(intraday, on="year", how="left")
         .sort("year")
     )
     if combined.is_empty():
         return combined
-    return combined.with_columns(pl.lit(zone.code).alias("zone"))
+    return combined.with_columns(
+        # Scaled by the year's own baseload so a price-level shock and a
+        # change in daily shape can be told apart. 2022 was the first; the
+        # years since are the second, and a storage asset is paid for shape.
+        (pl.col("intraday_spread") / pl.col("baseload_price") * 100.0).alias(
+            "intraday_spread_pct_of_price"
+        ),
+        pl.lit(zone.code).alias("zone"),
+    )
+
+
+def _price_shape() -> pl.DataFrame:
+    """Mean DE-LU price for each local clock hour, by year.
+
+    The table behind the one chart that explains why storage revenue rose while
+    the peak premium disappeared: solar did not flatten the day, it moved the
+    money within it. ``pct_of_baseload`` normalises each year by its own average
+    price, so the 2022 level shock does not swamp the shape change that followed.
+    """
+    zone = get_zone("DE-LU")
+    if not zone.has("price"):
+        return pl.DataFrame()
+    prices = store.read("price", zone.code)
+    if prices.is_empty():
+        return pl.DataFrame()
+
+    shape = price_metrics.hourly_shape(prices, zone, period="year")
+    if shape.is_empty():
+        return pl.DataFrame()
+    baseload = price_metrics.block_prices(prices, zone, period="year").select(
+        "period", pl.col("all_hours").alias("baseload_price")
+    )
+    return (
+        shape.join(baseload, on="period", how="left")
+        .with_columns(
+            (pl.col("price") / pl.col("baseload_price") * 100.0).alias("pct_of_baseload"),
+            pl.lit(zone.code).alias("zone"),
+        )
+        .rename({"period": "year"})
+        .select(
+            "year",
+            "local_hour",
+            "price",
+            "pct_of_baseload",
+            "baseload_price",
+            "observed_hours",
+            "n_intervals",
+            "zone",
+        )
+        .sort("year", "local_hour")
+    )
 
 
 def _annual_fit_cutoff(intervals: pl.DataFrame, zone: Zone) -> int | None:

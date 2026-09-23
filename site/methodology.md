@@ -4,9 +4,9 @@ title: Methodology
 
 # Methodology
 
-Global Power Atlas is a static research artifact. Source observations are
-validated and aggregated before they reach the browser; no page fetches a
-provider directly and no browser credential is required.
+This is a static research artifact. Source observations are validated and
+aggregated before they reach the browser; no page fetches a provider directly
+and no browser credential is required.
 
 ## Scope
 
@@ -20,13 +20,38 @@ other zones are shown as context rather than modelled.
 | Zone | Data | Provider | Committed coverage | Use |
 |---|---|---|---|---|
 | DE-LU | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2018-12-31, 94 monthly partitions | Forecast reference market |
-| DE-LU | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation only |
+| DE-LU | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation and the prospective `ridge_da` arm |
 | France | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2024-09-01 | Historical comparison |
 | Spain | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2024-09-01 | Historical comparison |
 | Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | From 2024-09-01 | System comparison |
 
 The dashboard refreshes monthly. Its purpose is historical context around the
 forecast study, not continuous market monitoring.
+
+## Two spreads, and why both are reported
+
+The [market view](./) turns on a distinction that is easy to lose:
+
+- The **block spread** is the mean of on-peak intervals minus the mean of
+  off-peak intervals, where membership follows the market's own block definition
+  (08:00–20:00 local, weekdays, for DE-LU). It is what a fixed block contract
+  pays, it is defined by the clock, and it goes negative when midday solar pushes
+  the on-peak block below the hours surrounding it.
+- The **within-day range** is the day's highest interval price minus its lowest,
+  averaged over complete local days. It is what a storage asset is paid, because
+  a battery charges at the day's low and discharges at its high wherever in the
+  day those happen to fall.
+
+A day is complete at 23 observed hours, which is what the spring clock change
+leaves. Partial days are dropped rather than scaled, because a day the provider
+covered until noon has a genuinely smaller range and averaging it in would report
+a falling spread that is really a reporting gap.
+
+Both series are published as a percentage of the same year's own average price.
+That normalisation is what separates a price-level shock from a change in daily
+shape; without it, 2022 dominates every chart and the structural change since is
+invisible. The **hourly shape** table applies the same normalisation to the mean
+price of each local clock hour.
 
 ## Sources, lineage and revisions
 
@@ -173,13 +198,24 @@ published base case is:
 | Energy cases | 1, 2 and 4 MWh |
 | Round-trip efficiency | 90% |
 | Dispatch horizon | Complete eligible local day |
-| Daily cycling policy | At most one charge/discharge cycle |
+| Daily cycling policy | At most one charge-then-discharge episode (headline); a two-episode case is run separately |
 | Initial and terminal SOC | 0 MWh |
 | Operating and degradation cost | 0 in the base case; configurable |
 
-The optimizer uses forecast prices to choose a full-day schedule with at most
-one charge-then-discharge episode; there is no intraday re-optimization.
-The schedule is then settled against the observed price. `no_trade` is
+The optimizer uses forecast prices to choose a full-day schedule, then settles
+it against the observed price; there is no intraday re-optimization. The
+schedule is built by a backward dynamic program whose phase dimension counts
+episodes: charging after a discharge opens the next episode, and is refused once
+the day's allowance is spent. The headline allows one episode, which is the
+conservative reading of "one cycle a day"; the two-episode stress relaxes exactly
+that assumption and nothing else, and is reported beside the headline rather than
+replacing it.
+
+Within a single episode, terminal SOC equal to initial SOC makes throughput
+exactly twice the peak SOC excursion, so bounding that peak enforces the
+per-episode cycle budget. That equivalence is per-episode: with several episodes
+the daily ceiling is the product of the per-episode budget and the episode count,
+which is why both bounds are declared separately. `no_trade` is
 the zero-value baseline, while `perfect_foresight` runs the same physical
 optimizer using realised prices only as an upper bound. Neither result is a
 trading recommendation.
@@ -194,7 +230,7 @@ daily as an oracle or promoted to a prospective policy. The battery page shows
 each fixed comparison, illustrative re-optimized costs, observed downside,
 incremental concentration and paired exploratory block-bootstrap intervals.
 Its fixed sensitivity protocol includes 85% efficiency, signal attenuation
-toward D-1 and whole-day calendar downtime. These are diagnostic assumptions,
+toward D-1, whole-day calendar downtime and a two-episode day. These are diagnostic assumptions,
 not a German asset calibration. Cost rates apply to charge plus discharge at
 the grid boundary; capital and fixed/lifetime costs remain outside the model.
 See the [Battery page](./battery) for exact definitions and source attribution.
@@ -217,6 +253,8 @@ reason each one was chosen and what it costs the result.
 | Common sample | All five strategies scored on identical days and hours | Prevents a model from winning by being evaluated on easier cells | Comparisons would not be like-for-like |
 | Missing data | Left missing; incomplete intervals excluded, never imputed | A provider gap is information, not a zero | Fewer scored cells, but no invented observations |
 | Costs | Zero in the base case; illustrative non-zero cases rerun separately | Rates are not calibrated German project estimates | Margins are gross of asset-specific costs and of all capital costs |
+| Daily cycling | One charge-then-discharge episode in the headline | The conservative reading of a one-cycle-a-day asset, and the binding constraint on almost every day in the sample | Understates a real German battery, which cycles more than once; the two-episode stress measures by how much, and shows the extra margin needs no forecast |
+| Revenue stack | Day-ahead arbitrage only | The only market this project ingests prices for | A lower bound on a German battery's revenue: continuous intraday and the balancing markets (FCR, aFRR, mFRR, tendered via [regelleistung.net](https://www.regelleistung.net/)) are not modelled, nor is the fact that capacity committed to balancing cannot simultaneously arbitrage |
 | Scope | Zonal, not nodal | The day-ahead auction clears at bidding-zone level | Congestion, basis and transmission constraints are outside the result |
 
 ## Quality controls

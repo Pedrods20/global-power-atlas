@@ -230,6 +230,141 @@ claim, the evidence behind it and the main risk to it within a minute, without
 reading a methodology page first. Every number on the site is reproducible from
 the committed release, and no figure appears only as a multi-year cumulative.
 
+### P8 handoff evidence — published, repositioned, and the shape thesis measured
+
+**Step 1, publish, is done and verified against the live site.** `main` was
+pushed to `origin/main` as `1cce26c`, CI gated the deploy, and fetching
+`https://pedrods20.github.io/global-power-atlas/battery` afterwards returned the
+durability section, the solar-cannibalisation sentence and the BloombergNEF
+citation — none of which existed on the live site before. The 42-commit backlog
+is no longer invisible, and `forecast.yml`'s two daily slots are now on the
+default branch, so the prospective ledger begins accumulating without further
+action.
+
+**Step 2, the analysis the thesis needed, is done.** Two metrics were added to
+`gpa.metrics.price` and wired into the export:
+
+- `intraday_spread` — the mean within-day high-minus-low range over complete
+  local days, deliberately distinct from `block_prices`' on-peak-minus-off-peak
+  figure, whose own docstring already warned they are not the same number.
+  Complete means at least 23 observed hours, which is what the spring clock
+  change leaves; partial days are dropped rather than scaled, because a
+  half-reported day has a genuinely smaller range.
+- `hourly_shape` — the duration-weighted mean price for each local clock hour,
+  exported beside each year's baseload so the profile can be indexed to it.
+
+Read against the committed store, the two spreads move in opposite directions,
+which is the finding the repositioning is built on:
+
+    year  block spread  within-day range  range as % of baseload
+    2019    +10.6           30.1                80%
+    2022    +49.6          187.0                79%
+    2024    +14.6          111.2               142%
+    2025     +4.7          130.4               146%
+    2026    -13.7          178.4               169%   (partial)
+
+The 2022 row is what makes the rest readable. The gas crisis was by far the most
+expensive year in the sample and its daily range, relative to its own price
+level, was no wider than 2019's: a price-level shock, not a change in shape. The
+widening since is the shape change, and shape is what a storage asset is paid
+for. Solar drove it — its capture rate fell 0.93 to 0.51 while wind's moved 0.87
+to 0.90 — and the hourly profile shows where: the midday hours now sit below the
+night, and the evening ramp is a sharper peak than before.
+
+**The asset definition was the other half of the honesty problem.** The
+one-episode cap bound on 2,403 of 2,404 days, so the published benchmark was
+measuring an asset that does not exist in this market. `BatterySpec` gained
+`max_episodes_per_day` and `_schedule`'s two-phase DP was generalised to `2 * E`
+phases: charging from an odd phase opens the next episode and is refused once
+the allowance is spent. At `E = 1` this is the previous optimizer exactly, which
+is the property that mattered — `battery_summary.parquet` and all 147
+pre-existing sensitivity rows came back **value-identical** after the change,
+checked with `assert_frame_equal` against the committed files rather than eyed.
+A synthetic two-peak day confirms the generalisation does what it claims:
+revenue 264.58 at one episode, 343.11 at two, 385.01 at three, with cycles
+1.00 / 1.50 / 2.06.
+
+The two-episode result is worth more than the margin it adds, because it cuts
+both ways. Gross margin rises 16.4% (EUR 639,353 to 744,455 over the sample, at
+1.64 equivalent cycles a day rather than a forced 2.00 — the optimizer takes the
+second episode only when it pays), while Ridge's advantage over the best naive
+*falls* 14.9%, from EUR 29,014 to 24,692/MW. The second episode is the midday
+solar trough, which is the most predictable feature of the German day, so a
+naive strategy captures it almost as well as a fitted model does. Widening the
+asset adds margin that needs no forecast, which is the same conclusion the page
+reaches from the other direction.
+
+**Steps 3 to 5, the repositioning, are done.** The home page is now a market
+research note whose H1 states the claim, with three market findings, the two
+charts that carry them, an explicit "what would make this wrong" block naming
+the gas-premium unwind, a lengthening fleet duration and market-design change,
+and the forecast/battery results demoted to the evidence they are. Every
+incremental figure is now given in EUR/MW/year and EUR/MW/day beside the
+cumulative — the headline EUR 29,014/MW is about EUR 4,400/MW/year and EUR
+12/MW/day, and not saying so was the single most misleading thing on the old
+site. Titles across the site state findings rather than ask questions, the site
+title and navigation were renamed, `site/index.md`'s `title: Historical
+dashboard` front matter is gone, and `site/battery.md`'s double negative over the
+competition correlation was replaced with a statement of what the data does and
+does not support. A sourced paragraph on continuous intraday and the balancing
+markets (FCR/aFRR/mFRR, via the German TSOs' joint platform) now positions the
+whole study as a lower bound rather than leaving the omission implicit. The
+README leads with the thesis and a table of the structural change; this
+document's tail is marked superseded, with its stale figures named against the
+current ones and P3's unexecuted original scope flagged.
+
+**Two defects were found and fixed while verifying, neither introduced by this
+work.** `site/forecast.md` rendered a literal `${run.input_sha256}` on the live
+page, because Observable does not interpolate inside an inline code span; it now
+interpolates an `html` fragment instead. And every page 404'd on a missing
+favicon, now supplied inline from the config. The README screenshots were
+regenerated, with the capture retried until the page rendered four charts and no
+error element, after a first attempt caught a transient module-load failure.
+
+**A real reproducibility defect surfaced while verifying, and it was not
+cosmetic.** `gpa export --check` failed reporting a value mismatch in
+`battery_sensitivities.parquet`'s `scenario` column, with both sides holding the
+same 189 rows and the same visible head and tail. The column named in the error
+was not where the difference was.
+
+The cause is that `export_all` canonicalised row order by sorting on *every*
+column, computed floats included. Regenerating the battery tables from the same
+frozen snapshot and diffing them against the committed file showed the values
+agree within any tolerance a comparison would accept, with one exception at the
+last bits: `worst_observed_month_eur` differed by at most **1.137e-13**, which is
+summation-order noise from a parallel group-by, not a change in the analysis.
+That noise was enough to swap two rows whose economics are otherwise identical —
+`no_trade` under `base` and under `two_episodes`, which are the same all-zero row
+under a different label — and once the rows were misaligned, the float columns
+still matched within tolerance while the exact string column did not. The new
+two-episode scenarios did not cause the fragility; they exposed it by creating
+the first pairs of near-identical rows.
+
+The fix is `_canonical_sort`, used by both the writer and the check: order by the
+exactly-comparable columns first and let floats break only the remaining ties, so
+row order is a function of the data rather than of summation order. Two tests pin
+it, one reproducing the swap an all-column sort makes under 1e-13 of noise. The
+committed tables were rewritten in the new order without recomputing any value.
+
+**Verification.** 422 tests pass, coverage 87.8% against a 75% floor, `ruff
+check`, `ruff format --check` and `mypy` clean across 37 source files,
+`npm run build` renders four pages with 11 links validated, and a Playwright pass
+over all four pages at 1440px and 390px reports zero console errors, zero
+horizontal overflow and no `NaN`, `undefined` or uninterpolated tokens. New tests
+cover both metrics against hand-checkable values, including the partial-day drop
+and duration weighting, and pin that a second episode can only add margin while
+leaving the one-episode result untouched; the sensitivity count assertion now
+derives from the scenario registry instead of a hardcoded number.
+
+**Deliberately not done, and why.** The site does not yet render an
+issued/abstained counter from the prospective ledger. The workflow only reached
+the default branch in this session, so the counter would read zero today, and
+shipping a zero counter is a weaker statement than the sentence already on the
+home page saying the ledger is running and not yet long enough to score. That
+counter is the first item when the ledger has real rows. The GitHub About/topics
+metadata still needs applying by hand, and the deferred home-page commercial
+comparison remains deferred.
+
 ### P7 — fix the prospective fundamentals arm and make it an experiment — recorded before code
 
 Review finding (16 September 2026), reproduced rather than argued. P6 wired
@@ -2644,6 +2779,32 @@ to pass its export freshness check. The corrected engine changes the battery
 schema/sample; regenerate a reviewed, frozen release in F and verify
 `gpa export --check`, the site build and browser smoke before publication.
 The deployed dashboard still contains the earlier development results.
+
+## Historical plan of record — superseded numbers below
+
+**Everything from here to the end of this document is the original plan, written
+on 14 September 2026 before implementation began. Its figures are superseded and
+must not be quoted.** They are kept because the handoff entries above refer back
+to them, and because the gap between what was planned and what was built is part
+of the record.
+
+Specifically: the "Baseline findings" section below quotes MAE 21.04 EUR/MWh on
+8,971 scored cells, a 369-day battery sample and EUR 7,024 incremental margin.
+The frozen release now reports **22.07 EUR/MWh on 58,645 cells, a 2,404-day
+sample and EUR 29,014/MW incremental** (about EUR 4,400/MW per year). The
+execution checkpoint at the top of this document is the current state.
+
+P3's text below also describes a study that was deliberately **not executed as
+written**: the Marktstammdatenregister ingestion, the 2027-2030 scenario paths and
+the CAPEX/OPEX asset-screening sheet were dropped during planning in favour of a
+market-mechanism study built on `capture_rate` and Energy-Charts'
+`/installed_power`. The reasoning and the delivered scope are recorded in the P3
+plan and handoff entries above.
+
+P8 further supersedes the framing: the central question is no longer "does a
+validated forecast create battery value" but the market claim that solar removed
+Germany's peak premium while widening the within-day range storage is paid for,
+with the forecast and battery studies serving as its evidence.
 
 ## Positioning
 

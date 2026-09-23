@@ -76,12 +76,21 @@ _COVERAGE_SCHEMA: Final = pl.Schema(
 )
 
 
+SpecKwargs = dict[str, float]
+"""Overrides for :class:`BatterySpec` fields, by field name."""
+
+
 @dataclass(frozen=True, slots=True)
 class BatterySpec:
     """Physical and economic assumptions for one battery experiment.
 
     Both cost rates apply to absolute grid-side energy (charge plus discharge).
     Equivalent cycles use battery-side throughput / (2 * nameplate capacity).
+    ``max_cycles_per_day`` bounds a single charge-then-discharge episode, and
+    ``max_episodes_per_day`` bounds how many of those a day may contain, so the
+    daily cycle ceiling is their product. The default pair is the one-cycle
+    benchmark; two episodes is the pattern a German day-ahead battery actually
+    runs once solar carves a midday trough between the two demand peaks.
     Cost rates are assumptions, not calibrated market or investment costs.
     SOC resolution can materially limit dispatch: quarter-hour studies need
     a finer grid than the default 0.25 MWh hourly benchmark (for example 0.05).
@@ -95,6 +104,7 @@ class BatterySpec:
     degradation_cost_eur_mwh: float = 0.0
     initial_soc_mwh: float = 0.0
     max_cycles_per_day: float = 1.0
+    max_episodes_per_day: float = 1.0
 
     def __post_init__(self) -> None:
         if any(not math.isfinite(getattr(self, field.name)) for field in fields(self)):
@@ -109,6 +119,10 @@ class BatterySpec:
             raise ValueError("battery costs cannot be negative")
         if not 0.0 < self.max_cycles_per_day <= 1.0:
             raise ValueError("max_cycles_per_day must be in (0, 1]")
+        if int(self.max_episodes_per_day) != self.max_episodes_per_day:
+            raise ValueError("max_episodes_per_day must be a whole number of episodes")
+        if self.max_episodes_per_day < 1:
+            raise ValueError("max_episodes_per_day must be at least one")
         if not 0.0 <= self.initial_soc_mwh <= self.energy_mwh:
             raise ValueError("initial_soc_mwh must be inside the battery capacity")
         for value, label in (
@@ -259,7 +273,7 @@ def backtest_predictions(
     model_names: Iterable[str] = DEFAULT_MODELS,
     durations_mwh: Sequence[float] = (1.0, 2.0, 4.0),
     horizon_steps: int | None = None,
-    spec_kwargs: dict[str, float] | None = None,
+    spec_kwargs: SpecKwargs | None = None,
     timezone: str = "Europe/Berlin",
 ) -> BatteryBacktestResult:
     """Compare all requested models on identical complete, settled days.
@@ -482,11 +496,19 @@ def _schedule(
 ) -> list[tuple[float, float]]:
     """Backward DP, then one forward execution of the preselected daily policy.
 
-    With one charge-then-discharge episode and terminal SOC equal to initial
-    SOC, throughput is exactly twice (peak SOC - initial SOC). Bounding that
-    peak therefore enforces the daily equivalent-cycle budget without a third
-    DP state. This equivalence does NOT hold for multi-cycle or free-terminal
-    schedules. A non-grid-aligned budget is rounded down, never exceeded.
+    The phase dimension is what makes an episode an episode. Phase ``2i`` means
+    the schedule is inside episode ``i`` and may still charge; phase ``2i+1``
+    means it has begun discharging that episode. Charging from an odd phase
+    opens the next episode, and is refused once ``max_episodes_per_day`` are
+    spent, so a day holds at most that many charge-then-discharge episodes and
+    nothing is left to an implicit tie-break.
+
+    Within one episode, terminal SOC equal to initial SOC makes throughput
+    exactly twice (peak SOC - initial SOC), so bounding that peak enforces the
+    per-episode cycle budget without a third DP state. That equivalence is
+    per-episode, not per-day: with several episodes the daily ceiling is the
+    product of the two bounds, which is why both are declared. A non-grid-aligned
+    budget is rounded down, never exceeded.
     """
     grid = spec.soc_step_mwh
     initial = round(spec.initial_soc_mwh / grid)
@@ -494,18 +516,28 @@ def _schedule(
         round(spec.energy_mwh / grid),
         initial + math.floor(spec.max_cycles_per_day * spec.energy_mwh / grid + 1e-9),
     )
-    values = [[-math.inf] * (peak + 1) for _ in range(2)]
-    values[0][initial] = values[1][initial] = 0.0
+    phases = 2 * int(spec.max_episodes_per_day)
+    values = [[-math.inf] * (peak + 1) for _ in range(phases)]
+    for phase in range(phases):
+        values[phase][initial] = 0.0
     policies: list[list[list[tuple[int, float, int] | None]]] = []
     for signal, duration in reversed(list(zip(prices, durations, strict=True))):
-        next_values = [[-math.inf] * (peak + 1) for _ in range(2)]
-        policy: list[list[tuple[int, float, int] | None]] = [[None] * (peak + 1) for _ in range(2)]
-        for phase in (0, 1):
+        next_values = [[-math.inf] * (peak + 1) for _ in range(phases)]
+        policy: list[list[tuple[int, float, int] | None]] = [
+            [None] * (peak + 1) for _ in range(phases)
+        ]
+        for phase in range(phases):
+            discharging = phase % 2 == 1
             for state in range(initial, peak + 1):
                 for next_state, action in _actions(state, duration, spec, initial, peak):
-                    if phase == 1 and action < 0:
+                    if action < 0 and discharging and phase + 1 >= phases:
                         continue
-                    next_phase = 1 if action > 0 else phase
+                    if action > 0:
+                        next_phase = phase + 1 if not discharging else phase
+                    elif action < 0 and discharging:
+                        next_phase = phase + 1
+                    else:
+                        next_phase = phase
                     value = action * signal - abs(action) * (
                         spec.variable_cost_eur_mwh + spec.degradation_cost_eur_mwh
                     )

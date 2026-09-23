@@ -1,13 +1,19 @@
 ---
-title: Battery value
+title: Storage value
 ---
 
-# Does a better forecast create battery value?
+# The shape is the asset. The forecast is a margin on top of it.
 
-A DE-LU day-ahead arbitrage study: compare a forecast-guided battery with
-three fixed simple strategies, then test how much of its advantage survives
-costs, downtime and weaker forecast signals. This is an hourly analytical
-benchmark, not a forecast of each traded quarter-hour or a complete asset valuation.
+A DE-LU day-ahead arbitrage study. A forecast-guided battery is dispatched
+against realised prices beside three fixed simple strategies, and the advantage
+is then stressed with costs, downtime, a weakened signal and a second daily
+cycle. The result that matters commercially is the split: most of the margin
+comes from the daily price shape, which repeats and needs no model, and the
+forecast adds a minority of it.
+
+This is an hourly day-ahead benchmark. It is a **lower bound** on what a German
+battery earns, not a complete asset valuation: intraday and balancing revenue,
+CAPEX and financing are outside it.
 
 ```js
 const summary = [...await FileAttachment("data/battery_summary.parquet").parquet()];
@@ -37,6 +43,8 @@ const scenarioNames = new Map([
   ["efficiency_85", "85% round-trip efficiency"],
   ["signal_50", "50% forecast deviation from D-1"],
   ["calendar_downtime", "One unavailable day in twenty"],
+  ["two_episodes", "Two charge/discharge episodes a day"],
+  ["two_episodes_cost_2_3", "Two episodes + 2 / 3 EUR costs"],
   ["combined", "2/3 costs + 85% + 50% signal + downtime"],
 ]);
 const name = (value) => labels.get(value) ?? value;
@@ -58,6 +66,8 @@ const asset = (row) => row.energy_mwh === duration;
 const fitted = (row) => ["ridge", "lightgbm"].includes(row.strategy);
 const headline = stresses.find((d) => asset(d) && d.strategy === "ridge" && d.scenario === "base");
 const batteryDays = headline.days;
+const sampleYears = batteryDays / 365.25;
+const twoEpisodes = stresses.find((d) => asset(d) && d.strategy === "ridge" && d.scenario === "two_episodes");
 const selectedRisk = risk.filter((d) => asset(d) && fitted(d));
 const selectedPairs = comparisons.filter((d) => asset(d) && fitted(d));
 const baselineValue = summary.find((d) => asset(d) && d.strategy === headline.best_naive).profit_eur;
@@ -72,13 +82,20 @@ const sampleDate = d3.max(sample, (d) => String(d.local_date));
 
 ## Decision in brief
 
-For the selected ${duration}h battery, Ridge adds **EUR ${euro(headline.incremental_vs_best_naive_eur_mw)}/MW**
-over **${name(headline.best_naive)}**, the strongest fixed naive *in this observed sample*:
-a ${pct(headline.incremental_vs_best_naive_eur_mw / baselineValue)} uplift over that comparator,
-not the percentage reduction in price forecast error.
+For the selected ${duration}h battery, Ridge adds **EUR
+${euro(headline.incremental_vs_best_naive_eur_mw / sampleYears)}/MW per year** —
+EUR ${euro(headline.mean_daily_incremental_eur_mw)}/MW on an average day — over
+**${name(headline.best_naive)}**, the strongest fixed naive *in this observed
+sample*. That is a ${pct(headline.incremental_vs_best_naive_eur_mw / baselineValue)}
+uplift over that comparator, and it is not the percentage reduction in price
+forecast error.
 
-The comparison covers **${batteryDays} common eligible days**, from ${headline.sample_start}
-to ${headline.sample_end}. These are sample-period margins, **not annualized returns**.
+Read the rate, not the total. The same result stated as a cumulative is EUR
+${euro(headline.incremental_vs_best_naive_eur_mw)}/MW, which sounds like a
+different order of magnitude and is not: it spans **${batteryDays} common
+eligible days**, from ${headline.sample_start} to ${headline.sample_end}, about
+${sampleYears.toFixed(1)} years. These are sample-period margins, **not
+annualized returns** and not a projection.
 The base case excludes variable operating and degradation costs; the nonzero
 cases below rerun the optimizer. CAPEX, fixed OPEX, taxes, financing and other
 market revenues are outside this study.
@@ -90,7 +107,11 @@ It is conditional on already-inspected history, not proof of future performance.
 **What is being valued.** A deliberately simple asset: 1 MW of power at
 ${duration} MWh of energy, 90% round-trip efficiency in the base case, at most
 one charge-then-discharge episode per day, starting and ending every day empty,
-with no rolling intraday re-optimization. The schedule for a whole delivery day
+with no rolling intraday re-optimization. That one-episode rule binds on almost
+every day in the sample, and it is a choice rather than a physical limit — a
+German battery facing a midday solar trough between two demand peaks runs two.
+The [two-episode stress](#costs-and-robustness) below reports what that
+conservatism costs. The schedule for a whole delivery day
 is chosen from the forecast at the day-ahead gate and then settled against the
 prices that actually cleared. The simplicity is the point: every euro of
 difference between strategies comes from the price signal each one acted on,
@@ -201,6 +222,28 @@ It assumes the outage is known before scheduling, not a mid-cycle failure or an
 imbalance penalty. The combined case applies 2/3 costs, 85% efficiency, 50% signal
 and the same downtime calendar.
 
+**Two episodes a day** relaxes the asset rather than the forecast: the same
+frozen predictions, days and settlement, dispatched by a battery allowed a
+second charge-then-discharge cycle. It is the pattern the German day now invites
+— charge overnight, sell the morning ramp, recharge in the midday solar trough,
+sell the evening peak — and the published one-episode benchmark forbids it.
+
+The result splits in two directions, and the split is the point. Gross margin
+rises **${pct(twoEpisodes.profit_eur / headline.profit_eur - 1)}**, to EUR
+${euro(twoEpisodes.profit_eur_mw / sampleYears)}/MW per year, at
+${(twoEpisodes.equivalent_cycles / twoEpisodes.days).toFixed(2)} equivalent
+cycles a day — the optimizer takes the second episode only when it pays, which
+is not every day. But Ridge's advantage over the best naive *falls*, from EUR
+${euro(headline.incremental_vs_best_naive_eur_mw / sampleYears)} to EUR
+${euro(twoEpisodes.incremental_vs_best_naive_eur_mw / sampleYears)}/MW per year.
+
+The second episode is the midday trough, and the trough is the most predictable
+feature of the German day: it arrives with the sun, at roughly the same hours,
+every clear day. A naive strategy captures it almost as well as a fitted model
+does. Widening the asset therefore adds margin that requires no forecast, which
+is the same conclusion this page reaches from the other direction — the shape is
+the asset, and the forecast earns its keep on the days the shape is atypical.
+
 ## Downside and concentration
 
 ```js
@@ -306,8 +349,10 @@ years, ${foresightCompetition.fitted_year_min}-${foresightCompetition.fitted_yea
 the same sign holds for the forecast-driven strategies too) — not negatively.
 The period also includes the 2021-2022 price shock and changes in renewable
 output. These are possible confounders, not effects separated by this analysis.
-**This is not evidence that competition does not erode margin**: the annual
-correlation cannot identify its contribution. The trailing partial year is
+**Read this as an absence of evidence, not as evidence of absence.** An annual
+correlation over this few points cannot isolate a competition effect, so what
+the data supports is the narrow statement that compression has not yet reached
+the price — not the broader one that it will not. The trailing partial year is
 excluded using the frozen study's end, not today's date; the included 2020
 sample starts on 3 January and dispatch coverage exclusions still apply.
 
@@ -377,6 +422,20 @@ complete settled days out of ${coverage[0].candidate_days} candidate days. Incom
 days and ambiguous clock-only DST days are excluded, not imputed or silently
 treated as physical quarter-hour trades. Full-precision forecast scores and
 rounded-input battery economics serve different, explicitly recorded purposes.
+
+**Why this is a lower bound, and by how much is not measured here.** A German
+battery does not earn only from the day-ahead auction. It can also sell
+continuous intraday, where a shorter lead time and quarter-hourly products reward
+exactly the flexibility this study holds fixed at the noon gate, and it can bid
+balancing capacity and energy — FCR, aFRR and mFRR — tendered by the four German
+TSOs through their joint platform
+([regelleistung.net](https://www.regelleistung.net/)). Those revenue stacks were
+historically the larger part of a German battery's income and are not modelled
+here, nor is their interaction: capacity committed to balancing is capacity that
+cannot simultaneously arbitrage. The number on this page is therefore what the
+day-ahead shape alone is worth to a price-taking asset, which is a floor under a
+real portfolio's revenue rather than an estimate of it. Quantifying the split
+would need balancing-market and intraday data this project does not ingest.
 
 This is **retrospective development evidence**, already inspected. Forecast
 parameters are not reselected by these sensitivities, and no untouched or
