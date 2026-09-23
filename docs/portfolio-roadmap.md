@@ -287,11 +287,11 @@ what the honest answer is: the protocol is the transferable part. And the author
 line became a section with the repository link rather than a clause at the end of
 the premises.
 
-**Two rendering defects were introduced and caught before publishing.** A nested
-template literal inside a markdown interpolation — a table built with
-`${rows.map((y) => \`...${y}...\`)}` — made Observable's parser read the inner
-`${y}` as an outer interpolation and throw `y is not defined`, blanking every
-chart on the page. Rebuilt as an `Inputs.table` cell, which is the pattern the
+**Two rendering defects were introduced and caught before publishing.** The
+fleet-duration table was first written as a markdown row template whose per-row
+string was itself a backtick literal. Observable's markdown interpolation does
+not nest: it read the inner row variable as an outer interpolation and threw
+"y is not defined", blanking every chart on the page. Rebuilt as an `Inputs.table` cell, which is the pattern the
 rest of the page already uses. Then the new reproduce command, one unbreakable
 377px token, pushed the page sideways on a phone; `overflow-wrap: anywhere` on
 inline code fixes it, the same fix `forecast.md` already carried. An attempt to
