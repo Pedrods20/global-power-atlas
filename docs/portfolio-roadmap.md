@@ -230,6 +230,57 @@ claim, the evidence behind it and the main risk to it within a minute, without
 reading a methodology page first. Every number on the site is reproducible from
 the committed release, and no figure appears only as a multi-year cumulative.
 
+### P10 — the second review pass: a red CI, an undeployed fix, and a false claim
+
+Asked whether any incoherences remained, this pass checked the published
+artifact against the repository's own CI and workflow history rather than
+re-reading the prose. Three findings, and the third is the one that matters.
+
+**1. P9 was never deployed.** `71f5bab`'s CI run was cancelled by the
+concurrency group when `b084c0a` arrived ninety seconds later, and `b084c0a`'s
+own run failed, so `Deploy` was skipped both times. The live site was still
+serving `514dbf6`. Fetching the published page for "pumped hydro" returned
+nothing, which is how this was caught. Publishing is not finished when the push
+succeeds; it is finished when the deployed page contains the change.
+
+**2. The CI failure was a real regression, not a flake.** The browser smoke test
+failed on `methodology` at 390px. The cause was the reproduce command added in
+P9: `gpa.metrics.price.intraday_spread(period="month")` is one unbreakable
+377-pixel token, and the methodology page had no `overflow-wrap` rule. This was
+the third page to need the identical fix, because each page carried its own copy
+of the layout guards and a page without one started from zero. The guards now
+live once, in the config's `head`, and the three per-page copies are gone.
+
+The process failure behind it is worth recording: after editing
+`site/methodology.md` the verification run was `npm run build` alone. The build
+validates links, not layout. The project's own `npm run test:browser` — the gate
+CI actually runs, and the one that caught this — was never re-run against the
+edit. A bespoke check script had been substituted for the project's gate earlier
+in the session, and it did not assert what the gate asserts.
+
+**3. The site claimed a prospective ledger was running. It has never issued.**
+The GitHub API reports **11 Forecast runs between 14 and 22 September 2026, all
+11 failed, zero successes**, every one of them at the same step: `Issue before
+the market gate`. The reason is documented in the workflow's own comments —
+GitHub's scheduled workflows are best-effort, the old 09:30Z cron was delivered
+between 13:14Z and 15:57Z, hours past the midday gate, and `gpa issue` refused
+to backdate. That is the tool behaving correctly. But `site/index.md` said "a
+separately recorded prospective ledger is running", the README said "now
+running", and `site/forecast.md` said "both arms are issued every day" — three
+statements of fact that the run history contradicts, on a site whose entire
+argument is that its claims can be checked.
+
+All three are corrected to state the run history, the diagnosis and what remains
+unproven. The corrected version is a better disclosure than the false one: it
+shows a scheduling failure mode, a tool refusing to produce a dishonest number,
+and a fix whose effect is not yet demonstrated. Nothing prospective is claimed
+until a run clears a gate.
+
+**Verification.** No Python changed, so the frozen release and `gpa export
+--check` are untouched. `npm run test:browser`, the gate that caught this, now
+passes on all four pages at 1440 and 390 pixels, including the battery page's
+chart, table and text assertions.
+
 ### P9 — adversarial review of the published site, and the fixes it forced
 
 The user asked for a brutal review of the live version. It was read rendered, in
@@ -314,8 +365,9 @@ pushed to `origin/main` as `1cce26c`, CI gated the deploy, and fetching
 durability section, the solar-cannibalisation sentence and the BloombergNEF
 citation — none of which existed on the live site before. The 42-commit backlog
 is no longer invisible, and `forecast.yml`'s two daily slots are now on the
-default branch, so the prospective ledger begins accumulating without further
-action.
+default branch. **The claim made here that the ledger would therefore "begin
+accumulating without further action" was wrong, and P10 below has the run
+history that disproves it.**
 
 **Step 2, the analysis the thesis needed, is done.** Two metrics were added to
 `gpa.metrics.price` and wired into the export:
@@ -435,9 +487,10 @@ derives from the scenario registry instead of a hardcoded number.
 **Deliberately not done, and why.** The site does not yet render an
 issued/abstained counter from the prospective ledger. The workflow only reached
 the default branch in this session, so the counter would read zero today, and
-shipping a zero counter is a weaker statement than the sentence already on the
-home page saying the ledger is running and not yet long enough to score. That
-counter is the first item when the ledger has real rows. The GitHub About/topics
+shipping a zero counter seemed weaker than the sentence already on the home
+page. **That sentence claimed the ledger was running, which was false**; P10
+replaces it with the run history and moves the counter to after the first
+verified issue. The GitHub About/topics
 metadata still needs applying by hand, and the deferred home-page commercial
 comparison remains deferred.
 

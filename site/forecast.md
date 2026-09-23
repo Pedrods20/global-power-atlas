@@ -301,7 +301,7 @@ The prospective path is operationalised by `gpa issue` and `gpa reconcile`: a sc
 
 That path is also where the fundamentals question gets settled by experiment rather than by argument. The ablation above cannot certify a publication vintage, so those features stay a labelled diagnostic in the retrospective release; a prospective run observes its own retrieval instant for the delivery day, so it can use them honestly there. Both arms are issued every day under separate model identities and separate policy identifiers, so the accumulating ledger scores them against each other instead of pooling them into one unlabelled record.
 
-The first separately recorded run is still needed before any of these metrics can be accepted. Historical battery dispatch and economic evaluation are published on the Battery page; the prospective battery result follows reconciliation and remains separate from the retrospective scores above.
+The first separately recorded run is still needed before any of these metrics can be accepted, and it has not happened: see the note above on why eleven scheduled attempts produced no issue. Historical battery dispatch and economic evaluation are published on the Battery page; the prospective battery result follows reconciliation and remains separate from the retrospective scores above.
 
 <style>
 .note {
@@ -309,8 +309,4 @@ The first separately recorded run is still needed before any of these metrics ca
   padding: .5rem 0 .5rem 1rem;
   color: var(--theme-foreground-muted);
 }
-main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
-/* The input-panel hash is 64 unbroken characters and would push the page
-   sideways on a phone. */
-main.observablehq p code { overflow-wrap: anywhere; }
 </style>

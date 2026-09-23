@@ -266,8 +266,17 @@ are outside scope. Day-ahead arbitrage is a lower bound on a German battery's
 revenue; quantifying the intraday and balancing stacks would need data this
 project does not ingest.
 
-The next credible step is the separately recorded prospective ledger, now
-running. It also carries the one open modelling question. Day-ahead load, wind
+The next credible step is the separately recorded prospective ledger, and it has
+not started yet in any sense that counts. Eleven scheduled runs between 14 and 22
+September 2026 all failed at the issue step: GitHub's scheduled workflows are
+best-effort and arrived hours past the midday gate, so `gpa issue` refused to
+backdate — correct behaviour, and the reason there is still no prospective record.
+The schedule now runs at 02:17 and 06:47 UTC, roughly eight and four hours of
+margin against the summer gate, and the fundamentals arm's blocking defect is
+fixed. The first verified pre-gate issue has not happened; when it does, the
+counter belongs on the site.
+
+That ledger also carries the one open modelling question. Day-ahead load, wind
 and solar forecasts measurably reduce error in the labelled ablation (Ridge
 22.07 → 19.17, LightGBM 25.56 → 20.56 EUR/MWh on the identical frozen test
 window), but the historical archive cannot certify when each value became

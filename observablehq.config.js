@@ -28,7 +28,17 @@ export default {
       '<path d="M3 12 L9 10 L13 22 L19 6 L23 14 L29 11" fill="none" ' +
       'stroke="#F0E442" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>' +
       "</svg>",
-  )}">`,
+  )}">
+<style>
+/* Page-wide layout guards, kept here rather than repeated per page: the
+   phone-overflow bug recurred on a third page precisely because each page
+   carried its own copy and a new page started without one.
+   A wide table scrolls itself instead of scrolling the document, and an
+   unbreakable inline token (a hash, a reproduce command) wraps instead of
+   pushing the page sideways. */
+main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
+main.observablehq p code, main.observablehq li code { overflow-wrap: anywhere; }
+</style>`,
 
   header: "",
   footer: ({ path }) =>

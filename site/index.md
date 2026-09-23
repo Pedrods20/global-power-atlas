@@ -317,8 +317,13 @@ stresses and downside on the [storage page](./battery).
   the measurement of it.
 - **This is already-inspected history.** It is development evidence from a
   frozen, reproducible release — not an untouched holdout and not a prospective
-  record. A separately recorded prospective ledger is running and is not yet
-  long enough to score.
+  record, and the prospective ledger that would change that **has not yet issued
+  a single forecast**. Eleven scheduled runs between 14 and 22 September 2026 all
+  failed, every one of them at the same step: GitHub's scheduler is best-effort
+  and delivered them hours after the midday gate, so `gpa issue` refused to
+  backdate a forecast — the tool working, not failing. The schedule has been moved
+  to two early slots and a defect in the fundamentals arm fixed, but until a run
+  actually issues before a gate, nothing prospective is claimed here.
 
 ## Premises
 
@@ -404,7 +409,4 @@ Plot.plot({
   padding: .5rem 0 .5rem 1rem;
   color: var(--theme-foreground-muted);
 }
-main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
-/* A reproduce command is one unbreakable token wider than a phone screen. */
-main.observablehq p code { overflow-wrap: anywhere; }
 </style>

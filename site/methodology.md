@@ -348,6 +348,3 @@ The study is zonal, not nodal;
 congestion, basis and transmission constraints are outside scope. Brazilian
 data is a national system comparison, not a wholesale price market.
 
-<style>
-main.observablehq > table { display: block; max-width: 100%; overflow-x: auto; }
-</style>
