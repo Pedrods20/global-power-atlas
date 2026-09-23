@@ -164,7 +164,9 @@ provider timing, each run issues two frozen identities — `ridge` on the
 information set above, `ridge_da` on that set plus these features — and the
 ledger records both, so they can be scored against each other. `ridge_da`
 abstains, and says so, when the provider has not published the delivery day
-before the gate.
+before the gate. This describes the design, not a record: as of 22 September
+2026 no scheduled run has issued before a gate, because all eleven attempts
+arrived after it (see the [forecast page](./forecast)).
 
 The limitation that remains is stated rather than hidden. Only the delivery
 day's snapshot carries an observed vintage; `ridge_da`'s training history keeps

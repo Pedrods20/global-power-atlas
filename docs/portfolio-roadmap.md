@@ -281,6 +281,17 @@ until a run clears a gate.
 passes on all four pages at 1440 and 390 pixels, including the battery page's
 chart, table and text assertions.
 
+**Correction to the above, found by checking the served page.** "All three are
+corrected" was not true when `cf247ac` shipped. The editing script applied the
+`site/forecast.md` fix, then applied a second replacement to the *unmodified*
+text and wrote that over the first, so the false sentence "both arms are issued
+every day" survived and the second edit's pointer to "the note above" pointed at
+nothing. The home page and README were correct; the forecast page was not.
+Grepping the live HTML for the new sentence, not the old one, is what exposed
+it. Fixed in the following commit, where `site/methodology.md`'s mechanism
+description also gained the same disclosure, since a reader of that page alone
+would otherwise take the design for a running record.
+
 ### P9 — adversarial review of the published site, and the fixes it forced
 
 The user asked for a brutal review of the live version. It was read rendered, in
