@@ -1,11 +1,10 @@
 """Leakage-safe fundamental forecast inputs.
 
 German TSO forecasts of demand, wind and solar are collected for DE-LU into the
-curated ``fundamentals`` dataset, today from Energy-Charts'
-``/public_power_forecast``; :class:`gpa.sources.smard.SmardSource` implements the
-same series independently but no zone is routed to it yet. This module defines a
-small interchange format for those snapshots and selects, for each panel row,
-the latest snapshot published before that row's own day-ahead gate.
+curated ``fundamentals`` dataset from Energy-Charts' ``/public_power_forecast``.
+This module defines a small interchange format for those snapshots and selects,
+for each panel row, the latest snapshot published before that row's own
+day-ahead gate.
 
 What the archive cannot supply is a publication vintage, and the three builders
 below differ only in the vintage they assign, which is the whole reason these
@@ -23,7 +22,6 @@ release:
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Sequence
 from typing import Final
 from zoneinfo import ZoneInfo
 
@@ -36,13 +34,9 @@ __all__ = [
     "FUNDAMENTAL_COLUMNS",
     "FUNDAMENTAL_FEATURES",
     "FUNDAMENTAL_METADATA",
-    "SMARD_FORECAST_FILTERS",
     "attach",
-    "combine_smard_series",
     "empty",
-    "from_smard_series",
     "from_store",
-    "from_store_observed",
     "from_store_prospective",
     "normalize",
 ]
@@ -72,13 +66,6 @@ checking what an issue knew should be able to read the age off the evidence.
 
 FUNDAMENTAL_COLUMNS: Final[tuple[str, ...]] = FUNDAMENTAL_FEATURES + FUNDAMENTAL_METADATA
 """Every column :func:`attach` adds, fitted or not."""
-
-SMARD_FORECAST_FILTERS: Final[dict[str, int]] = {
-    "wind_onshore": 123,
-    "solar": 125,
-    "wind_offshore": 3791,
-}
-"""Public SMARD chart filters for the three renewable forecast series."""
 
 _REQUIRED = {
     "zone",
@@ -110,7 +97,9 @@ def normalize(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
 
     ``ts_utc`` is the delivery interval start.  ``published_at`` is when the
     snapshot became available, not when it was downloaded.  Keeping those two
-    instants separate is what makes an as-of join possible.
+    instants separate is what makes an as-of join possible.  A publication after
+    delivery is kept rather than rejected: it is simply never eligible for the
+    D-1 issue, and it remains useful for auditing late revisions.
     """
     missing = _REQUIRED - set(frame.columns)
     if missing:
@@ -124,11 +113,6 @@ def normalize(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
     zones = out["zone"].unique().to_list()
     if zones and zones != [zone.code]:
         raise ValueError(f"fundamentals expect zone {zone.code}, got {sorted(zones)}")
-    if out.select((pl.col("published_at") > pl.col("ts_utc")).any()).item():
-        # A publication timestamp after delivery is allowed; it is simply not
-        # eligible for the D-1 issue.  Do not reject it: the same frame may be
-        # useful for auditing late revisions.
-        pass
     return out
 
 
@@ -256,48 +240,6 @@ def from_store(zone: Zone) -> pl.DataFrame:
     )
 
 
-def from_store_observed(zone: Zone, *, retrieved_at: dt.datetime) -> pl.DataFrame:
-    """The same archive rows, stamped with an instant that was actually observed.
-
-    This is the *observed* counterpart to :func:`from_store`, and the difference
-    between them is the whole reason these features are not in the published
-    retrospective release. ``retrieved_at`` is when this run read the forecast,
-    so it is a real, varying instant rather than a policy constant:
-    :func:`attach` measures ``da_forecast_age_hours`` from it, and a snapshot
-    read after the gate is correctly dropped instead of being assumed eligible.
-
-    It is an upper bound on the provider's own publication time, since the value
-    was published at or before the moment this project retrieved it. That
-    direction is the safe one: a later stamp can only make a row less eligible,
-    never more.
-
-    Applying it to a whole archive is what a caller must not do when the result
-    has to be fitted: one present-day stamp fails every historical row's gate and
-    leaves no training history at all. :func:`from_store_prospective` is the
-    builder a live issue wants; this one is the primitive underneath it and the
-    right choice only where no history is needed.
-
-    Args:
-        zone: Supplies the market timezone and the store partition.
-        retrieved_at: Timezone-aware instant at which this run read the archive.
-
-    Raises:
-        ValueError: If ``retrieved_at`` is naive, which would leave the vintage
-            unanchored and silently comparable against UTC gates.
-    """
-    if retrieved_at.tzinfo is None:
-        raise ValueError("retrieved_at must be timezone-aware")
-
-    local = _hourly_wide(zone)
-    if local is None:
-        return empty()
-
-    stamp = retrieved_at.astimezone(dt.UTC)
-    return local.with_columns(
-        pl.lit(stamp).cast(pl.Datetime(time_unit="us", time_zone="UTC")).alias("published_at")
-    ).select(empty().schema.names())
-
-
 def from_store_prospective(
     zone: Zone, *, delivery_date: dt.date, retrieved_at: dt.datetime
 ) -> pl.DataFrame:
@@ -350,60 +292,6 @@ def from_store_prospective(
             .alias("published_at")
         )
         .select(empty().schema.names())
-    )
-
-
-def from_smard_series(
-    payload: object,
-    *,
-    zone: Zone,
-    series: str,
-    published_at: dt.datetime,
-) -> pl.DataFrame:
-    """Parse one public SMARD forecast response into snapshot rows.
-
-    The endpoint returns ``{"series": [[epoch_ms, value], ...]}``.  The caller
-    supplies the publication time captured at issue, because SMARD's historical
-    chart archive does not provide a reliable publication vintage for every
-    old response.
-    """
-    if series not in SMARD_FORECAST_FILTERS and series != "load":
-        raise ValueError(f"unknown SMARD forecast series {series!r}")
-    if published_at.tzinfo is None:
-        raise ValueError("published_at must be timezone-aware")
-    if not isinstance(payload, dict) or not isinstance(payload.get("series"), list):
-        raise ValueError("SMARD forecast response must contain a series list")
-    rows: list[dict[str, object]] = []
-    for item in payload["series"]:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            continue
-        timestamp, value = item
-        if timestamp is None or value is None:
-            continue
-        rows.append(
-            {
-                "zone": zone.code,
-                "ts_utc": dt.datetime.fromtimestamp(float(timestamp) / 1000, dt.UTC),
-                "published_at": published_at.astimezone(dt.UTC),
-                "load_forecast_mw": float(value) if series == "load" else None,
-                "wind_forecast_mw": float(value) if series == "wind_onshore" else None,
-                "solar_forecast_mw": float(value) if series == "solar" else None,
-            }
-        )
-    return pl.DataFrame(rows, schema=empty().schema) if rows else empty()
-
-
-def combine_smard_series(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
-    """Combine parsed SMARD series into one wide snapshot per interval."""
-    nonempty = [frame for frame in frames if not frame.is_empty()]
-    if not nonempty:
-        return empty()
-    return (
-        pl.concat(nonempty, how="vertical_relaxed")
-        .group_by(["zone", "ts_utc", "published_at"])
-        .agg(*(pl.col(column).drop_nulls().first().alias(column) for column in _FLOATS))
-        .select(empty().schema.names())
-        .sort(["ts_utc", "published_at"])
     )
 
 

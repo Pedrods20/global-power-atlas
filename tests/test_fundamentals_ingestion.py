@@ -189,19 +189,6 @@ def _first_hour_panel() -> pl.DataFrame:
     )
 
 
-def test_from_store_observed_stamps_the_instant_it_was_read_not_the_gate(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_fundamentals(monkeypatch, _DAY_START, hours=24)
-    retrieved = _GATE - dt.timedelta(hours=6)
-
-    observed = fundamentals.from_store_observed(ZONE, retrieved_at=retrieved)
-
-    assert observed.height == 24
-    assert observed["published_at"].unique().to_list() == [retrieved]
-    # The retrospective path assigns the gate itself to the very same rows.
-    assert fundamentals.from_store(ZONE)["published_at"].unique().to_list() == [_GATE]
-
-
 def test_an_observed_vintage_makes_the_forecast_age_real_rather_than_zero(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
     _write_fundamentals(monkeypatch, _DAY_START, hours=24)
@@ -210,7 +197,9 @@ def test_an_observed_vintage_makes_the_forecast_age_real_rather_than_zero(tmp_pa
     policy = fundamentals.attach(panel, fundamentals.from_store(ZONE), ZONE)
     observed = fundamentals.attach(
         panel,
-        fundamentals.from_store_observed(ZONE, retrieved_at=_GATE - dt.timedelta(hours=6)),
+        fundamentals.from_store_prospective(
+            ZONE, delivery_date=dt.date(2025, 1, 1), retrieved_at=_GATE - dt.timedelta(hours=6)
+        ),
         ZONE,
     )
 
@@ -218,31 +207,6 @@ def test_an_observed_vintage_makes_the_forecast_age_real_rather_than_zero(tmp_pa
     # only as a labelled ablation; a real run has a real, varying age.
     assert policy["da_forecast_age_hours"][0] == 0
     assert observed["da_forecast_age_hours"][0] == 6
-
-
-def test_a_snapshot_read_after_the_gate_is_refused_rather_than_backdated(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_fundamentals(monkeypatch, _DAY_START, hours=24)
-
-    late = fundamentals.attach(
-        _first_hour_panel(),
-        fundamentals.from_store_observed(ZONE, retrieved_at=_GATE + dt.timedelta(hours=1)),
-        ZONE,
-    )
-
-    assert late["da_load_forecast"][0] is None
-    assert late["da_forecast_age_hours"][0] is None
-
-
-def test_from_store_observed_rejects_a_naive_instant(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    with pytest.raises(ValueError, match="timezone-aware"):
-        fundamentals.from_store_observed(ZONE, retrieved_at=dt.datetime(2024, 12, 31, 5))
-
-
-def test_from_store_observed_is_empty_when_nothing_backfilled(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    assert fundamentals.from_store_observed(ZONE, retrieved_at=_GATE).is_empty()
 
 
 def test_load_panel_include_fundamentals_adds_the_feature_columns(tmp_path, monkeypatch):
@@ -311,28 +275,6 @@ def _multi_day_panel() -> pl.DataFrame:
 
 def _write_five_days(monkeypatch) -> None:
     _write_fundamentals(monkeypatch, _DAY_START, hours=24 * 5)
-
-
-def test_a_single_observed_stamp_erases_the_whole_training_history(tmp_path, monkeypatch):
-    """The defect the mixed vintage exists to fix, kept as a regression.
-
-    ``from_store_observed`` stamps every archived row with one instant, and
-    ``attach`` keeps a row only when its vintage precedes that row's own gate.
-    Every historical gate is already past, so one present-day stamp leaves the
-    model nothing to fit and the whole delivery day abstains.
-    """
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    _write_five_days(monkeypatch)
-
-    attached = fundamentals.attach(
-        _multi_day_panel(),
-        fundamentals.from_store_observed(ZONE, retrieved_at=_RETRIEVED),
-        ZONE,
-    )
-    history = attached.filter(pl.col("local_date") < _DELIVERY)
-
-    assert history.height == 4
-    assert history["da_load_forecast"].null_count() == 4
 
 
 def test_the_prospective_vintage_keeps_the_history_the_model_has_to_fit(tmp_path, monkeypatch):

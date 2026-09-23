@@ -10,23 +10,16 @@ and no browser credential is required.
 
 ## Scope
 
-The historical context covers four zones. Forecasting and battery valuation are
-focused on Germany-Luxembourg (DE-LU), where the project has its deepest price,
-load and generation history — roughly seven and a half years against about two
-years for the context zones. That asymmetry is deliberate: DE-LU is the only
-market here with enough history to support a walk-forward benchmark, and the
-other zones are shown as context rather than modelled.
+The study covers one market, Germany-Luxembourg (DE-LU): roughly seven and a
+half years of price, load and generation history, which is what a walk-forward
+benchmark and a multi-year storage valuation need.
 
-| Zone | Data | Provider | Committed coverage | Use |
-|---|---|---|---|---|
-| DE-LU | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2018-12-31, 94 monthly partitions | Forecast reference market |
-| DE-LU | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation and the prospective `ridge_da` arm |
-| France | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2024-09-01 | Historical comparison |
-| Spain | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2024-09-01 | Historical comparison |
-| Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | From 2024-09-01 | System comparison |
+| Data | Provider | Committed coverage | Use |
+|---|---|---|---|
+| Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | From 2018-12-31, 94 monthly partitions | The market study, the forecast and the battery valuation |
+| Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | From 2019-01-05 | Labelled ablation and the prospective `ridge_da` arm |
 
-The dashboard refreshes monthly. Its purpose is historical context around the
-forecast study, not continuous market monitoring.
+The store refreshes monthly; the prospective ledger runs daily and separately.
 
 ## Two spreads, and why both are reported
 
@@ -72,9 +65,8 @@ and revision behaviour change how far a result can be pushed.
 
 **Energy-Charts** (`api.energy-charts.info`) is published by the Fraunhofer
 Institute for Solar Energy Systems ISE under CC BY 4.0. It republishes ENTSO-E
-and SMARD figures through an open API, which is why it carries the European
-zones here while an ENTSO-E Transparency token is obtained: the underlying
-numbers are the ones the system operators publish. Four endpoints are used —
+and SMARD figures through an open API, so the underlying numbers are the ones
+the system operators publish. Four endpoints are used —
 `/price` for day-ahead prices, `/public_power` for load and generation by fuel,
 `/public_power_forecast` for the day-ahead fundamentals, which feed the labelled
 ablation below and the prospective `ridge_da` arm but never the published
@@ -84,21 +76,9 @@ handled explicitly rather than assumed: the `end` parameter is inclusive, and
 the German series changed resolution without notice, so interval length is
 measured from the returned timestamps instead of being hardcoded.
 
-**SMARD** (`smard.de/app/chart_data`) is the Bundesnetzagentur's market-data
-platform and is implemented as a second, independent German adapter, so the long
-DE-LU price and fundamentals history can be backfilled without depending on the
-rate-limited Energy-Charts mirror. It is registered and tested but no zone is
-routed to it yet: DE-LU currently takes every dataset, fundamentals included,
-from Energy-Charts, and every row in the committed store records Energy-Charts
-or ONS as its source. The retrospective archive and the prospective run read the
-same provider; what separates them is the publication vintage each can claim.
-
-**ONS** is read through two endpoints on purpose, because they do not share a
-publication lag. Generation comes from the hourly energy balance, one CSV per
-calendar year on a public S3 bucket, whose contents trail real time by roughly
-two days; load comes from the verified-load API, which stays within about an
-hour. Timestamps are Brasília local time, and the pre-2019 daylight-saving
-transitions are resolved explicitly rather than left to a library default.
+Every row in the committed store records Energy-Charts as its source. The
+retrospective archive and the prospective run read the same provider; what
+separates them is the publication vintage each can claim.
 
 **Revisions.** Stored observations are the providers' latest revisions, not
 publication-time snapshots. Lagging every fundamental prevents a delivery-day
@@ -325,9 +305,8 @@ Data providers, whose terms govern the underlying observations:
 - Energy-Charts, Fraunhofer Institute for Solar Energy Systems ISE —
   [energy-charts.info](https://www.energy-charts.info/), API at
   `api.energy-charts.info`, licensed CC BY 4.0
-- SMARD, Bundesnetzagentur — [smard.de](https://www.smard.de/)
-- ONS, Operador Nacional do Sistema Elétrico —
-  [ons.org.br](https://www.ons.org.br/)
+- SMARD, Bundesnetzagentur, upstream of the German figures —
+  [smard.de](https://www.smard.de/)
 - ENTSO-E Transparency Platform, upstream of the European figures —
   [transparency.entsoe.eu](https://transparency.entsoe.eu/)
 
@@ -371,6 +350,5 @@ assuming it. Its first run found nothing to read before the gate, and EU
 publication rules allow that to be the norm, so the question is open and now
 starts with when the provider publishes, not with the model.
 The study is zonal, not nodal;
-congestion, basis and transmission constraints are outside scope. Brazilian
-data is a national system comparison, not a wholesale price market.
+congestion, basis and transmission constraints are outside scope.
 

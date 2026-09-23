@@ -5,16 +5,12 @@ __pycache__/
 venv/
 *.egg-info/
 build/
-dist-python/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 .gpa/
-mlruns/
-mlartifacts/
-mlflow.db
 
 # Node and Observable Framework
 node_modules/
@@ -22,15 +18,8 @@ dist/
 site/.observablehq/cache/
 .DS_Store
 
-# Raw provider responses. These are large, reproducible from the adapters, and
-# have no analytical value once parsed. The curated Parquet under
-# data/curated/ IS committed on purpose: it is the historical record this
-# project accumulates, and versioning it is what makes any past state of the
-# dataset recoverable.
-data/raw/
-
-# Credentials. Keys live in GitHub Actions secrets, never in the repository,
-# and the static site needs none of them at runtime.
+# No source needs a credential; these stay ignored so one can never be committed
+# by accident.
 .env
 .env.local
 *.key

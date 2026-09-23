@@ -100,61 +100,6 @@ class LightGBM:
             num_boost_round=self.num_boost_round,
         )
 
-    def predict_day_quantiles(
-        self,
-        panel: Panel,
-        day: dt.date,
-        *,
-        min_train_rows: int,
-        levels: Sequence[float] = (0.1, 0.5, 0.9),
-    ) -> pl.DataFrame:
-        """Fit separate quantile challengers and return a full price path.
-
-        The median is also exposed as ``forecast`` so the result can flow into
-        the existing economic and point-score code. Quantiles are trained only
-        on rows strictly before ``day`` and are therefore safe for a live issue.
-        """
-        if not levels or any(not 0.0 < level < 1.0 for level in levels):
-            raise ValueError("quantile levels must be strictly between zero and one")
-        training = (
-            panel.complete().filter(pl.col("local_date") < day).sort(["local_date", "local_hour"])
-        )
-        if training["local_date"].n_unique() < min_train_rows:
-            return pl.DataFrame(schema=_FORECAST_SCHEMA)
-        target = panel.frame.filter(pl.col("local_date") == day).drop_nulls(list(panel.features))
-        if target.is_empty():
-            return pl.DataFrame(schema=_FORECAST_SCHEMA)
-        features = [*panel.features, "local_hour"]
-        output = target.select("local_date", "local_hour")
-        for level in levels:
-            quantile_model = LightGBM(
-                window=self.window,
-                num_boost_round=self.num_boost_round,
-                num_leaves=self.num_leaves,
-                learning_rate=self.learning_rate,
-                min_data_in_leaf=self.min_data_in_leaf,
-                lambda_l2=self.lambda_l2,
-                objective="quantile",
-                quantile_alpha=level,
-            )
-            fit_training = training
-            if self.window is not None:
-                train_days = training["local_date"].unique().sort()
-                fit_training = training.filter(pl.col("local_date") >= train_days[-self.window])
-            fitted = quantile_model._fit(fit_training, features, panel.target)
-            output = output.with_columns(
-                pl.Series(
-                    f"q{round(level * 100):02d}",
-                    fitted.predict(target.select(features).to_numpy(), num_threads=1),
-                    dtype=pl.Float64,
-                )
-            )
-        return (
-            output.with_columns(pl.col("q50").alias("forecast"))
-            if "q50" in output.columns
-            else output
-        )
-
     def forecasts(
         self,
         panel: Panel,

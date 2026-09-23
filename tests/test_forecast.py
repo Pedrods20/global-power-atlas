@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from dataclasses import replace
 from zoneinfo import ZoneInfo
@@ -167,8 +168,9 @@ def test_residual_requires_both_fuels_and_only_uses_d2():
 
 def test_panel_rejects_wrong_zone():
     frame = price_frame(dt.datetime(2025, 1, 1, tzinfo=dt.UTC), 24)
+    other = dataclasses.replace(get_zone("DE-LU"), code="XX-TEST")
     with pytest.raises(ValueError, match="zone"):
-        panel.build_panel(frame, get_zone("FR"))
+        panel.build_panel(frame, other)
 
 
 @pytest.mark.parametrize("alpha", [0.0, 0.1, 10.0])

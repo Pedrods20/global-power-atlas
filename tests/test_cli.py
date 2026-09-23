@@ -128,7 +128,7 @@ def test_zones_lists_the_registry() -> None:
 
     assert result.exit_code == 0
     assert "DE-LU" in result.stdout
-    assert "BR-SIN" in result.stdout
+    assert "Germany-Luxembourg" in result.stdout
 
 
 def test_zones_verbose_adds_the_editorial_notes() -> None:
@@ -198,7 +198,7 @@ def test_export_writes_the_site_tables(populated: Path, release: None, tmp_path:
     result = runner.invoke(app, ["export", "--output", str(destination)])
 
     assert result.exit_code == 0, result.exception
-    assert (destination / "zones.json").exists()
+    assert (destination / "data_as_of.json").exists()
     assert (destination / "daily_prices.parquet").exists()
     assert (destination / "battery_sensitivities.parquet").exists()
 
@@ -212,6 +212,18 @@ def test_export_check_passes_when_the_tables_match(
     result = runner.invoke(app, ["export", "--check", "--output", str(destination)])
 
     assert result.exit_code == 0
+
+
+def test_battery_study_reads_the_frozen_release_by_default(release: None, tmp_path: Path) -> None:
+    """The site's battery figures come from the release; a local study must be
+    reproducible from the same predictions without a separate exported copy."""
+    output = tmp_path / "studies"
+
+    result = runner.invoke(app, ["battery-study", "--output", str(output), "--resamples", "100"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "Research study saved" in result.stdout
+    assert any(output.iterdir())
 
 
 def test_export_check_exits_non_zero_when_the_tables_are_stale(
@@ -255,13 +267,6 @@ def test_export_check_exits_non_zero_when_the_tables_are_stale(
 
 
 # --- query ------------------------------------------------------------------
-
-
-def test_query_runs_sql_against_the_store(populated: Path) -> None:
-    result = runner.invoke(app, ["query", "SELECT count(*) AS n FROM price"])
-
-    assert result.exit_code == 0
-    assert "24" in result.stdout
 
 
 def test_reconcile_empty_ledger_is_a_noop(tmp_path: Path) -> None:

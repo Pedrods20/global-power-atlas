@@ -1,4 +1,4 @@
-"""Global Power Atlas: reproducible wholesale electricity market analytics."""
+"""German power market research: DE-LU day-ahead price shape, forecasting and storage value."""
 
 from __future__ import annotations
 

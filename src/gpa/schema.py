@@ -34,7 +34,6 @@ __all__ = [
     "GENERATION_SCHEMA",
     "LOAD_SCHEMA",
     "PRICE_SCHEMA",
-    "RENEWABLE_FUELS",
     "SCHEMAS",
     "UTC_DATETIME",
     "SchemaError",
@@ -69,15 +68,6 @@ a generator, and folding it into hydro overstates renewable share. ``imports``
 is a net interchange bucket, not a fuel, and is excluded from mix shares.
 """
 
-RENEWABLE_FUELS: Final[frozenset[str]] = frozenset(
-    {"hydro", "wind", "solar", "biomass", "geothermal"}
-)
-"""Fuels counted as renewable.
-
-Biomass is included because every market operator and statistical agency counts
-it, not because its lifecycle balance is uncontroversial. Waste is excluded.
-Pumped storage is excluded because its output is recycled grid energy.
-"""
 
 _RESOLUTIONS: Final[tuple[int, ...]] = (1, 5, 15, 30, 60)
 """Interval lengths any supported market publishes, in minutes."""

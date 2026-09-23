@@ -1,14 +1,12 @@
 """Economic interpretation, paired uncertainty and local research artifacts."""
 
 import datetime as dt
-import json
 
 import polars as pl
 import pytest
-from polars.testing import assert_frame_equal
 from typer.testing import CliRunner
 
-from gpa.battery_study import evaluate, paired_comparisons, read_study, risk_metrics, save_study
+from gpa.battery_study import evaluate, paired_comparisons, risk_metrics, save_study
 from gpa.cli import app
 from tests.test_battery import DAY, predictions
 
@@ -126,19 +124,13 @@ def test_evaluation_retains_costs_coverage_and_input_fingerprint():
     )
 
 
-def test_saved_study_is_immutable_and_detects_modified_artifacts(tmp_path):
+def test_a_saved_study_is_never_overwritten(tmp_path):
     frame = predictions()
     result = evaluate(frame, durations_mwh=(1.0,), resamples=200)
     path = save_study(result, frame, tmp_path)
-    metadata, tables = read_study(path)
-    assert metadata["assumptions"] == json.loads(json.dumps(result.assumptions))
-    assert tables["predictions"].equals(frame)
-    assert tables["summary"].equals(result.summary)
+    assert pl.read_parquet(path / "summary.parquet").equals(result.summary)
     with pytest.raises(FileExistsError):
         save_study(result, frame, tmp_path)
-    (path / "summary.parquet").write_bytes(b"modified")
-    with pytest.raises(ValueError, match="checksum"):
-        read_study(path)
 
 
 def test_cannot_save_results_with_different_prediction_inputs(tmp_path):
@@ -146,35 +138,6 @@ def test_cannot_save_results_with_different_prediction_inputs(tmp_path):
     result = evaluate(frame, durations_mwh=(1.0,), resamples=200)
     with pytest.raises(ValueError, match="input"):
         save_study(result, frame.with_columns(pl.col("forecast") + 1), tmp_path)
-
-
-def test_study_replays_from_its_saved_inputs_and_explicit_assumptions(tmp_path):
-    frame = predictions()
-    result = evaluate(
-        frame,
-        durations_mwh=(1.0,),
-        spec_kwargs={"variable_cost_eur_mwh": 2.0, "degradation_cost_eur_mwh": 3.0},
-        resamples=200,
-    )
-    path = save_study(result, frame, tmp_path)
-    metadata, tables = read_study(path)
-    args = metadata["assumptions"]
-    replay = evaluate(
-        tables["predictions"],
-        **{
-            key: args[key]
-            for key in (
-                "model_names",
-                "durations_mwh",
-                "spec_kwargs",
-                "block_days",
-                "resamples",
-                "seed",
-            )
-        },
-    )
-    for table in ("dispatch", "summary", "coverage", "daily", "risk", "comparisons"):
-        assert_frame_equal(tables[table], getattr(replay, table))
 
 
 def test_local_study_command_does_not_read_or_mutate_the_live_store(tmp_path, monkeypatch):

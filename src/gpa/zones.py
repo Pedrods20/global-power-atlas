@@ -1,14 +1,13 @@
 """Canonical registry of wholesale electricity market zones.
 
 Everything in this project derives from this module. A *zone* is the smallest
-unit at which a price is formed or a schedule is settled: a European bidding
-zone (DE-LU) or a national interconnected system (BR-SIN).
+unit at which a price is formed: here, a European day-ahead bidding zone.
 
-The registry is deliberately narrow. It carries only markets whose history can
-be refreshed by the scheduled job from public, credential-free interfaces, so
-that every series feeding the forecasting and retrieval work stays current and
-auditable. US, Australian, Japanese and CCEE series were retired on 2026-09-13
-for that reason; their code and data remain recoverable from Git history.
+The registry holds one market, Germany-Luxembourg, because it is the only one
+this study analyses. France, Spain and Brazil were collected as historical
+context until 23 September 2026 and were retired because no page, forecast or
+valuation used them; US, Australian, Japanese and CCEE series went on
+2026-09-13. Their code and data remain recoverable from Git history.
 
 ``timezone`` is the IANA zone in which the market defines its own trading day
 and its peak/off-peak blocks. Bucketing anything by UTC calendar day is always
@@ -18,24 +17,8 @@ wrong and this project never does it. See ``gpa.calendar``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 
-__all__ = [
-    "ZONES",
-    "PeakBlock",
-    "Region",
-    "Zone",
-    "get_zone",
-    "zones_for_source",
-    "zones_in_region",
-]
-
-
-class Region(StrEnum):
-    """Continental grouping used for navigation and aggregation."""
-
-    EUROPE = "Europe"
-    SOUTH_AMERICA = "South America"
+__all__ = ["ZONES", "PeakBlock", "Zone", "get_zone"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,15 +34,12 @@ class PeakBlock:
         start_hour: First hour-beginning included in the block, 0-23.
         end_hour: First hour-beginning *excluded* from the block, 1-24.
         weekdays: ISO weekday numbers included, Monday=1 through Sunday=7.
-        note: Caveat shown on the methodology page. Used where the block is a
-            regulatory or tariff construct rather than a traded product.
     """
 
     label: str
     start_hour: int
     end_hour: int
     weekdays: tuple[int, ...]
-    note: str | None = None
 
     def __post_init__(self) -> None:
         if not 0 <= self.start_hour <= 23:
@@ -87,20 +67,6 @@ EUROPEAN_PEAKLOAD = PeakBlock(
 )
 """EEX/EPEX Peakload. Excludes Saturday and ignores public holidays."""
 
-BR_PONTA = PeakBlock(
-    label="Brazilian ponta (18:00-21:00, Mon-Fri)",
-    start_hour=18,
-    end_hour=21,
-    weekdays=(1, 2, 3, 4, 5),
-    note=(
-        "Brazil has settled a genuinely hourly PLD since January 2021, so it has "
-        "no traded peak block. The ponta window is a distribution-tariff construct "
-        "whose exact hours each distributor sets locally; 18:00-21:00 is the common "
-        "case and is used here only to make Brazil comparable with other markets. "
-        "Do not read it as a wholesale product."
-    ),
-)
-
 
 @dataclass(frozen=True, slots=True)
 class Zone:
@@ -110,9 +76,6 @@ class Zone:
         code: Stable identifier. Used as the Parquet partition key, so it must
             never change once data has been written under it.
         name: Display name.
-        country: ISO 3166-1 alpha-2, or a hyphenated pair for a shared zone.
-        region: Continental grouping.
-        operator: System or market operator responsible for the zone.
         timezone: IANA zone defining the market trading day and blocks.
         currency: ISO 4217 code the source publishes prices in.
         peak: On-peak block definition.
@@ -120,15 +83,12 @@ class Zone:
             ``{"price": "energy_charts", "load": "energy_charts"}``. A dataset
             absent from this mapping is simply not collected for the zone.
         source_keys: Per-source upstream identifiers, e.g. the Energy-Charts
-            country code or the ONS subsystem.
+            country code.
         notes: Editorial context shown on the site.
     """
 
     code: str
     name: str
-    country: str
-    region: Region
-    operator: str
     timezone: str
     currency: str
     peak: PeakBlock
@@ -153,68 +113,27 @@ class Zone:
 
 # --- The registry ----------------------------------------------------------
 
-_ENERGY_CHARTS = {"price": "energy_charts", "load": "energy_charts", "generation": "energy_charts"}
-
 ZONES: tuple[Zone, ...] = (
     Zone(
         code="DE-LU",
         name="Germany-Luxembourg",
-        country="DE-LU",
-        region=Region.EUROPE,
-        operator="50Hertz / Amprion / TenneT DE / TransnetBW",
         timezone="Europe/Berlin",
         currency="EUR",
         peak=EUROPEAN_PEAKLOAD,
-        # Day-ahead load/wind/solar forecasts, for the forecast model's
-        # fundamentals ablation. Not fetched for FR/ES: this is a per-market
-        # research feature, not a general historical-context series.
-        sources=dict(_ENERGY_CHARTS) | {"fundamentals": "energy_charts"},
-        source_keys={"energy_charts_country": "de", "entsoe_eic": "10Y1001A1001A82H"},
+        # Day-ahead load/wind/solar forecasts feed the fundamentals ablation and
+        # the prospective `ridge_da` arm.
+        sources={
+            "price": "energy_charts",
+            "load": "energy_charts",
+            "generation": "energy_charts",
+            "fundamentals": "energy_charts",
+        },
+        source_keys={"energy_charts_country": "de"},
         notes=(
             "The deepest power market in Europe and the reference for continental "
             "price formation. Nuclear phase-out completed in April 2023, leaving a "
             "system where wind and solar set price for a large and growing share of "
             "hours, and where negative prices are routine rather than exceptional."
-        ),
-    ),
-    *(
-        Zone(
-            code=code,
-            name=name,
-            country=code,
-            region=Region.EUROPE,
-            operator=operator,
-            timezone=timezone,
-            currency="EUR",
-            peak=EUROPEAN_PEAKLOAD,
-            sources=dict(_ENERGY_CHARTS),
-            source_keys={"energy_charts_country": code.lower(), "energy_charts_bzn": code},
-            notes=(
-                "National generation and load, plus day-ahead bidding-zone prices, "
-                "redistributed by Energy-Charts."
-            ),
-        )
-        for code, name, operator, timezone in (
-            ("FR", "France", "RTE", "Europe/Paris"),
-            ("ES", "Spain", "Red Electrica", "Europe/Madrid"),
-        )
-    ),
-    Zone(
-        code="BR-SIN",
-        name="Brazil (SIN)",
-        country="BR",
-        region=Region.SOUTH_AMERICA,
-        operator="Operador Nacional do Sistema Eletrico",
-        timezone="America/Sao_Paulo",
-        currency="BRL",
-        peak=BR_PONTA,
-        sources={"load": "ons", "generation": "ons"},
-        source_keys={"ons_subsystem": "SIN"},
-        notes=(
-            "A continent-scale hydro-dominated system operated as a single optimised "
-            "cascade, where price is a model output rather than an auction clearing. "
-            "Reservoir storage substitutes for the fuel-cost stack that sets price "
-            "elsewhere, so scarcity shows up as a stored-energy problem first."
         ),
     ),
 )
@@ -236,20 +155,3 @@ def get_zone(code: str) -> Zone:
     except KeyError:
         valid = ", ".join(sorted(_BY_CODE))
         raise KeyError(f"unknown zone {code!r}; registered zones are: {valid}") from None
-
-
-def zones_in_region(region: Region) -> tuple[Zone, ...]:
-    """All zones in a continental region, in registry order."""
-    return tuple(z for z in ZONES if z.region is region)
-
-
-def zones_for_source(source: str, dataset: str | None = None) -> tuple[Zone, ...]:
-    """All zones served by ``source``, optionally narrowed to one dataset.
-
-    Args:
-        source: Source identifier such as ``"ons"`` or ``"energy_charts"``.
-        dataset: If given, only zones collecting that dataset from the source.
-    """
-    if dataset is not None:
-        return tuple(z for z in ZONES if z.sources.get(dataset) == source)
-    return tuple(z for z in ZONES if source in z.sources.values())

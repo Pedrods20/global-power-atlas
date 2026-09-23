@@ -94,7 +94,7 @@ def track_result(result: BacktestResult, root: Path) -> str:
             (output / "run.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             versions = {
                 name: importlib.metadata.version(name)
-                for name in ("lightgbm", "numpy", "polars", "scikit-learn", "mlflow")
+                for name in ("lightgbm", "numpy", "polars", "mlflow")
             }
             versions.update(python=platform.python_version(), platform=platform.platform())
             (output / "environment.json").write_text(

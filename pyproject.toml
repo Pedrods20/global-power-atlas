@@ -1,27 +1,23 @@
 [project]
 name = "global-power-atlas"
 version = "0.1.0"
-description = "Reproducible ingestion, analytics and price forecasting for European and Brazilian electricity markets."
+description = "German power market research: DE-LU day-ahead price shape, forecasting and battery arbitrage value."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Pedro Cabral" }]
-keywords = ["electricity", "power-markets", "energy", "energy-charts", "ons", "forecasting"]
+keywords = ["electricity", "power-markets", "day-ahead", "battery-storage", "energy-charts", "forecasting"]
 
 dependencies = [
     "httpx>=0.27",
     "polars>=1.0",
-    "duckdb>=1.0",
-    "pyarrow>=16.0",
     "typer>=0.12",
-    "python-dotenv>=1.0",
     "pandera[polars]>=0.20",
     # zoneinfo has no tz database to read on Windows, and a slim Linux CI image
     # may not ship one either. Depending on tzdata makes market-time handling
     # deterministic across every platform this runs on.
     "tzdata>=2024.1",
     "lightgbm>=4.6,<5",
-    "scikit-learn>=1.6,<2",
     # Keep annotations compatible with the declared Python 3.11 mypy target.
     "numpy>=2.1,<2.3",
 ]

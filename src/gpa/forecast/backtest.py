@@ -50,12 +50,10 @@ from gpa.zones import Zone, get_zone
 
 __all__ = [
     "MIN_TRAIN_DAYS",
-    "PUBLISHED_ZONES",
     "REFERENCE_MODEL",
     "VALIDATION_DAYS",
     "BacktestResult",
     "InsufficientHistory",
-    "published",
     "run",
     "select_alpha",
 ]
@@ -86,15 +84,6 @@ reference in the forecasting literature. Measuring against the weakest baseline
 available would be a way of manufacturing skill.
 """
 
-PUBLISHED_ZONES: Final[tuple[str, ...]] = ("DE-LU",)
-"""Zones the site publishes a backtest for.
-
-One market, deliberately. DE-LU has the deepest day-ahead auction in Europe, a
-clean two-year history at a single resolution family, and the load and
-generation series the residual-load features need. Adding markets before the
-harness has been read by anyone would be breadth bought at the cost of the thing
-the front exists to demonstrate.
-"""
 
 # Already inspected history is a retrospective development benchmark. Keep it
 # frozen when ingestion advances; prospective acceptance needs a separate run.
@@ -541,21 +530,6 @@ def run(
         window=window,
         levels=tuple(levels),
     )
-
-
-def published(**kwargs: object) -> list[BacktestResult]:
-    """Run the backtest for every zone the site publishes.
-
-    A zone that cannot support an honest run is skipped with a log line rather
-    than failing the export: the site should lose a chart, not a build.
-    """
-    results: list[BacktestResult] = []
-    for code in PUBLISHED_ZONES:
-        try:
-            results.append(run(code, **kwargs))  # type: ignore[arg-type]
-        except (InsufficientHistory, KeyError):
-            log.exception("backtest skipped for %s", code)
-    return results
 
 
 def _common_sample(predictions: pl.DataFrame, model_count: int) -> pl.DataFrame:

@@ -1,18 +1,12 @@
-"""Freshness rules: how stale each series is allowed to get before it is wrong.
+"""Freshness: how stale each series is allowed to get before it is wrong.
 
-The scheduled ingest can fail, or one provider can quietly stop publishing,
-and until now nothing surfaced either. A run that fetches nothing still exits
-zero if no adapter raised.
+The scheduled ingest can fail, or the provider can quietly stop publishing, and
+a run that fetches nothing still exits zero if no adapter raised. This module
+turns that silent stall into a visible failure.
 
-A single global threshold does not work here, because the providers do not
-publish at the same speed and the differences are legitimate. Brazilian
-generation trails real time by about two days because the ONS hourly balance
-does, while the European feeds arrive within hours. A threshold loose enough for the slowest
-would never catch the fastest going dark.
-
-So every rule is declared per zone and dataset, each with the reason for its
-value. A rule that cannot be explained is a rule nobody will trust when it
-fires at three in the morning.
+Every series comes from Energy-Charts and lands within hours, so one rule covers
+them all; it carries the reason for its value, because a limit that cannot be
+explained is one nobody trusts when it fires.
 """
 
 from __future__ import annotations
@@ -21,61 +15,27 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Final
 
-import polars as pl
-
 from gpa import store
 from gpa.zones import ZONES
 
-__all__ = [
-    "DEFAULT_RULE",
-    "RULES",
-    "FreshnessReport",
-    "FreshnessRule",
-    "check",
-    "rule_for",
-]
+__all__ = ["DEFAULT_RULE", "FreshnessReport", "FreshnessRule", "check"]
 
 
 @dataclass(frozen=True, slots=True)
 class FreshnessRule:
-    """How old a series may get, and why that number.
-
-    Attributes:
-        max_lag_hours: Age beyond which the series counts as stale.
-        reason: Why this value rather than another. Shown when the rule fires.
-        manual: Whether the series is refreshed by hand rather than by the
-            scheduled job. A manual series that is stale is a reminder, not a
-            pipeline failure, so it never fails the run.
-    """
+    """How old a series may get, and why that number."""
 
     max_lag_hours: float
     reason: str
-    manual: bool = False
 
 
 DEFAULT_RULE: Final = FreshnessRule(
     max_lag_hours=36.0,
     reason=(
-        "Most feeds here land within twelve hours. Thirty-six absorbs one missed "
-        "daily run plus a provider's own publication delay without crying wolf."
+        "Energy-Charts feeds land within twelve hours. Thirty-six absorbs one missed "
+        "run plus the provider's own publication delay without crying wolf."
     ),
 )
-
-RULES: Final[dict[tuple[str, str], FreshnessRule]] = {
-    # ONS republishes its hourly balance several times a day, but the contents
-    # trail real time by roughly two days and no faster source for Brazilian
-    # generation by technology exists. See the methodology's publication-lag
-    # section.
-    ("BR-SIN", "generation"): FreshnessRule(
-        max_lag_hours=96.0,
-        reason="ONS publishes the hourly balance about two days behind real time.",
-    ),
-}
-
-
-def rule_for(zone: str, dataset: str) -> FreshnessRule:
-    """The rule governing one series, falling back to :data:`DEFAULT_RULE`."""
-    return RULES.get((zone, dataset), DEFAULT_RULE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +46,6 @@ class FreshnessReport:
     dataset: str
     lag_hours: float | None
     rule: FreshnessRule
-    last_ts_utc: dt.datetime | None = None
 
     @property
     def missing(self) -> bool:
@@ -98,20 +57,10 @@ class FreshnessReport:
         """Whether the series is older than its rule allows."""
         return self.lag_hours is not None and self.lag_hours > self.rule.max_lag_hours
 
-    @property
-    def blocking(self) -> bool:
-        """Whether this should fail a scheduled run.
-
-        A manually refreshed series never blocks: nobody can fix it from a cron
-        job, so failing the run every night would train people to ignore the
-        failure.
-        """
-        return (self.stale or self.missing) and not self.rule.manual
-
     def __str__(self) -> str:
         age = "no data" if self.lag_hours is None else f"{self.lag_hours:.1f}h"
         limit = f"limit {self.rule.max_lag_hours:.0f}h"
-        state = "MANUAL" if self.rule.manual and self.stale else ("STALE" if self.stale else "ok")
+        state = "STALE" if self.stale else "ok"
         if self.missing:
             state = "MISSING"
         return f"{self.zone:9s} {self.dataset:11s} {age:>9s}  {limit:<12s} {state}"
@@ -146,52 +95,11 @@ def check(now: dt.datetime | None = None) -> list[FreshnessReport]:
         for dataset in zone.sources:
             last = latest.get((zone.code, dataset))
             lag = None if last is None else (reference - last).total_seconds() / 3600
-            reports.append(
-                FreshnessReport(zone.code, dataset, lag, rule_for(zone.code, dataset), last)
-            )
+            reports.append(FreshnessReport(zone.code, dataset, lag, DEFAULT_RULE))
 
-    # Missing first, then the most overdue relative to its own limit, so that a
-    # series 10 hours past a 12-hour rule outranks one 10 hours past a 96-hour
-    # rule.
+    # Missing first, then the most overdue, so the top of a long list is the
+    # part worth reading.
     def severity(report: FreshnessReport) -> tuple[int, float]:
-        if report.missing:
-            return (0, 0.0)
-        assert report.lag_hours is not None
-        return (1, -(report.lag_hours / report.rule.max_lag_hours))
+        return (0, 0.0) if report.lag_hours is None else (1, -report.lag_hours)
 
     return sorted(reports, key=severity)
-
-
-def to_frame(reports: list[FreshnessReport]) -> pl.DataFrame:
-    """Render reports as a frame for the site export.
-
-    Carries the last observed instant and the limit, but deliberately **not**
-    the measured age. Age is a function of the clock, so baking it into a
-    committed file would make the export non-deterministic and would freeze a
-    number that is wrong within the hour. The site computes it when a reader
-    opens the page, which is both reproducible here and more accurate there.
-    """
-    schema = {
-        "zone": pl.String,
-        "dataset": pl.String,
-        "last_ts_utc": pl.String,
-        "max_lag_hours": pl.Float64,
-        "manual": pl.Boolean,
-    }
-    if not reports:
-        return pl.DataFrame(schema=schema)
-    return pl.DataFrame(
-        [
-            {
-                "zone": r.zone,
-                "dataset": r.dataset,
-                "last_ts_utc": (
-                    r.last_ts_utc.strftime("%Y-%m-%dT%H:%M:%SZ") if r.last_ts_utc else None
-                ),
-                "max_lag_hours": r.rule.max_lag_hours,
-                "manual": r.rule.manual,
-            }
-            for r in reports
-        ],
-        schema=schema,
-    )

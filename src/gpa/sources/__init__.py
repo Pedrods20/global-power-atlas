@@ -7,36 +7,19 @@ needs to change.
 
 from __future__ import annotations
 
-from gpa.sources.base import (
-    MissingCredential,
-    Source,
-    SourceError,
-    UpstreamError,
-)
+from gpa.sources.base import Source, SourceError, UpstreamError
 from gpa.sources.energy_charts import EnergyChartsSource
-from gpa.sources.ons import OnsSource
-from gpa.sources.smard import SmardSource
 
 __all__ = [
     "REGISTRY",
     "EnergyChartsSource",
-    "MissingCredential",
-    "OnsSource",
-    "SmardSource",
     "Source",
     "SourceError",
     "UpstreamError",
     "get_source",
 ]
 
-REGISTRY: dict[str, Source] = {
-    source.name: source
-    for source in (
-        EnergyChartsSource(),
-        OnsSource(),
-        SmardSource(),
-    )
-}
+REGISTRY: dict[str, Source] = {source.name: source for source in (EnergyChartsSource(),)}
 """Source name to a ready-to-use adapter instance.
 
 Adapters are stateless, so one shared instance per provider is safe.

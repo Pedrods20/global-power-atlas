@@ -90,13 +90,3 @@ def report() -> pl.DataFrame:
         ],
         how="diagonal_relaxed",
     ).sort("zone", "dataset", "fuel")
-
-
-def require_integrity() -> pl.DataFrame:
-    result = report()
-    bad = result.filter(pl.col("invalid") > 0)
-    if bad.height:
-        raise ValueError(
-            f"invalid, overlapping or missing series: {bad.select('zone', 'dataset', 'fuel', 'invalid').to_dicts()}"
-        )
-    return result

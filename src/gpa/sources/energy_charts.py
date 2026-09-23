@@ -1,10 +1,8 @@
 """Energy-Charts adapter (Fraunhofer ISE), covering European bidding zones.
 
 Energy-Charts republishes ENTSO-E and SMARD data through an open API that needs
-no credentials, which is why it carries the European zone here while an ENTSO-E
-Transparency token is being obtained. The underlying figures are the same ones
-ENTSO-E publishes; the licence is CC BY 4.0 and attribution is on the
-methodology page.
+no credentials. The underlying figures are the ones the system operators
+publish; the licence is CC BY 4.0 and attribution is on the methodology page.
 
 Two quirks of this provider are handled explicitly:
 
@@ -68,7 +66,7 @@ Several upstream names collapse onto one canonical fuel, so rows are summed
 after mapping. Pumped storage generation and its separately reported
 consumption both map to ``hydro_pumped_storage``; because consumption is
 published as a negative number, summing them yields net storage output, which
-is the honest figure and keeps the fuel out of renewable share.
+is the honest figure.
 """
 
 LOAD_SERIES: Final[frozenset[str]] = frozenset({"Load", "Load (incl. self-consumption)"})
@@ -83,9 +81,8 @@ DERIVED_SERIES: Final[frozenset[str]] = frozenset(
 )
 """Series that are already-computed indicators, not measurements.
 
-They are dropped rather than stored. This project recomputes renewable share
-from the mix so the definition is ours and is documented, and so it stays
-consistent across markets whose providers disagree about what counts.
+They are dropped rather than stored: anything this project needs from them is
+recomputed from the measured series, so the definition is documented here.
 """
 
 
@@ -133,10 +130,9 @@ class EnergyChartsSource:
     # --- price ------------------------------------------------------------
 
     def _fetch_price(self, zone: Zone, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
-        bzn = zone.source_keys.get("energy_charts_bzn") or zone.code
         payload = self._get(
             "/price",
-            {"bzn": bzn, "start": _as_date(start), "end": _as_date(end)},
+            {"bzn": zone.code, "start": _as_date(start), "end": _as_date(end)},
         )
 
         seconds = payload.get("unix_seconds") or []
@@ -192,8 +188,8 @@ class EnergyChartsSource:
         # public-power load corresponding to the generation boundary.
         labels = {str(entry.get("name", "")) for entry in series}
         load_label = "Load" if "Load" in labels else "Load (incl. self-consumption)"
-        # France publishes battery output and charging as two signed series;
-        # other countries publish one net series. Both at once would double count.
+        # Some countries publish battery output and charging as two signed
+        # series, others one net series. Both at once would double count.
         if "Battery Storage (Power)" in labels and labels & {"Battery", "Battery Consumption"}:
             raise UpstreamError("net and gross battery series published together")
         frames: list[pl.DataFrame] = []

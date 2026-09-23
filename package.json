@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Static site for the Global Power Atlas.",
+  "description": "Static site for the DE-LU power market research note.",
   "scripts": {
     "dev": "observable preview",
     "build": "observable build",

@@ -21,19 +21,17 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Final, TypedDict
+from typing import Final
 
 import polars as pl
 
 from gpa import store
 from gpa.battery import DEFAULT_MODELS
-from gpa.calendar import hours_in_local_day
-from gpa.metrics import load as load_metrics
 from gpa.metrics import mix as mix_metrics
 from gpa.metrics import price as price_metrics
 from gpa.zones import ZONES, Zone, get_zone
 
-__all__ = ["DEFAULT_OUTPUT", "export_all", "site_root"]
+__all__ = ["check_exports", "export_all", "release_predictions", "site_root"]
 
 _BATTERY_TABLES: tuple[str, ...] = (
     "battery_monthly",
@@ -99,19 +97,6 @@ number.
 
 log = logging.getLogger(__name__)
 
-DEFAULT_OUTPUT = "site/data"
-
-
-class Overview(TypedDict):
-    """Shape of ``zones.json``, the one site file that is not Parquet.
-
-    Declared so that callers can index it without the result widening to
-    ``object``, and so the site's contract is stated in one place.
-    """
-
-    data_as_of: str | None
-    zones: list[dict[str, object]]
-
 
 def site_root() -> Path:
     """Repository-relative default output directory."""
@@ -157,7 +142,6 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     price_before_year = _annual_fit_cutoff(store.read("price", "DE-LU"), get_zone("DE-LU"))
     tables: dict[str, pl.DataFrame] = {
         "daily_prices": _daily_prices(),
-        "daily_load": _daily_load(),
         "generation_mix": _generation_mix(),
         "capacity": _capacity(),
         "cannibalisation": _cannibalisation(),
@@ -170,30 +154,15 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         "capacity_extrapolation_flags": _capacity_extrapolation_flags(
             before_year=price_before_year
         ),
-        "freshness": _freshness(),
     }
-    from gpa import quality
-    from gpa.forecast import snapshot
-
-    tables["data_quality"] = quality.report()
-    saved = snapshot.read()
-    if saved is None:
-        raise RuntimeError(
-            "no frozen forecast snapshot under data/experiments/. The public export "
-            "reads a committed release, not a live recompute that would drift as the "
-            "store grows. Run `gpa backtest --zone DE-LU --save-snapshot`, commit the "
-            "new data/experiments/<id>/ and current.json, then retry `gpa export`."
-        )
-    metadata, frames = saved
+    metadata, frames = _release()
     runs = {"runs": [metadata]}
-    full_predictions = pl.DataFrame()
-    for suffix in ("scores", "daily", "predictions", "coefficients"):
-        result = frames[suffix]
-        if suffix == "predictions":
-            result = result.drop("ts_utc").with_columns(pl.col(pl.Float64).round(2))
-            full_predictions = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
-            tables["forecast_preview"] = _forecast_page_predictions(full_predictions)
-        tables[f"forecast_{suffix}"] = result.with_columns(pl.lit(metadata["zone"]).alias("zone"))
+    for suffix in ("scores", "daily"):
+        tables[f"forecast_{suffix}"] = frames[suffix].with_columns(
+            pl.lit(metadata["zone"]).alias("zone")
+        )
+    full_predictions = _rounded_predictions(metadata, frames)
+    tables["forecast_preview"] = _forecast_page_predictions(full_predictions)
 
     battery_tables = _battery_tables(full_predictions)
     tables.update(battery_tables)
@@ -211,11 +180,10 @@ def export_all(output: Path | None = None) -> dict[str, int]:
         result.write_parquet(path, compression="zstd", statistics=True)
         written[path.name] = frame.height
 
-    overview = _overview()
-    (destination / "zones.json").write_text(
-        json.dumps(overview, indent=2, default=str), encoding="utf-8"
+    (destination / "data_as_of.json").write_text(
+        json.dumps({"data_as_of": _data_as_of()}, indent=2), encoding="utf-8"
     )
-    written["zones.json"] = len(overview["zones"])
+    written["data_as_of.json"] = 1
 
     (destination / "forecast.json").write_text(
         json.dumps(runs, indent=2, default=str), encoding="utf-8"
@@ -223,6 +191,40 @@ def export_all(output: Path | None = None) -> dict[str, int]:
     written["forecast.json"] = len(runs["runs"])
 
     return written
+
+
+def release_predictions() -> pl.DataFrame:
+    """Every prediction of the frozen release, as the battery tables read them.
+
+    Rounded to the cent the published tables use, so ``gpa battery-study`` run
+    on this frame reproduces the site's battery figures exactly.
+    """
+    metadata, frames = _release()
+    return _rounded_predictions(metadata, frames)
+
+
+def _release() -> tuple[dict[str, object], dict[str, pl.DataFrame]]:
+    from gpa.forecast import snapshot
+
+    saved = snapshot.read()
+    if saved is None:
+        raise RuntimeError(
+            "no frozen forecast snapshot under data/experiments/. The public export "
+            "reads a committed release, not a live recompute that would drift as the "
+            "store grows. Run `gpa backtest --zone DE-LU --save-snapshot`, commit the "
+            "new data/experiments/<id>/ and current.json, then retry `gpa export`."
+        )
+    return saved
+
+
+def _rounded_predictions(
+    metadata: dict[str, object], frames: dict[str, pl.DataFrame]
+) -> pl.DataFrame:
+    return (
+        frames["predictions"]
+        .drop("ts_utc")
+        .with_columns(pl.col(pl.Float64).round(2), pl.lit(metadata["zone"]).alias("zone"))
+    )
 
 
 def check_exports(destination: Path | None = None) -> list[str]:
@@ -336,8 +338,7 @@ def _for_each(dataset: str, builder) -> pl.DataFrame:  # type: ignore[no-untyped
     """Apply ``builder`` to each zone's slice and stack the results.
 
     A zone with no data for the dataset is skipped rather than contributing an
-    empty frame, so a market still waiting on a credential simply does not
-    appear rather than breaking the concatenation.
+    empty frame that would break the concatenation.
     """
     frames: list[pl.DataFrame] = []
     for zone in ZONES:
@@ -371,33 +372,6 @@ def _daily_prices() -> pl.DataFrame:
         )
 
     return _for_each("price", build)
-
-
-def _daily_load() -> pl.DataFrame:
-    def build(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-        daily = load_metrics.daily_energy(frame, zone).rename({"local_date": "date"})
-        return _drop_incomplete_trailing_day(daily, zone, "hours_observed")
-
-    return _for_each("load", build)
-
-
-def _drop_incomplete_trailing_day(
-    daily: pl.DataFrame, zone: Zone, hours_column: str
-) -> pl.DataFrame:
-    """Drop the last row if it covers fewer hours than its own local day has.
-
-    A day still being ingested reads as a collapse in the underlying quantity
-    if it is charted like every complete day before it. Comparing against
-    :func:`gpa.calendar.hours_in_local_day` rather than a flat 24 means a
-    genuinely short daylight-saving day is not mistaken for a partial one and
-    trimmed by mistake.
-    """
-    if daily.is_empty():
-        return daily
-    last = daily.tail(1).row(0, named=True)
-    if last[hours_column] < hours_in_local_day(zone, last["date"]):
-        return daily.head(daily.height - 1)
-    return daily
 
 
 def _generation_mix() -> pl.DataFrame:
@@ -904,25 +878,7 @@ def _forecast_page_predictions(predictions: pl.DataFrame) -> pl.DataFrame:
     return predictions.filter(pl.col("local_date").dt.truncate("1w").is_in(selected))
 
 
-def _freshness() -> pl.DataFrame:
-    """The last observed instant and freshness limit for each declared series.
-
-    Publishes the instant rather than a measured age, so the export stays
-    deterministic and the reader's browser computes the age at the moment they
-    look. A baked-in age would be wrong within the hour and would make
-    ``gpa export --check`` fail on every run.
-
-    Published so a reader can see the age of what they are looking at instead
-    of assuming every series is equally current. That matters most for Brazilian
-    generation, which trails real time by about two days for reasons that belong
-    to ONS rather than to this project.
-    """
-    from gpa import freshness as freshness_module
-
-    return freshness_module.to_frame(freshness_module.check())
-
-
-# --- Overview --------------------------------------------------------------
+# --- Data currency ---------------------------------------------------------
 
 
 _MEASURED_DATASETS = ("load", "generation")
@@ -931,58 +887,19 @@ _MEASURED_DATASETS = ("load", "generation")
 Price is excluded on purpose: since day-ahead prices are ingested up to
 :data:`gpa.pipeline.PUBLISHED_AHEAD_DAYS` past now, its own latest timestamp
 can be a delivery hour that has not happened yet. Labelling the page "as of"
-that instant would read as data from the future. Each zone's own price
-coverage is still shown separately in ``datasets.price.last`` below.
+that instant would read as data from the future.
 """
 
 
-def _overview() -> Overview:
-    """Zone metadata plus a freshness snapshot, for the landing page."""
+def _data_as_of() -> str | None:
+    """The latest observed instant in the measured datasets.
+
+    Derived from the stored observations, not the build clock, so an export
+    with no new data leaves the file unchanged.
+    """
     coverage = store.coverage()
-    # Metadata must depend on the stored observations, not the build clock.
-    # Otherwise every CI export dirties zones.json even when no data changed.
-    # polars types `.max()` as a broad union, so narrow it rather than casting:
-    # an unexpected dtype should read as "unknown" instead of crashing on
-    # `.isoformat()` at build time.
     measured = coverage.filter(pl.col("dataset").is_in(_MEASURED_DATASETS))
-    raw_as_of = measured["last_ts_utc"].max() if not measured.is_empty() else None
-    data_as_of = raw_as_of if isinstance(raw_as_of, dt.datetime) else None
-
-    entries: list[dict[str, object]] = []
-    for zone in ZONES:
-        datasets: dict[str, object] = {}
-        for dataset in ("price", "load", "generation"):
-            if not zone.has(dataset):
-                continue
-            row = coverage.filter((pl.col("zone") == zone.code) & (pl.col("dataset") == dataset))
-            if row.is_empty():
-                datasets[dataset] = {"status": "pending", "source": zone.sources[dataset]}
-                continue
-
-            record = row.row(0, named=True)
-            datasets[dataset] = {
-                "status": "ok",
-                "source": zone.sources[dataset],
-                "rows": record["rows"],
-                "first": record["first_ts_utc"],
-                "last": record["last_ts_utc"],
-            }
-
-        entries.append(
-            {
-                "code": zone.code,
-                "name": zone.name,
-                "country": zone.country,
-                "region": zone.region.value,
-                "operator": zone.operator,
-                "timezone": zone.timezone,
-                "observes_market_dst": zone.observes_market_dst,
-                "currency": zone.currency,
-                "peak_block": zone.peak.label,
-                "peak_note": zone.peak.note,
-                "notes": zone.notes,
-                "datasets": datasets,
-            }
-        )
-
-    return {"data_as_of": data_as_of.isoformat() if data_as_of else None, "zones": entries}
+    # polars types `.max()` as a broad union; narrow it rather than cast, so an
+    # unexpected dtype reads as unknown instead of crashing at build time.
+    latest = measured["last_ts_utc"].max() if not measured.is_empty() else None
+    return latest.isoformat() if isinstance(latest, dt.datetime) else None

@@ -17,7 +17,7 @@ The main portfolio commands are:
 ``gpa probe-fundamentals`` log how much of tomorrow's day-ahead forecasts is published
 
 Exit codes matter because a scheduled workflow reads them: 0 when every target
-succeeded or was cleanly skipped, 1 when any target failed.
+succeeded, 1 when any target failed.
 """
 
 from __future__ import annotations
@@ -33,19 +33,17 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 import typer
-from dotenv import load_dotenv
 
 from gpa import __version__, pipeline, store
 from gpa.schema import SchemaError, SchemaErrors
 from gpa.schema import validate as validate_frame
 from gpa.zones import ZONES, get_zone
 
-load_dotenv()
 DEFAULT_TRACKING_DIR = Path(".gpa/mlflow")
 
 app = typer.Typer(
     name="gpa",
-    help="Global Power Atlas: ingest and inspect wholesale electricity market data.",
+    help="German power market research: ingest, forecast and value DE-LU day-ahead prices.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -84,17 +82,7 @@ def _report(results: list[pipeline.IngestResult]) -> None:
 
     counts = pipeline.summarise(results)
     typer.echo("")
-    typer.echo(
-        f"written {counts['written']} | empty {counts['empty']} | "
-        f"skipped {counts['skipped']} | failed {counts['failed']}"
-    )
-
-    if counts["skipped"]:
-        typer.secho(
-            "Some targets were skipped for a missing credential. "
-            "They will start collecting as soon as the key is set.",
-            fg=typer.colors.YELLOW,
-        )
+    typer.echo(f"written {counts['written']} | empty {counts['empty']} | failed {counts['failed']}")
     if counts["failed"]:
         raise typer.Exit(code=1)
 
@@ -114,7 +102,6 @@ def zones(
         {
             "code": z.code,
             "name": z.name,
-            "region": z.region.value,
             "timezone": z.timezone,
             "market_dst": "yes" if z.observes_market_dst else "no",
             "currency": z.currency,
@@ -131,8 +118,6 @@ def zones(
             typer.echo("")
             typer.secho(f"{z.code} - {z.name}", bold=True)
             typer.echo(f"  {z.notes}")
-            if z.peak.note:
-                typer.secho(f"  Caveat: {z.peak.note}", fg=typer.colors.YELLOW)
 
 
 @app.command()
@@ -344,52 +329,29 @@ def freshness(
         ),
     ] = True,
 ) -> None:
-    """Report how stale each series is against its declared rule.
+    """Report how stale each series is against the freshness rule.
 
     The scheduled workflow runs this so that a silent stall becomes a visible
     failure. A run that fetched nothing still exits zero if no adapter raised,
     which is exactly the case this catches.
-
-    A series declared manual reports but never fails the run: nobody can fix
-    it from a cron job, and failing nightly would train people to ignore the
-    failure. No active series is manual today.
     """
     from gpa import freshness as freshness_module
 
     reports = freshness_module.check()
-    if not reports:
-        typer.secho("No zones declare a source.", fg=typer.colors.YELLOW)
-        return
-
+    overdue = [r for r in reports if r.stale or r.missing]
     for report in reports:
-        colour = None
-        if report.blocking:
-            colour = typer.colors.RED
-        elif report.stale or report.missing:
-            colour = typer.colors.YELLOW
-        typer.secho(str(report), fg=colour)
-
-    blocking = [r for r in reports if r.blocking]
-    reminders = [r for r in reports if (r.stale or r.missing) and not r.blocking]
+        typer.secho(str(report), fg=typer.colors.RED if report in overdue else None)
 
     typer.echo("")
-    if reminders:
+    if not overdue:
         typer.secho(
-            f"{len(reminders)} manually refreshed series need attention:", fg=typer.colors.YELLOW
-        )
-        for report in reminders:
-            typer.echo(f"  {report.zone} {report.dataset}: {report.rule.reason}")
-
-    if not blocking:
-        typer.secho(
-            f"All {len(reports)} series are within their freshness rules.", fg=typer.colors.GREEN
+            f"All {len(reports)} series are within their freshness rule.", fg=typer.colors.GREEN
         )
         return
 
-    typer.secho(f"{len(blocking)} series are stale:", fg=typer.colors.RED)
-    for report in blocking:
+    typer.secho(f"{len(overdue)} series are stale:", fg=typer.colors.RED)
+    for report in overdue:
         typer.echo(f"  {report.zone} {report.dataset}: {report.rule.reason}")
-
     if strict:
         raise typer.Exit(code=1)
 
@@ -1007,9 +969,13 @@ def battery_value(
 @app.command("battery-study")
 def battery_study(
     predictions: Annotated[
-        Path,
-        typer.Option(exists=True, dir_okay=False, help="DE-LU retrospective predictions Parquet."),
-    ],
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="Predictions Parquet. Default: the frozen release the site is built from.",
+        ),
+    ] = None,
     output: Annotated[
         Path, typer.Option(help="Local study root; completed runs are never overwritten.")
     ] = Path(".gpa/battery-studies"),
@@ -1029,12 +995,14 @@ def battery_study(
 ) -> None:
     """Compare five forecasts and 1/2/4 MWh batteries on shared settled days.
 
-    Reads only the supplied predictions; no ingestion, live issuance, model
+    Reads the frozen release's predictions, rounded exactly as the site's battery
+    tables read them, or a supplied Parquet; no ingestion, live issuance, model
     training or public-site export. Costs must be calibrated before asset use.
     """
     from gpa.battery_study import evaluate, save_study
+    from gpa.export import release_predictions
 
-    frame = pl.read_parquet(predictions)
+    frame = pl.read_parquet(predictions) if predictions else release_predictions()
     try:
         result = evaluate(
             frame,
@@ -1068,23 +1036,6 @@ def battery_study(
                 )
             )
         )
-
-
-@app.command()
-def query(
-    sql: Annotated[str, typer.Argument(help="SQL over views named price, load and generation.")],
-) -> None:
-    """Run a DuckDB query against the store.
-
-    Example:
-        gpa query "SELECT zone, avg(price) FROM price GROUP BY 1"
-    """
-    con = store.connect()
-    try:
-        with pl.Config(tbl_rows=50, tbl_width_chars=200):
-            typer.echo(str(con.sql(sql).pl()))
-    finally:
-        con.close()
 
 
 if __name__ == "__main__":  # pragma: no cover

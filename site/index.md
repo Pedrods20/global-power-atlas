@@ -353,15 +353,15 @@ not change the direction of anything above. Reproduce with
 
 **Sources.** Prices, load, generation and installed capacity come from
 Energy-Charts (Fraunhofer ISE, CC BY 4.0), which republishes ENTSO-E and SMARD
-figures; Brazilian system data comes from ONS. Two figures on the storage page
+figures published by the system operators. Two figures on the storage page
 are external citations — BloombergNEF and the Bundesnetzagentur — dated where
 they appear.
 
 ## Author
 
-**Pedro Cabral.** Built solo, end to end: ingestion across two public
-system-data providers covering four markets, leakage-safe walk-forward
-forecasting, the constrained dispatch and stress-testing engine, and this site.
+**Pedro Cabral.** Built solo, end to end: ingestion of the system operators'
+public data, leakage-safe walk-forward forecasting, the constrained dispatch and
+stress-testing engine, the prospective ledger, and this site.
 
 Code, data and the full audit trail:
 **[github.com/Pedrods20/global-power-atlas](https://github.com/Pedrods20/global-power-atlas)**
@@ -372,7 +372,7 @@ Code, data and the full audit trail:
 ## Market context
 
 ```js
-const zones = await FileAttachment("data/zones.json").json();
+const currency = await FileAttachment("data/data_as_of.json").json();
 const dailyPrices = [...await FileAttachment("data/daily_prices.parquet").parquet()];
 const mix = [...await FileAttachment("data/generation_mix.parquet").parquet()];
 const priceRows = dailyPrices.filter((d) => String(d.zone) === "DE-LU");
@@ -381,7 +381,7 @@ const fuelColor = {coal: "#5A4632", gas: "#56B4E9", oil: "#000000", nuclear: "#C
 const fuelOrder = Object.keys(fuelColor);
 ```
 
-Data through **${zones.data_as_of ? zones.data_as_of.slice(0, 10) : "the latest monthly export"}**.
+Data through **${currency.data_as_of ? currency.data_as_of.slice(0, 10) : "the latest monthly export"}**.
 
 ```js
 Plot.plot({

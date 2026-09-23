@@ -1,13 +1,12 @@
 """Ingestion orchestration tests.
 
 ``pipeline.py`` is the resilience story of the daily scheduled run. It decides
-what becomes skipped, failed, written or empty, and whether one bad provider
-stops the rest of the world from updating. None of that was covered before, so
+what becomes failed, written or empty, and whether one bad provider stops the
+rest from updating. None of that was covered before, so
 these tests exercise it against fake sources rather than the network.
 
-The governing rule under test: one zone failing must never stop the others. A
-scheduled run is only a failure if a target genuinely failed, and a missing
-credential is not a failure.
+The governing rule under test: one target failing must never stop the others,
+and a scheduled run is a failure only if a target genuinely failed.
 """
 
 from __future__ import annotations
@@ -25,8 +24,8 @@ from gpa import pipeline, store
 from gpa.forecast.panel import build_panel
 from gpa.pipeline import Outcome
 from gpa.schema import empty_frame
-from gpa.sources.base import MissingCredential, UpstreamError
-from gpa.zones import BR_PONTA, Region, Zone, get_zone
+from gpa.sources.base import UpstreamError
+from gpa.zones import EUROPEAN_PEAKLOAD, Zone, get_zone
 
 START = dt.datetime(2026, 6, 1, tzinfo=dt.UTC)
 END = dt.datetime(2026, 6, 8, tzinfo=dt.UTC)
@@ -75,8 +74,6 @@ class FakeSource:
 
     def fetch(self, zone: Zone, dataset: str, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
         self.calls.append((start, end))
-        if self.behaviour == "missing_credential":
-            raise MissingCredential("FAKE_API_KEY is not set")
         if self.behaviour == "upstream":
             raise UpstreamError("provider returned 503")
         if self.behaviour == "boom":
@@ -144,12 +141,9 @@ def fake_zone(code: str = "ZZ-TEST", source: str = "fake") -> Zone:
     return Zone(
         code=code,
         name=f"Test zone {code}",
-        country="ZZ",
-        region=Region.EUROPE,
-        operator="Test",
         timezone="Europe/Berlin",
         currency="EUR",
-        peak=BR_PONTA,
+        peak=EUROPEAN_PEAKLOAD,
         sources={"load": source},
         source_keys={},
     )
@@ -188,22 +182,6 @@ def test_an_empty_provider_response_is_empty_not_failed(monkeypatch: pytest.Monk
     results = pipeline.ingest(start=START, end=END)
 
     assert results[0].outcome is Outcome.EMPTY
-    assert results[0].ok is True
-
-
-def test_a_missing_credential_is_skipped_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unconfigured key must not fail the scheduled run.
-
-    A market waiting for a provider key must not stop the daily ingest from
-    updating every other market.
-    """
-    install(monkeypatch, [fake_zone()], {"fake": FakeSource("missing_credential")})
-
-    results = pipeline.ingest(start=START, end=END)
-
-    assert results[0].outcome is Outcome.SKIPPED
-    assert results[0].ok is True
-    assert "FAKE_API_KEY" in results[0].detail
 
 
 def test_an_upstream_error_is_failed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +190,6 @@ def test_an_upstream_error_is_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     results = pipeline.ingest(start=START, end=END)
 
     assert results[0].outcome is Outcome.FAILED
-    assert results[0].ok is False
     assert "503" in results[0].detail
 
 
@@ -246,28 +223,14 @@ def test_an_unanticipated_exception_is_contained(monkeypatch: pytest.MonkeyPatch
 def test_one_failing_zone_does_not_stop_the_others(monkeypatch: pytest.MonkeyPatch) -> None:
     """The rule the whole module exists to guarantee.
 
-    A broken provider, and an unconfigured one, must both leave every other
-    market updating normally.
+    A broken provider must leave every other target updating normally.
     """
-    zones = [
-        fake_zone("AA", "fake"),
-        fake_zone("BB", "broken"),
-        fake_zone("CC", "nokey"),
-        fake_zone("DD", "fake"),
-    ]
-    install(
-        monkeypatch,
-        zones,
-        {
-            "fake": FakeSource("ok"),
-            "broken": FakeSource("upstream"),
-            "nokey": FakeSource("missing_credential"),
-        },
-    )
+    zones = [fake_zone("AA", "fake"), fake_zone("BB", "broken"), fake_zone("DD", "fake")]
+    install(monkeypatch, zones, {"fake": FakeSource("ok"), "broken": FakeSource("upstream")})
 
     counts = pipeline.summarise(pipeline.ingest(start=START, end=END))
 
-    assert counts == {"written": 2, "empty": 0, "skipped": 1, "failed": 1}
+    assert counts == {"written": 2, "empty": 0, "failed": 1}
     assert store.read("load", "AA").height == HOURS
     assert store.read("load", "DD").height == HOURS
 
@@ -578,7 +541,7 @@ def test_capping_prices_at_now_reproduces_the_missing_previous_day(
 
 
 def test_summarise_counts_every_outcome_including_zeros() -> None:
-    assert pipeline.summarise([]) == {"written": 0, "empty": 0, "skipped": 0, "failed": 0}
+    assert pipeline.summarise([]) == {"written": 0, "empty": 0, "failed": 0}
 
 
 def test_result_renders_rows_when_written_and_detail_otherwise() -> None:

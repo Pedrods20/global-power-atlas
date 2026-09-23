@@ -20,39 +20,18 @@ from __future__ import annotations
 import polars as pl
 
 from gpa.calendar import BLOCK_OFF_PEAK, BLOCK_ON_PEAK, attach_block, attach_local_time
-from gpa.metrics.load import _duration_curve
 from gpa.zones import Zone
 
 __all__ = [
-    "DAYS_PER_YEAR",
     "block_prices",
     "capture_rate",
-    "duration_curve",
     "hourly_shape",
     "intraday_spread",
     "negative_price_summary",
-    "price_spikes",
-    "realised_volatility",
 ]
 
-DAYS_PER_YEAR = 365
-"""Spot power settles every calendar day. See the module docstring."""
 
 _INTERVAL_HOURS = pl.col("resolution_min").cast(pl.Float64) / 60.0
-
-
-def duration_curve(frame: pl.DataFrame, *, points: int | None = None) -> pl.DataFrame:
-    """Price duration curve: price sorted descending against exceedance.
-
-    Read the two ends. The left tail is scarcity, and a market that earns its
-    fixed costs in a handful of hours lives there. The right tail crossing zero
-    is renewable surplus, and its width is the clearest single measure of how
-    often the system has more must-run output than demand.
-
-    Returns:
-        Columns ``exceedance_pct`` and ``price``, descending by price.
-    """
-    return _duration_curve(frame, "price", points)
 
 
 def block_prices(frame: pl.DataFrame, zone: Zone, *, period: str = "month") -> pl.DataFrame:
@@ -355,130 +334,6 @@ def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
             "max_run_hours",
         )
         .sort("local_month")
-    )
-
-
-def price_spikes(frame: pl.DataFrame, zone: Zone, *, quantile: float = 0.99) -> pl.DataFrame:
-    """Upper-tail statistics, and how concentrated revenue is in few intervals.
-
-    ``share_of_value_pct`` is the fraction of the period's total price-hours
-    delivered by intervals above the threshold. In a scarcity-priced market a
-    single-digit percentage of intervals routinely carries a large share of
-    annual value, which is why averages mislead and why peaking assets are
-    valued on the tail rather than the mean.
-
-    Args:
-        frame: Rows matching the ``price`` schema.
-        zone: Supplies the market timezone.
-        quantile: Tail cut-off, between 0 and 1 exclusive.
-
-    Returns:
-        One row per local month with the threshold, tail count, tail mean,
-        maximum and the tail's share of total value.
-
-    Raises:
-        ValueError: If ``quantile`` is not strictly between 0 and 1.
-    """
-    if not 0.0 < quantile < 1.0:
-        raise ValueError(f"quantile must be strictly between 0 and 1, got {quantile}")
-
-    empty = pl.DataFrame(
-        schema={
-            "local_month": pl.String,
-            "threshold": pl.Float64,
-            "n_above": pl.UInt32,
-            "mean_above": pl.Float64,
-            "max_price": pl.Float64,
-            "share_of_value_pct": pl.Float64,
-        }
-    )
-    if frame.is_empty():
-        return empty
-
-    prepared = attach_local_time(frame, zone).with_columns(
-        pl.col("local_date").dt.strftime("%Y-%m").alias("local_month"),
-        (pl.col("price") * _INTERVAL_HOURS).alias("_value"),
-    )
-
-    threshold = pl.col("price").quantile(quantile, interpolation="linear")
-    above = pl.col("price") >= threshold
-
-    return (
-        prepared.group_by("local_month")
-        .agg(
-            threshold.alias("threshold"),
-            above.sum().cast(pl.UInt32).alias("n_above"),
-            pl.col("price").filter(above).mean().alias("mean_above"),
-            pl.col("price").max().alias("max_price"),
-            (pl.col("_value").filter(above).sum() / pl.col("_value").sum() * 100.0).alias(
-                "share_of_value_pct"
-            ),
-        )
-        .sort("local_month")
-    )
-
-
-def realised_volatility(
-    frame: pl.DataFrame,
-    zone: Zone,
-    *,
-    window: int = 30,
-    annualise: bool = True,
-) -> pl.DataFrame:
-    """Rolling volatility of daily mean price, in currency per MWh.
-
-    The daily mean is taken over market-local days, then volatility is the
-    rolling standard deviation of its day-on-day arithmetic change. Arithmetic
-    rather than logarithmic, for the reason in the module docstring: prices go
-    negative, and a log return would be undefined precisely there.
-
-    Args:
-        frame: Rows matching the ``price`` schema.
-        zone: Supplies the market timezone.
-        window: Number of days in the rolling window.
-        annualise: Scale by the square root of 365.
-
-    Returns:
-        Columns ``local_date``, ``daily_price``, ``daily_change`` and
-        ``volatility``. The first ``window`` days carry a null volatility.
-
-    Raises:
-        ValueError: If ``window`` is less than 2.
-    """
-    if window < 2:
-        raise ValueError(f"window must be at least 2, got {window}")
-
-    empty = pl.DataFrame(
-        schema={
-            "local_date": pl.Date,
-            "daily_price": pl.Float64,
-            "daily_change": pl.Float64,
-            "volatility": pl.Float64,
-        }
-    )
-    if frame.is_empty():
-        return empty
-
-    daily = (
-        attach_local_time(frame, zone)
-        .group_by("local_date")
-        .agg(
-            ((pl.col("price") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias("daily_price")
-        )
-        .sort("local_date")
-    )
-    if daily.height < 2:
-        return empty
-
-    scale = DAYS_PER_YEAR**0.5 if annualise else 1.0
-
-    # Insert absent calendar dates as nulls in this derived table only. No
-    # provider observation is filled, and rolling windows cannot bridge a gap.
-    daily = daily.upsample(time_column="local_date", every="1d")
-    return daily.with_columns(pl.col("daily_price").diff().alias("daily_change")).with_columns(
-        (pl.col("daily_change").rolling_std(window_size=window, min_samples=window) * scale).alias(
-            "volatility"
-        )
     )
 
 

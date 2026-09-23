@@ -12,21 +12,13 @@ is patched out so the suite stays fast.
 
 from __future__ import annotations
 
-import datetime as dt
-
 import httpx
-import polars as pl
 import pytest
 
 from gpa.sources import base
 from gpa.sources.base import (
-    MissingCredential,
     UpstreamError,
     fetch_json,
-    fetch_text,
-    infer_resolution_minutes,
-    month_range,
-    require_env,
 )
 
 
@@ -144,116 +136,3 @@ def test_backoff_is_capped(no_sleep: list[float]) -> None:
         fetch_json("https://example.test/data", client=client)
 
     assert max(no_sleep) <= base._MAX_BACKOFF_SECONDS
-
-
-# --- fetch_text -------------------------------------------------------------
-
-
-def test_fetch_text_returns_the_body() -> None:
-    with client_returning(httpx.Response(200, text="a;b;c")) as client:
-        assert fetch_text("https://example.test/file.csv", client=client) == "a;b;c"
-
-
-def test_a_missing_file_can_be_allowed(no_sleep: list[float]) -> None:
-    """A month or year the archive has not published is expected, not an error."""
-    with client_returning(httpx.Response(404)) as client:
-        assert (
-            fetch_text("https://example.test/2030.csv", client=client, allow_missing=True) is None
-        )
-
-
-def test_a_missing_file_raises_when_not_allowed() -> None:
-    with (
-        client_returning(httpx.Response(404)) as client,
-        pytest.raises(UpstreamError, match="404"),
-    ):
-        fetch_text("https://example.test/2030.csv", client=client)
-
-
-# --- Credentials ------------------------------------------------------------
-
-
-def test_a_configured_credential_is_returned(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DEMO_KEY", "abc123")
-    assert require_env("DEMO_KEY", source="Demo") == "abc123"
-
-
-def test_a_missing_credential_names_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DEMO_KEY", raising=False)
-    with pytest.raises(MissingCredential, match="DEMO_KEY"):
-        require_env("DEMO_KEY", source="Demo")
-
-
-def test_a_blank_credential_counts_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An empty secret in CI is a misconfiguration, not a valid key."""
-    monkeypatch.setenv("DEMO_KEY", "   ")
-    with pytest.raises(MissingCredential):
-        require_env("DEMO_KEY", source="Demo")
-
-
-def test_a_known_credential_includes_its_registration_url(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("ENTSOE_API_KEY", raising=False)
-    with pytest.raises(MissingCredential, match=r"transparency\.entsoe\.eu"):
-        require_env("ENTSOE_API_KEY", source="ENTSO-E")
-
-
-# --- month_range ------------------------------------------------------------
-
-
-def test_month_range_covers_both_end_months() -> None:
-    months = list(
-        month_range(
-            dt.datetime(2026, 1, 15, tzinfo=dt.UTC),
-            dt.datetime(2026, 3, 2, tzinfo=dt.UTC),
-        )
-    )
-    assert months == [(2026, 1), (2026, 2), (2026, 3)]
-
-
-def test_month_range_crosses_a_year_boundary() -> None:
-    months = list(
-        month_range(
-            dt.datetime(2025, 11, 1, tzinfo=dt.UTC),
-            dt.datetime(2026, 2, 1, tzinfo=dt.UTC),
-        )
-    )
-    assert months == [(2025, 11), (2025, 12), (2026, 1), (2026, 2)]
-
-
-def test_month_range_of_a_single_month_yields_one_entry() -> None:
-    months = list(
-        month_range(
-            dt.datetime(2026, 5, 3, tzinfo=dt.UTC),
-            dt.datetime(2026, 5, 28, tzinfo=dt.UTC),
-        )
-    )
-    assert months == [(2026, 5)]
-
-
-# --- Resolution inference ---------------------------------------------------
-
-
-def test_resolution_snaps_to_a_supported_interval() -> None:
-    """Providers publish slightly irregular stamps; the answer must still be valid."""
-    stamps = pl.Series(
-        "ts",
-        [
-            dt.datetime(2026, 1, 1, 0, 0),
-            dt.datetime(2026, 1, 1, 0, 29),
-            dt.datetime(2026, 1, 1, 1, 1),
-            dt.datetime(2026, 1, 1, 1, 30),
-        ],
-    )
-    assert infer_resolution_minutes(stamps) == 30
-
-
-def test_resolution_ignores_ordering() -> None:
-    ordered = [dt.datetime(2026, 1, 1) + dt.timedelta(hours=i) for i in range(6)]
-    assert infer_resolution_minutes(pl.Series("ts", list(reversed(ordered)))) == 60
-
-
-def test_resolution_accepts_a_plain_sequence() -> None:
-    stamps = [dt.datetime(2026, 1, 1) + dt.timedelta(minutes=5 * i) for i in range(10)]
-    assert infer_resolution_minutes(stamps) == 5

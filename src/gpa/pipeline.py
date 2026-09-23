@@ -4,10 +4,9 @@ Turns "collect these zones over this window" into validated rows on disk, and
 reports what happened per zone and dataset so that a scheduled run leaves an
 auditable trail rather than a silent success.
 
-The guiding rule is that one zone failing must never stop the others. A source
-whose credential is missing, or whose provider is having a bad day, degrades to
-a skipped or failed outcome for that zone alone. A run is only a failure if
-every requested target failed.
+The guiding rule is that one target failing must never stop the others: a
+provider having a bad day degrades to a failed outcome for that dataset alone,
+and the run reports it.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from functools import partial
 
 from gpa import store
 from gpa.schema import SchemaError, SchemaErrors, validate
-from gpa.sources import MissingCredential, SourceError, get_source
+from gpa.sources import SourceError, get_source
 from gpa.zones import ZONES, Zone, get_zone
 
 __all__ = [
@@ -73,7 +72,6 @@ class Outcome(StrEnum):
 
     WRITTEN = "written"
     EMPTY = "empty"
-    SKIPPED = "skipped"
     FAILED = "failed"
 
 
@@ -89,11 +87,6 @@ class IngestResult:
     detail: str = ""
     start: dt.datetime | None = None
     end: dt.datetime | None = None
-
-    @property
-    def ok(self) -> bool:
-        """Whether this target completed without error. Empty counts as fine."""
-        return self.outcome in (Outcome.WRITTEN, Outcome.EMPTY, Outcome.SKIPPED)
 
     def __str__(self) -> str:
         head = f"{self.zone:9s} {self.dataset:11s} via {self.source:16s} {self.outcome.value:8s}"
@@ -236,9 +229,6 @@ def ingest(
 
         try:
             rows = _ingest_one(source, zone, dataset, window_start, window_end, chunk_days, dry_run)
-        except MissingCredential as exc:
-            log.warning("skipping %s %s: %s", zone.code, dataset, exc)
-            results.append(record(Outcome.SKIPPED, detail=str(exc)))
         except (SchemaError, SchemaErrors) as exc:
             log.error("%s %s failed validation: %s", zone.code, dataset, exc)
             results.append(record(Outcome.FAILED, detail=f"schema violation: {_first_line(exc)}"))

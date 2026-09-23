@@ -1,4 +1,4 @@
-"""Partitioned Parquet store with DuckDB query access.
+"""Partitioned Parquet store.
 
 The store is a directory of Parquet files, committed to the repository:
 
@@ -9,11 +9,10 @@ incremental run rewrites only the current month, which in turn keeps git
 history readable and the repository small. Months in the past are effectively
 append-only.
 
-Writes are upserts on the dataset's natural key. Power data is revised: providers
-can restate observations, and ONS republishes its yearly file continuously.
-Re-ingesting a window therefore has to replace what is
-already there rather than duplicate it, and the last writer for a given key
-wins.
+Writes are upserts on the dataset's natural key. Power data is revised:
+providers restate observations after publishing them. Re-ingesting a window
+therefore has to replace what is already there rather than duplicate it, and the
+last writer for a given key wins.
 """
 
 from __future__ import annotations
@@ -24,15 +23,12 @@ import tempfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-import duckdb
 import polars as pl
 
 from gpa.schema import SCHEMAS, empty_frame, validate
 
 __all__ = [
     "DATASETS",
-    "available_months",
-    "connect",
     "coverage",
     "curated_root",
     "dataset_dir",
@@ -161,14 +157,6 @@ def atomic_parquet(frame: pl.DataFrame, path: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def available_months(dataset: str, zone: str) -> list[str]:
-    """Months stored for a zone, ascending, as ``YYYY-MM`` strings."""
-    directory = dataset_dir(dataset) / f"zone={zone}"
-    if not directory.is_dir():
-        return []
-    return sorted(p.stem for p in directory.glob("*.parquet"))
-
-
 def last_ingested(dataset: str, zone: str) -> dt.datetime | None:
     """Latest stored instant for a zone, or ``None`` when nothing is stored.
 
@@ -248,34 +236,6 @@ def read(
 def _empty(dataset: str, columns: Sequence[str] | None) -> pl.DataFrame:
     frame = empty_frame(dataset)
     return frame.select(list(columns)) if columns is not None else frame
-
-
-def connect(datasets: Iterable[str] | None = None) -> duckdb.DuckDBPyConnection:
-    """Open an in-memory DuckDB connection with one view per dataset.
-
-    Each view is a ``read_parquet`` over the dataset's partitions with
-    ``hive_partitioning`` enabled, so ``zone`` is available as a real column and
-    DuckDB prunes partitions from a ``WHERE zone = ...`` clause.
-
-    A dataset with no files on disk is skipped rather than creating a view that
-    errors on first use.
-
-    Example:
-        >>> con = connect()
-        >>> con.sql("SELECT zone, count(*) FROM price GROUP BY 1").fetchall()
-    """
-    con = duckdb.connect()
-    for dataset in datasets or DATASETS:
-        _check_dataset(dataset)
-        root = dataset_dir(dataset)
-        if not root.is_dir() or not any(root.rglob("*.parquet")):
-            continue
-        pattern = (root / "zone=*" / "*.parquet").as_posix()
-        con.execute(
-            f"CREATE VIEW {dataset} AS "
-            f"SELECT * FROM read_parquet('{pattern}', hive_partitioning = true)"
-        )
-    return con
 
 
 def coverage() -> pl.DataFrame:

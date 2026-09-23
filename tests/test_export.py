@@ -1,7 +1,6 @@
 """Export metadata is reproducible and does not mistake build time for data time."""
 
 import datetime as dt
-import json
 
 import polars as pl
 import pytest
@@ -9,7 +8,6 @@ from polars.testing import assert_frame_equal
 
 from gpa import store
 from gpa.battery_study import evaluate
-from gpa.calendar import hours_in_local_day
 from gpa.export import (
     _BATTERY_DURATIONS_MWH,
     _BATTERY_MODEL_NAMES,
@@ -23,13 +21,12 @@ from gpa.export import (
     _capacity_extrapolation_flags,
     _capacity_price_correlation,
     _capacity_price_yearly,
-    _daily_load,
-    _drop_incomplete_trailing_day,
+    _data_as_of,
     _forecast_page_predictions,
     _fundamentals_ablation,
     _json_values_close,
-    _overview,
     export_all,
+    release_predictions,
 )
 from gpa.zones import get_zone
 from tests.test_battery import DAY, predictions
@@ -51,16 +48,12 @@ def test_export_check_tolerates_cross_platform_float_noise_not_real_change():
     assert not _json_values_close(reference, missing_key)
 
 
-def test_overview_depends_on_observations_not_export_clock(tmp_path, monkeypatch):
+def test_data_as_of_depends_on_observations_not_export_clock(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
     store.write(price_rows([10.0, -20.0]), "price")
-    # Price is forward-published (E lets it run up to two days ahead of "now"),
-    # so a price-only store must not surface a future "as of" date.
-    price_only = _overview()
-    assert price_only["data_as_of"] is None
-    german = next(z for z in price_only["zones"] if z["code"] == "DE-LU")
-    assert "age_hours" not in german["datasets"]["price"]
-    assert german["datasets"]["load"]["status"] == "pending"
+    # Price is forward-published, up to two days ahead of "now", so a
+    # price-only store must not surface a future "as of" date.
+    assert _data_as_of() is None
 
     store.write(
         load_rows(
@@ -70,75 +63,16 @@ def test_overview_depends_on_observations_not_export_clock(tmp_path, monkeypatch
         ),
         "load",
     )
-    first = _overview()
-    second = _overview()
-    assert json.dumps(first, default=str) == json.dumps(second, default=str)
-    assert first["data_as_of"] == "2026-06-10T02:00:00+00:00"
+    assert _data_as_of() == _data_as_of() == "2026-06-10T02:00:00+00:00"
 
 
 def test_empty_store_has_no_data_timestamp(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    assert _overview()["data_as_of"] is None
+    assert _data_as_of() is None
 
 
-def test_market_dst_is_not_inferred_from_civil_timezone_presence():
-    assert not get_zone("BR-SIN").observes_market_dst
+def test_the_german_market_clock_observes_daylight_saving():
     assert get_zone("DE-LU").observes_market_dst
-
-
-def test_drop_incomplete_trailing_day_trims_a_day_still_in_progress():
-    zone = get_zone("DE-LU")
-    daily = pl.DataFrame(
-        {
-            "date": [dt.date(2026, 6, 10), dt.date(2026, 6, 11)],
-            "hours_observed": [24.0, 10.0],
-        }
-    )
-    trimmed = _drop_incomplete_trailing_day(daily, zone, "hours_observed")
-    assert trimmed["date"].to_list() == [dt.date(2026, 6, 10)]
-
-
-def test_drop_incomplete_trailing_day_keeps_a_genuinely_short_dst_day():
-    zone = get_zone("DE-LU")
-    # 2026-03-29 is DE-LU's spring-forward day: a real, complete 23-hour day.
-    assert hours_in_local_day(zone, dt.date(2026, 3, 29)) == 23
-    daily = pl.DataFrame(
-        {
-            "date": [dt.date(2026, 3, 28), dt.date(2026, 3, 29)],
-            "hours_observed": [24.0, 23.0],
-        }
-    )
-    trimmed = _drop_incomplete_trailing_day(daily, zone, "hours_observed")
-    assert trimmed["date"].to_list() == [dt.date(2026, 3, 28), dt.date(2026, 3, 29)]
-
-    # But a DST day that is itself still in progress is still trimmed.
-    partial = pl.DataFrame(
-        {
-            "date": [dt.date(2026, 3, 28), dt.date(2026, 3, 29)],
-            "hours_observed": [24.0, 14.0],
-        }
-    )
-    assert _drop_incomplete_trailing_day(partial, zone, "hours_observed")["date"].to_list() == [
-        dt.date(2026, 3, 28)
-    ]
-
-
-def test_daily_load_drops_a_trailing_partial_day(tmp_path, monkeypatch):
-    monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
-    # Berlin is UTC+2 in June: start/end are chosen so the first two local
-    # days are whole and only the last one is cut short mid-day.
-    store.write(
-        load_rows(
-            "DE-LU",
-            dt.datetime(2026, 6, 9, 22, tzinfo=dt.UTC),
-            dt.datetime(2026, 6, 12, 4, tzinfo=dt.UTC),
-        ),
-        "load",
-    )
-    dates = _daily_load().filter(pl.col("zone") == "DE-LU")["date"].to_list()
-    assert dt.date(2026, 6, 10) in dates
-    assert dt.date(2026, 6, 11) in dates
-    assert dt.date(2026, 6, 12) not in dates
 
 
 def test_capacity_is_empty_before_anything_is_fetched(tmp_path, monkeypatch):
@@ -637,11 +571,13 @@ def test_export_all_raises_without_a_frozen_snapshot(tmp_path, monkeypatch):
         export_all(tmp_path / "site-data")
 
 
-def test_export_keeps_full_study_input_separate_from_browser_preview(tmp_path, monkeypatch):
+def test_battery_tables_read_every_prediction_and_the_page_a_preview(tmp_path, monkeypatch):
+    """The battery tables and ``gpa battery-study`` read the whole release,
+    rounded the same way; the browser gets twelve sampled weeks of it."""
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path / "curated"))
     monkeypatch.setenv("GPA_REFERENCE_ROOT", str(tmp_path / "reference"))
     frame = predictions(days=tuple(DAY + dt.timedelta(days=7 * i) for i in range(20)))
-    frames = dict.fromkeys(("scores", "daily", "coefficients"), pl.DataFrame())
+    frames = dict.fromkeys(("scores", "daily"), pl.DataFrame())
     frames["predictions"] = frame
     monkeypatch.setattr("gpa.forecast.snapshot.read", lambda: ({"zone": "DE-LU"}, frames))
     received = []
@@ -653,15 +589,13 @@ def test_export_keeps_full_study_input_separate_from_browser_preview(tmp_path, m
     monkeypatch.setattr("gpa.export._battery_tables", battery_tables)
     output = tmp_path / "site-data"
     export_all(output)
-    full = pl.read_parquet(output / "forecast_predictions.parquet")
     preview = pl.read_parquet(output / "forecast_preview.parquet")
-    assert full.height == frame.height == received[0].height
-    assert preview.height < full.height
+    assert received[0].height == frame.height
+    assert "ts_utc" not in received[0].columns  # the documented clock-hour contract
+    assert preview.height < frame.height
     assert preview["local_date"].str.to_date().dt.truncate("1w").n_unique() == 12
-    assert "ts_utc" not in full.columns  # retain the documented clock-hour contract
-    assert_frame_equal(
-        full.with_columns(pl.col("local_date").str.to_date()), received[0], check_row_order=False
-    )
+    assert not (output / "forecast_predictions.parquet").exists()
+    assert_frame_equal(release_predictions(), received[0])
 
 
 def test_battery_tables_match_battery_study_evaluate_bit_for_bit():

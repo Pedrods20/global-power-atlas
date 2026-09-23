@@ -14,40 +14,17 @@ and tested in ``tests/test_calendar.py``:
 
 from __future__ import annotations
 
-import datetime as dt
-from zoneinfo import ZoneInfo
-
 import polars as pl
 
 from gpa.zones import Zone
 
-__all__ = [
-    "BLOCK_OFF_PEAK",
-    "BLOCK_ON_PEAK",
-    "attach_block",
-    "attach_local_time",
-    "hours_in_local_day",
-    "is_on_peak",
-]
+__all__ = ["BLOCK_OFF_PEAK", "BLOCK_ON_PEAK", "attach_block", "attach_local_time"]
 
 BLOCK_ON_PEAK = "on_peak"
 BLOCK_OFF_PEAK = "off_peak"
 
 
 # --- Local time ------------------------------------------------------------
-
-
-def hours_in_local_day(zone: Zone, day: dt.date) -> int:
-    """How many clock hours ``day`` actually has in the zone's market timezone.
-
-    Returns 23 on a spring-forward day, 25 on a fall-back day, and 24 otherwise.
-    A market without daylight saving, such as Brazil since 2019, always returns 24.
-    """
-    tz = ZoneInfo(zone.timezone)
-    start = dt.datetime.combine(day, dt.time(0), tzinfo=tz)
-    end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0), tzinfo=tz)
-    elapsed = end.astimezone(dt.UTC) - start.astimezone(dt.UTC)
-    return round(elapsed.total_seconds() / 3600)
 
 
 def attach_local_time(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
@@ -83,28 +60,6 @@ def attach_local_time(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
 
 
 # --- Blocks ----------------------------------------------------------------
-
-
-def is_on_peak(zone: Zone, moment: dt.datetime) -> bool:
-    """Whether a single instant falls in the zone's on-peak block.
-
-    Args:
-        zone: Supplies the block definition and market timezone.
-        moment: A timezone-aware instant. Naive datetimes are rejected rather
-            than silently assumed to be UTC.
-
-    Raises:
-        ValueError: If ``moment`` is naive.
-    """
-    if moment.tzinfo is None:
-        raise ValueError("moment must be timezone-aware")
-
-    local = moment.astimezone(ZoneInfo(zone.timezone))
-    block = zone.peak
-
-    if local.isoweekday() not in block.weekdays:
-        return False
-    return block.start_hour <= local.hour < block.end_hour
 
 
 def attach_block(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:

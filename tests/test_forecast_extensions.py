@@ -9,9 +9,8 @@ import polars as pl
 
 from gpa import battery
 from gpa.forecast import fundamentals, ledger, panel, scoring
-from gpa.forecast.boosting import LightGBM, select_parameters
+from gpa.forecast.boosting import select_parameters
 from gpa.forecast.models import Ridge
-from gpa.sources.smard import SmardSource, _parse_series
 from tests.test_forecast import ZONE, price_frame, small_panel
 
 
@@ -40,18 +39,6 @@ def test_fundamentals_use_latest_snapshot_before_the_market_gate():
     result = fundamentals.attach(panel, snapshots, ZONE)
     assert result["da_load_forecast"].to_list() == [100.0]
     assert result["da_residual_load_forecast"].to_list() == [70.0]
-
-
-def test_smard_series_parser_and_combiner_keep_publication_vintage():
-    published = dt.datetime(2026, 9, 13, 8, tzinfo=dt.UTC)
-    payload = {"series": [[1757282400000, 100.5], [1757283300000, None]]}
-    result = fundamentals.from_smard_series(
-        payload, zone=ZONE, series="wind_onshore", published_at=published
-    )
-    combined = fundamentals.combine_smard_series([result])
-    assert combined.height == 1
-    assert combined["wind_forecast_mw"].to_list() == [100.5]
-    assert combined["published_at"].item() == published
 
 
 def test_issue_ledger_retains_abstentions_and_round_trips(tmp_path):
@@ -187,11 +174,8 @@ def test_battery_backtest_compares_forecast_no_trade_and_constrained_foresight()
     assert result.summary.filter(pl.col("strategy") == "ridge")["capture_vs_perfect"][0] == 1.0
 
 
-def test_lightgbm_quantiles_and_validation_tuning_are_walk_forward():
+def test_lightgbm_validation_tuning_is_walk_forward():
     prepared = small_panel()
-    day = dt.date(2025, 2, 10)
-    quantiles = LightGBM(num_boost_round=10).predict_day_quantiles(prepared, day, min_train_rows=20)
-    assert {"forecast", "q10", "q50", "q90"}.issubset(quantiles.columns)
     chosen, search = select_parameters(
         prepared,
         validation_start=dt.date(2025, 2, 5),
@@ -217,13 +201,3 @@ def test_scoreboard_adds_calendar_year_scope():
         levels=(),
     )
     assert scores.filter(pl.col("scope") == "year")["bucket"].to_list() == ["2025"]
-
-
-def test_smard_parser_accepts_documented_array_and_object_series():
-    assert _parse_series(
-        {"series": [[1_700_000_000_000, 2.0], {"value": [1_700_000_900_000, 3]}]}
-    ) == [
-        (1_700_000_000_000, 2.0),
-        (1_700_000_900_000, 3.0),
-    ]
-    assert SmardSource().max_window_days == 7

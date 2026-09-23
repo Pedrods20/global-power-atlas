@@ -409,25 +409,3 @@ def save_study(result: BatteryStudy, predictions: pl.DataFrame, root: Path) -> P
         json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
     )
     return path
-
-
-def read_study(path: Path) -> tuple[dict[str, Any], dict[str, pl.DataFrame]]:
-    """Validate a completed local study before reading its research tables."""
-    metadata = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-    if metadata.get("study_id") != _identity(metadata) or path.name != metadata["study_id"]:
-        raise ValueError("study identity does not match the manifest")
-    names = {f"{name}.parquet" for name in _TABLES} | set(_SOURCES)
-    if set(metadata["checksums"]) != names:
-        raise ValueError("study checksum manifest has missing or unexpected artifacts")
-    for name in sorted(names):
-        if hashlib.sha256((path / name).read_bytes()).hexdigest() != metadata["checksums"][name]:
-            raise ValueError(f"study checksum mismatch: {name}")
-    source_hash = hashlib.sha256(
-        b"".join(name.encode() + (path / name).read_bytes() for name in _SOURCES)
-    ).hexdigest()
-    if source_hash != metadata["source_sha256"]:
-        raise ValueError("study calculation source fingerprint mismatch")
-    tables = {name: pl.read_parquet(path / f"{name}.parquet") for name in _TABLES}
-    if _prediction_hash(tables["predictions"]) != metadata["assumptions"]["prediction_sha256"]:
-        raise ValueError("study input fingerprint mismatch")
-    return metadata, tables

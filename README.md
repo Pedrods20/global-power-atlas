@@ -148,36 +148,22 @@ history**, not an untouched holdout or a prospective record; and the study is
 
 ## Data and provenance
 
-The committed historical store covers four zones from two public,
-credential-free providers. European figures originate from the system operators
-and are redistributed by the platforms below.
+The committed store covers one market from one public, credential-free
+provider. The figures originate from the system operators and are redistributed
+by Energy-Charts.
 
-| Zone | Series | Provider | Publisher | Committed coverage |
-|---|---|---|---|---|
-| Germany-Luxembourg (DE-LU) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2018-12-31, 94 monthly partitions |
-| Germany-Luxembourg (DE-LU) | Day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2019-01-05, ablation and prospective arm |
-| France (FR) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2024-09-01 |
-| Spain (ES) | Price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2024-09-01 |
-| Brazil (SIN) | Load, generation | [ONS](https://www.ons.org.br/) | Operador Nacional do Sistema Elétrico | From 2024-09-01 |
+| Series | Provider | Publisher | Committed coverage |
+|---|---|---|---|
+| DE-LU price, load, generation | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2018-12-31, 94 monthly partitions |
+| DE-LU day-ahead load/wind/solar forecasts | [Energy-Charts](https://www.energy-charts.info/) | Fraunhofer ISE | From 2019-01-05, ablation and prospective arm |
 
-DE-LU is the only market with the depth this study needs; the other three zones
-are historical context and are deliberately not used for forecasting or valuation.
-
-- **Energy-Charts** (`api.energy-charts.info`) republishes ENTSO-E and SMARD
-  figures through an open API under CC BY 4.0. The adapter uses `/price`,
-  `/public_power`, `/public_power_forecast` and `/installed_power`, and measures
-  each series' resolution from the returned timestamps rather than assuming it.
-  `/public_power_forecast` feeds both the labelled retrospective ablation and the
-  prospective `ridge_da` arm; what differs between them is the publication
-  vintage each can honestly claim, not the provider.
-- **SMARD** (`smard.de/app/chart_data`), the Bundesnetzagentur's market-data
-  platform, is implemented as a second, independent German adapter. It is
-  registered and tested but not yet routed to: DE-LU currently takes every
-  dataset, fundamentals included, from Energy-Charts, and every row in the
-  committed store records Energy-Charts or ONS as its source.
-- **ONS** is read through two endpoints on purpose, because they do not share a
-  publication lag: generation from the hourly energy-balance CSV (about two days
-  behind real time) and load from the verified-load API (within about an hour).
+**Energy-Charts** (`api.energy-charts.info`) republishes ENTSO-E and SMARD
+figures through an open API under CC BY 4.0. The adapter uses `/price`,
+`/public_power`, `/public_power_forecast` and `/installed_power`, and measures
+each series' resolution from the returned timestamps rather than assuming it.
+`/public_power_forecast` feeds both the labelled retrospective ablation and the
+prospective `ridge_da` arm; what differs between them is the publication vintage
+each can honestly claim, not the provider.
 
 Stored inputs carry the providers' **latest revisions**. Lagging every
 fundamental avoids using future delivery dates, but it cannot prove that the
@@ -226,7 +212,7 @@ gpa reconcile --zone DE-LU
 gpa battery --zone DE-LU
 gpa forecast-attempt report --zone DE-LU --start-date 2026-09-24 --end-date 2026-10-31
 gpa probe-fundamentals --zone DE-LU
-gpa battery-study --predictions site/data/forecast_predictions.parquet
+gpa battery-study
 ```
 
 The repository has no runtime backend. The site reads only the small,
@@ -234,9 +220,10 @@ pre-computed files under `site/data`; browser-visible credentials are never
 required. The one exception to "pre-computed by `gpa export`" is the ledger
 counter, which a build-time loader (`site/data/ledger_status.json.js`) derives
 from the committed attempt records, because the ledger grows on every scheduled
-run and an exported table would be stale by the next one. The forecast chart loads `site/data/forecast_preview.parquet` (12
-sampled weeks); the separate `site/data/forecast_predictions.parquet` retains
-every rounded clock-hour prediction for reproducible battery studies.
+run and an exported table would be stale by the next one. The forecast chart
+loads `site/data/forecast_preview.parquet` (12 sampled weeks); `gpa battery-study`
+reads every prediction straight from the frozen release, rounded exactly as the
+site's battery tables read them.
 
 ## Quality checks
 
@@ -255,7 +242,7 @@ The historical dashboard is descriptive; it is not investment or trading advice.
 ```text
 src/gpa/forecast/   leakage-safe panel, models, walk-forward scoring and ledger
 src/gpa/battery.py  constrained dispatch and economic backtest
-src/gpa/metrics/    price shape, blocks, capture rates, negative prices
+src/gpa/metrics/    price shape, blocks, capture rates, generation mix
 src/gpa/export.py   deterministic static-site data products
 src/gpa/probe.py    when the provider publishes the next day's fundamentals
 site/               four focused Observable Framework pages
@@ -316,8 +303,7 @@ Data providers:
 
 - Energy-Charts, Fraunhofer Institute for Solar Energy Systems ISE —
   <https://www.energy-charts.info/> (API: `https://api.energy-charts.info`, CC BY 4.0)
-- SMARD, Bundesnetzagentur — <https://www.smard.de/>
-- ONS, Operador Nacional do Sistema Elétrico — <https://www.ons.org.br/>
+- SMARD, Bundesnetzagentur, upstream of the German figures — <https://www.smard.de/>
 - ENTSO-E Transparency Platform, the upstream of the European figures —
   <https://transparency.entsoe.eu/>
 
@@ -348,10 +334,9 @@ Technical and cost references used as stated comparisons, not as calibration:
 
 ## Author
 
-Designed and built end to end, solo: ingestion pipelines across two public
-system-data providers covering four markets, leakage-safe walk-forward
-forecasting, the constrained battery-dispatch and stress-testing engine, and this
-site. [github.com/Pedrods20](https://github.com/Pedrods20).
+Designed and built end to end, solo: ingestion of the system operators' public
+data, leakage-safe walk-forward forecasting, the constrained battery-dispatch and
+stress-testing engine, the prospective ledger, and this site. [github.com/Pedrods20](https://github.com/Pedrods20).
 
 ## License
 

@@ -67,8 +67,8 @@ def test_partitions_are_keyed_by_zone_and_month() -> None:
     store.write(price_rows([1.0], start=dt.datetime(2026, 6, 30, 23, tzinfo=dt.UTC)), "price")
     store.write(price_rows([2.0], start=dt.datetime(2026, 7, 1, 0, tzinfo=dt.UTC)), "price")
 
-    assert store.available_months("price", "DE-LU") == ["2026-06", "2026-07"]
     assert store.partition_path("price", "DE-LU", "2026-06").exists()
+    assert store.partition_path("price", "DE-LU", "2026-07").exists()
 
 
 def test_reading_an_empty_store_returns_the_right_schema() -> None:
@@ -133,10 +133,10 @@ def test_generation_upsert_keys_on_fuel_as_well() -> None:
 
 def test_read_filters_by_zone() -> None:
     store.write(price_rows([1.0], zone="DE-LU"), "price")
-    store.write(price_rows([2.0], zone="FR"), "price")
+    store.write(price_rows([2.0], zone="XX-TEST"), "price")
 
     assert store.read("price", "DE-LU").height == 1
-    assert store.read("price", ["DE-LU", "FR"]).height == 2
+    assert store.read("price", ["DE-LU", "XX-TEST"]).height == 2
 
 
 def test_read_window_is_half_open() -> None:
@@ -198,7 +198,9 @@ def test_last_ingested_is_the_latest_instant_across_partitions_for_that_zone() -
         price_rows([1.0, 2.0, 3.0], start=dt.datetime(2026, 6, 30, 22, tzinfo=dt.UTC)), "price"
     )
     store.write(price_rows([3.0], start=dt.datetime(2026, 5, 1, tzinfo=dt.UTC)), "price")
-    store.write(price_rows([4.0], zone="FR", start=dt.datetime(2026, 8, 1, tzinfo=dt.UTC)), "price")
+    store.write(
+        price_rows([4.0], zone="XX-TEST", start=dt.datetime(2026, 8, 1, tzinfo=dt.UTC)), "price"
+    )
 
     assert store.last_ingested("price", "DE-LU") == dt.datetime(2026, 7, 1, 0, tzinfo=dt.UTC)
     assert store.last_ingested("load", "DE-LU") is None
@@ -210,28 +212,3 @@ def test_last_ingested_ignores_an_interrupted_write(temporary_store: Path) -> No
     (zone_dir / ".gpa-interrupted.tmp").write_bytes(b"partial")
 
     assert store.last_ingested("price", "DE-LU") == dt.datetime(2026, 6, 15, tzinfo=dt.UTC)
-
-
-def test_duckdb_view_exposes_the_partition_key_as_a_column() -> None:
-    store.write(price_rows([10.0, 20.0], zone="DE-LU"), "price")
-    store.write(price_rows([30.0], zone="FR"), "price")
-
-    con = store.connect()
-    try:
-        result = con.sql("SELECT zone, count(*) AS n FROM price GROUP BY 1 ORDER BY 1").fetchall()
-    finally:
-        con.close()
-
-    assert result == [("DE-LU", 2), ("FR", 1)]
-
-
-def test_connect_skips_datasets_with_no_files() -> None:
-    """A view over a missing directory would error on first use."""
-    store.write(price_rows([1.0]), "price")
-    con = store.connect()
-    try:
-        views = {row[0] for row in con.sql("SHOW TABLES").fetchall()}
-    finally:
-        con.close()
-    assert "price" in views
-    assert "generation" not in views

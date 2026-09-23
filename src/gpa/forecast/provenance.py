@@ -166,7 +166,7 @@ def input_hash(panel: Panel) -> str:
 
 def _dependencies() -> dict[str, str]:
     result = {"python": platform.python_version()}
-    for package in ("polars", "numpy", "lightgbm", "scikit-learn", "tzdata"):
+    for package in ("polars", "numpy", "lightgbm", "tzdata"):
         try:
             result[package] = version(package)
         except PackageNotFoundError:

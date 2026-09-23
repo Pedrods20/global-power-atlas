@@ -2,7 +2,6 @@
 
 The monthly Parquet files are a mutable settlement index, not the source of
 forecast truth. Immutable input/issuance snapshots live under issues/<id>.
-Legacy rows remain readable but cannot become certified prospective evidence.
 """
 
 from __future__ import annotations
@@ -50,19 +49,6 @@ ISSUE_SCHEMA: Final = pl.Schema(
 )
 _KEYS = ["zone", "model", "issued_at", "delivery_date", "local_hour"]
 IMMUTABLE = [name for name in ISSUE_SCHEMA if name not in ("actual", "status")]
-_LEGACY = [
-    "zone",
-    "model",
-    "model_version",
-    "issued_at",
-    "delivery_date",
-    "local_hour",
-    "delivery_start_utc",
-    "forecast",
-    "actual",
-    "status",
-    "input_sha256",
-]
 
 
 def now_utc() -> dt.datetime:
@@ -403,19 +389,8 @@ def canonical_issue(
 
 
 def _validate(frame: pl.DataFrame) -> pl.DataFrame:
-    if missing := set(_LEGACY) - set(frame.columns):
+    if missing := set(ISSUE_SCHEMA.names()) - set(frame.columns):
         raise ValueError(f"issue frame is missing columns: {sorted(missing)}")
-    if "protocol_version" not in frame.columns:
-        frame = frame.with_columns(
-            pl.lit(1).alias("protocol_version"),
-            pl.lit("legacy").alias("issue_id"),
-            pl.lit("{}").alias("configuration"),
-            pl.col("issued_at").alias("input_as_of"),
-            pl.col("issued_at").alias("recorded_at"),
-            pl.lit(False).alias("eligible"),
-            pl.lit("legacy_unverified").alias("eligibility_reason"),
-            pl.lit(1.0).alias("delivery_duration_hours"),
-        )
     frame = frame.select(ISSUE_SCHEMA.names()).cast(ISSUE_SCHEMA)
     if frame.select(pl.struct(_KEYS).is_duplicated().any()).item():
         raise ValueError("duplicate issue delivery keys")

@@ -2,22 +2,17 @@
 
 These run against small recorded fixtures rather than the live providers, so
 the suite stays fast, deterministic and usable offline. The fixtures preserve
-the exact quirks each provider has: Brazilian semicolon CSVs with blank fields
-and Energy-Charts mixing measurements with derived indicators in one list.
+the provider's quirks, such as Energy-Charts mixing measurements with derived
+indicators in one list.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-
-import polars as pl
 import pytest
 
 from gpa.schema import FUELS
 from gpa.sources import REGISTRY, get_source
-from gpa.sources.base import infer_resolution_minutes
 from gpa.sources.energy_charts import DERIVED_SERIES, FUEL_MAP, LOAD_SERIES
-from gpa.sources.ons import LOAD_AREAS, _aggregate_load_areas, _parse_balance, _parse_load_api
 
 # --- Registry --------------------------------------------------------------
 
@@ -45,182 +40,6 @@ def test_every_adapter_declares_a_window_policy() -> None:
         assert hasattr(source, "max_window_days"), f"{name} has no max_window_days"
 
 
-# --- Resolution inference --------------------------------------------------
-
-
-def test_resolution_is_measured_not_assumed() -> None:
-    quarter_hourly = pl.Series(
-        "ts", [dt.datetime(2026, 1, 1) + dt.timedelta(minutes=15 * i) for i in range(20)]
-    )
-    assert infer_resolution_minutes(quarter_hourly) == 15
-
-
-def test_resolution_survives_a_missing_observation() -> None:
-    """The median ignores one double-length gap; a mean would not."""
-    stamps = [dt.datetime(2026, 1, 1) + dt.timedelta(minutes=5 * i) for i in range(20)]
-    del stamps[7]
-    assert infer_resolution_minutes(pl.Series("ts", stamps)) == 5
-
-
-def test_resolution_falls_back_when_there_is_nothing_to_measure() -> None:
-    assert infer_resolution_minutes(pl.Series("ts", [dt.datetime(2026, 1, 1)]), default=30) == 30
-
-
-# --- ONS -------------------------------------------------------------------
-
-ONS_FIXTURE = """id_subsistema;nom_subsistema;din_instante;val_gerhidraulica;val_gertermica;val_gereolica;val_gersolar;val_carga;val_intercambio
-SIN;SISTEMA INTERLIGADO NACIONAL;2026-01-01 00:00:00;53588.3;8108.7;10961.5;0.0;70000.0;100.0
-SIN;SISTEMA INTERLIGADO NACIONAL;2026-01-01 01:00:00;52000.0;;10000.0;0.0;68000.0;100.0
-SE ;SUDESTE/CENTRO-OESTE;2026-01-01 00:00:00;27078.8;5521.2;204.1;0.0;41048.5;-8244.5
-N  ;NORTE;2026-01-01 00:00:00;11587.0;1864.9;263.0;0.0;7622.6;6094.2
-"""
-
-
-def test_ons_selects_one_subsystem_and_never_mixes_them() -> None:
-    """SIN is the sum of the regions, so keeping both would double-count."""
-    sin = _parse_balance(ONS_FIXTURE, "SIN")
-    southeast = _parse_balance(ONS_FIXTURE, "SE")
-
-    assert sin.height == 2
-    assert southeast.height == 1
-    assert southeast["val_gerhidraulica"][0] == pytest.approx(27078.8)
-
-
-def test_ons_subsystem_codes_are_padded_in_the_source_file() -> None:
-    """The real file writes 'SE ' and 'N  ', so matching must strip first."""
-    assert _parse_balance(ONS_FIXTURE, "N").height == 1
-
-
-def test_ons_missing_generation_is_null_not_zero() -> None:
-    """Parsing a blank as zero understates the technology's share.
-
-    This is the bug the previous version of this project shipped: it used
-    ``parseFloat(x) || 0``, which turned every missing thermal reading into
-    zero output and biased Brazil's fuel mix and carbon intensity downward.
-    """
-    sin = _parse_balance(ONS_FIXTURE, "SIN").sort("ts_utc")
-    assert sin["val_gertermica"][0] == pytest.approx(8108.7)
-    assert sin["val_gertermica"][1] is None
-
-
-def test_ons_timestamps_convert_from_brasilia_to_utc() -> None:
-    """Midnight in Sao Paulo is 03:00 UTC; Brazil has had no DST since 2019."""
-    sin = _parse_balance(ONS_FIXTURE, "SIN").sort("ts_utc")
-    assert sin["ts_utc"][0] == dt.datetime(2026, 1, 1, 3, tzinfo=dt.UTC)
-
-
-def test_ons_thermal_maps_to_other_not_gas() -> None:
-    """The file publishes one aggregate thermal column with no fuel breakdown.
-
-    Calling it gas would invent a fact. Mapping it to 'other' keeps it out of
-    the carbon factor table, which is what makes the coverage guard in
-    carbon_intensity fire for Brazil instead of reporting a falsely clean grid.
-    """
-    from gpa.sources.ons import FUEL_COLUMNS
-
-    assert FUEL_COLUMNS["val_gertermica"] == "other"
-
-
-def test_ons_rejects_a_file_missing_expected_columns() -> None:
-    from gpa.sources.base import UpstreamError
-
-    with pytest.raises(UpstreamError, match="missing expected columns"):
-        _parse_balance("id_subsistema;din_instante\nSIN;2026-01-01 00:00:00\n", "SIN")
-
-
-# --- ONS verified-load API -------------------------------------------------
-
-
-def _load_api_row(area: str, stamp: str, value: float) -> dict[str, object]:
-    return {
-        "cod_areacarga": area,
-        "din_referenciautc": stamp,
-        "dat_referencia": stamp[:10],
-        "val_cargaglobal": value,
-    }
-
-
-ONS_LOAD_STAMPS = (
-    "2026-09-12T00:00:00.000Z",
-    "2026-09-12T00:30:00.000Z",
-)
-
-
-def test_ons_load_api_parses_utc_stamps_and_values() -> None:
-    payload = [_load_api_row("SECO", ONS_LOAD_STAMPS[0], 49411.0)]
-    parsed = _parse_load_api(payload, "SECO")
-
-    assert parsed.height == 1
-    # The API stamps the interval end, so 00:00Z describes 23:30Z to 00:00Z.
-    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 11, 23, 30, tzinfo=dt.UTC)
-    assert parsed["load_mw"][0] == pytest.approx(49411.0)
-    assert parsed["area"][0] == "SECO"
-
-
-def test_ons_load_api_treats_exact_zero_as_unmeasured() -> None:
-    """The API returns future-dated rows with every value zeroed.
-
-    Storing those as real observations would put a zero-demand reading into the
-    series, which is worse than a gap because it looks measured.
-    """
-    payload = [
-        _load_api_row("SECO", ONS_LOAD_STAMPS[0], 49411.0),
-        _load_api_row("SECO", ONS_LOAD_STAMPS[1], 0.0),
-    ]
-    parsed = _parse_load_api(payload, "SECO")
-
-    assert parsed.height == 1
-    assert parsed["ts_utc"][0] == dt.datetime(2026, 9, 11, 23, 30, tzinfo=dt.UTC)
-
-
-def test_ons_national_load_requires_all_four_areas() -> None:
-    """Summing three of four areas would understate national demand silently.
-
-    The first timestamp has all four submarkets and must survive. The second is
-    missing the North and must be dropped rather than reported about 10 GW low.
-    """
-    rows = [
-        _load_api_row(area, ONS_LOAD_STAMPS[0], value)
-        for area, value in (("SECO", 49411.0), ("S", 14140.0), ("NE", 15766.0), ("N", 9930.0))
-    ]
-    rows += [
-        _load_api_row(area, ONS_LOAD_STAMPS[1], value)
-        for area, value in (("SECO", 49000.0), ("S", 14000.0), ("NE", 15000.0))
-    ]
-
-    frame = pl.concat([_parse_load_api([r], r["cod_areacarga"]) for r in rows], how="vertical")
-    national = _aggregate_load_areas(frame)
-
-    assert national.height == 1
-    assert national["ts_utc"][0] == dt.datetime(2026, 9, 11, 23, 30, tzinfo=dt.UTC)
-    assert national["load_mw"][0] == pytest.approx(49411.0 + 14140.0 + 15766.0 + 9930.0)
-
-
-def test_ons_load_areas_use_the_current_southeast_code() -> None:
-    """The Southeast is SECO on this endpoint.
-
-    The older SE code now returns an empty list instead of an error, so a stale
-    code would drop a third of national demand without failing anything.
-    """
-    assert "SECO" in LOAD_AREAS
-    assert "SE" not in LOAD_AREAS
-    assert len(LOAD_AREAS) == 4
-
-
-def test_ons_load_api_rejects_a_response_missing_its_columns() -> None:
-    from gpa.sources.base import UpstreamError
-
-    with pytest.raises(UpstreamError, match="missing"):
-        _parse_load_api([{"cod_areacarga": "SECO"}], "SECO")
-
-
-def test_ons_load_api_tolerates_an_empty_response() -> None:
-    assert _parse_load_api([], "SECO").is_empty()
-    assert _aggregate_load_areas(_parse_load_api([], "SECO")).is_empty()
-
-
-# --- AEMO ------------------------------------------------------------------
-
 # --- Energy-Charts ---------------------------------------------------------
 
 
@@ -245,8 +64,9 @@ def test_energy_charts_keeps_pumped_storage_out_of_hydro() -> None:
 def test_energy_charts_drops_derived_indicators() -> None:
     """Renewable share and residual load are computed, not measured.
 
-    This project recomputes those from the mix so the definition is its own and
-    is documented, rather than inheriting a provider's undocumented one.
+    What this project needs, residual load among it, is recomputed from the
+    measured series, so the definition is its own and documented rather than a
+    provider's undocumented one.
     """
     assert "Renewable share of load" in DERIVED_SERIES
     assert "Residual load" in DERIVED_SERIES

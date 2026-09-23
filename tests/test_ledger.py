@@ -280,27 +280,3 @@ def test_duplicate_issue_rows_raise(tmp_path):
     frame = ledger.issue(full_panel(), Ridge(0.1), DAY, issued_at=STAMP)
     with pytest.raises(ValueError, match="duplicate"):
         ledger.append(pl.concat([frame, frame.head(1)]), root=tmp_path)
-
-
-def test_legacy_ledger_is_readable_but_not_prospectively_certified(tmp_path):
-    frame = ledger.issue(full_panel(), Ridge(0.1), DAY, issued_at=STAMP)
-    legacy = frame.select(
-        "zone",
-        "model",
-        "model_version",
-        "issued_at",
-        "delivery_date",
-        "local_hour",
-        "delivery_start_utc",
-        "forecast",
-        "actual",
-        "status",
-        "input_sha256",
-    )
-    path = tmp_path / "zone=DE-LU" / "2025-02.parquet"
-    path.parent.mkdir()
-    legacy.write_parquet(path)
-    loaded = ledger.read(root=tmp_path)
-    assert loaded.height == 24
-    assert not loaded["eligible"].any()
-    assert ledger.canonical(loaded, root=tmp_path).is_empty()

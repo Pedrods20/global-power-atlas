@@ -9,9 +9,9 @@ name: Ingest
 
 on:
   schedule:
-    # First day of each month at 05:40 UTC. The public dashboard is historical;
-    # monthly refresh is enough while the forecast issuance workflow is being
-    # built separately.
+    # First day of each month at 05:40 UTC. The market study is historical, so
+    # monthly is enough; the prospective ledger refreshes its own inputs daily
+    # in forecast.yml.
     - cron: "40 5 1 * *"
   workflow_dispatch:
     inputs:
@@ -49,8 +49,8 @@ jobs:
       - run: pip install -e .
 
       - name: Ingest
-        # Every registered zone is sourced from Energy-Charts or ONS, neither
-        # of which needs a credential, so no zone list or secret is passed.
+        # The one registered zone is sourced from Energy-Charts, which needs no
+        # credential, so no zone list or secret is passed.
         run: gpa ingest --days ${{ github.event.inputs.days || '7' }}
 
       - name: Validate
