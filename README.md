@@ -224,12 +224,17 @@ gpa backtest --zone DE-LU --scope all
 gpa issue --zone DE-LU
 gpa reconcile --zone DE-LU
 gpa battery --zone DE-LU
+gpa forecast-attempt report --zone DE-LU --start-date 2026-09-24 --end-date 2026-10-31
+gpa probe-fundamentals --zone DE-LU
 gpa battery-study --predictions site/data/forecast_predictions.parquet
 ```
 
 The repository has no runtime backend. The site reads only the small,
 pre-computed files under `site/data`; browser-visible credentials are never
-required. The forecast chart loads `site/data/forecast_preview.parquet` (12
+required. The one exception to "pre-computed by `gpa export`" is the ledger
+counter, which a build-time loader (`site/data/ledger_status.json.js`) derives
+from the committed attempt records, because the ledger grows on every scheduled
+run and an exported table would be stale by the next one. The forecast chart loads `site/data/forecast_preview.parquet` (12
 sampled weeks); the separate `site/data/forecast_predictions.parquet` retains
 every rounded clock-hour prediction for reproducible battery studies.
 
@@ -252,6 +257,7 @@ src/gpa/forecast/   leakage-safe panel, models, walk-forward scoring and ledger
 src/gpa/battery.py  constrained dispatch and economic backtest
 src/gpa/metrics/    price shape, blocks, capture rates, negative prices
 src/gpa/export.py   deterministic static-site data products
+src/gpa/probe.py    when the provider publishes the next day's fundamentals
 site/               four focused Observable Framework pages
 data/curated/       versioned interval observations, partitioned by month
 tests/              schema, source, forecast, dispatch and site-contract tests
@@ -267,27 +273,36 @@ revenue; quantifying the intraday and balancing stacks would need data this
 project does not ingest.
 
 The next credible step is the separately recorded prospective ledger, and it has
-not started yet in any sense that counts. Eleven scheduled runs between 14 and 22
-September 2026 all failed at the issue step: GitHub's scheduled workflows are
-best-effort and arrived hours past the midday gate, so `gpa issue` refused to
-backdate — correct behaviour, and the reason there is still no prospective record.
-The schedule now runs at 02:17 and 06:47 UTC, roughly eight and four hours of
-margin against the summer gate, and the fundamentals arm's blocking defect is
-fixed. The first verified pre-gate issue has not happened; when it does, the
-counter belongs on the site.
+just started. Eleven scheduled runs between 14 and 22 September 2026 all failed at
+the issue step: GitHub's scheduled workflows are best-effort, arrived hours past
+the midday gate, and `gpa issue` refused to backdate. The first run to clear a
+gate, at 07:49 UTC on 23 September — itself delivered five and a half hours
+late — issued `ridge` for all 24 hours of the 24th. The schedule now has three
+slots placed by their likely arrival (23:17, 02:17 and 06:47 UTC); a slot that
+finds the day already issued records that and succeeds, so a red run means a
+missing day. Every run also issues the three naive comparators at the same gate
+on the same inputs, so the ledger can test the claim this study makes — value
+over the best naive — and not only report error. The forecast page shows a
+counter built from the committed attempt records. One day is not a record; the
+pilot's bar is six weeks with at least 95% of delivery days issued on time.
 
-That ledger also carries the one open modelling question. Day-ahead load, wind
-and solar forecasts measurably reduce error in the labelled ablation (Ridge
-22.07 → 19.17, LightGBM 25.56 → 20.56 EUR/MWh on the identical frozen test
-window), but the historical archive cannot certify when each value became
-available, so they are not in the published information set. A live issue does
-not have that problem for the day it is forecasting: it records the instant it
-read the forecast. Each scheduled run therefore issues twice, as two frozen
-identities — `ridge` from the published information set and `ridge_da` from that
-set plus the operator forecasts — and the ledger keeps both, so the comparison
-accumulates instead of being argued. `ridge_da` abstains, and records the
-abstention, on a day the provider has not published the delivery day before the
-gate.
+That ledger also carries the one open modelling question, and its first answer
+moved the question from the model to the market. Day-ahead load, wind and solar
+forecasts measurably reduce error in the labelled ablation (Ridge 22.07 → 19.17,
+LightGBM 25.56 → 20.56 EUR/MWh on the identical frozen test window), but the
+historical archive cannot certify when each value became available, so they are
+not in the published information set. A live issue records the instant it read
+them, so each run issues two frozen identities — `ridge` from the published
+information set and `ridge_da` from that set plus the operator forecasts — and
+`ridge_da` abstains, on the record, when the delivery day is not yet published.
+On the first run it abstained on all 24 hours: nothing was published at 09:49
+CEST. That may be the rule rather than bad luck. Regulation (EU) 543/2013 only
+requires day-ahead wind and solar forecasts by 18:00 Brussels time on D-1, six
+hours after the gate. If the public series routinely appears after noon, the arm
+can never issue and the ablation's gain is an upper bound on what this source
+offers a bidder. `gpa probe-fundamentals` now runs hourly and logs, to the
+separate `probe-log` branch, how much of the next delivery day the provider
+serves at each check; the ablation's framing will follow that measurement.
 
 One limitation of that arm is disclosed rather than buried. Only the delivery
 day's snapshot carries an observed retrieval instant; the training history still
@@ -313,6 +328,10 @@ Market rules and structure:
 - NEMO Committee, Single Day-Ahead Coupling: the move from hourly to 15-minute
   market time units, trading day 30 September 2025 for delivery 1 October 2025 —
   <https://www.nemo-committee.eu/sdac>
+- Commission Regulation (EU) No 543/2013, Articles 6(1)(b) and 14(1)(d): the
+  day-ahead load forecast is due two hours before the day-ahead gate, the
+  day-ahead wind and solar forecasts by 18:00 Brussels time on D-1 —
+  <https://eur-lex.europa.eu/eli/reg/2013/543/oj/eng>
 - regelleistung.net, the German TSOs' joint balancing-reserve platform
   (FCR, aFRR, mFRR tenders) — <https://www.regelleistung.net/>
 - Bundesnetzagentur, onshore wind auction statistics —

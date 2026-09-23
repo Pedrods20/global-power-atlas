@@ -483,6 +483,123 @@ def test_issue_reconcile_and_battery_agree_on_the_canonical_forecast(
     assert "ridge" in battery_result.stdout.lower()
 
 
+def _issue(ledger_root: Path, attempt: str, *, model: str = "ridge", delivery: str) -> object:
+    return runner.invoke(
+        app,
+        [
+            "issue",
+            "--zone",
+            "DE-LU",
+            "--model",
+            model,
+            "--delivery-date",
+            delivery,
+            "--attempt-id",
+            attempt,
+            "--output",
+            str(ledger_root),
+        ],
+    )
+
+
+@pytest.fixture
+def issuable(temporary_store: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, dt.datetime]:
+    """Enough clean history for every model to issue 2026-07-01, and a clock the
+    test can move: it starts pre-gate on the issue day."""
+    monkeypatch.setattr("gpa.forecast.provenance.MIN_TRAIN_ROWS", 5)
+    clock = {"now": dt.datetime(2026, 6, 30, 8, tzinfo=dt.UTC)}
+    monkeypatch.setattr("gpa.forecast.ledger.now_utc", lambda: clock["now"])
+    history_start = dt.datetime(2026, 5, 27, tzinfo=dt.UTC)
+    store.write(price_series(history_start, days=36), "price")
+    return clock
+
+
+def test_a_backstop_after_the_gate_closes_against_the_issue_already_on_record(
+    issuable: dict[str, dt.datetime], tmp_path: Path
+) -> None:
+    """The failure mode of 23 September 2026. The early slot issued at 07:49Z;
+    the backstop was delivered at 12:17Z, after the 10:00Z gate, refused to
+    backdate, and turned a day that was on record into a red run. It must now
+    close its attempt against the existing issue, exit 0 and write nothing new."""
+    from gpa.forecast import attempts
+
+    ledger_root = tmp_path / "issues"
+    first = _issue(ledger_root, "att-early", delivery="2026-07-01")
+    assert first.exit_code == 0, first.stdout
+
+    issuable["now"] = dt.datetime(2026, 6, 30, 12, 17, tzinfo=dt.UTC)
+    backstop = _issue(ledger_root, "att-backstop", delivery="2026-07-01")
+
+    assert backstop.exit_code == 0, backstop.stdout
+    assert "already issued" in backstop.stdout
+    early = attempts.read(ledger_root, "att-early")
+    late = attempts.read(ledger_root, "att-backstop")
+    assert early["status"] == "issued"
+    assert late["status"] == "already_issued"
+    assert late["issue_id"] == early["issue_id"]
+    assert len(list((ledger_root / "issues").iterdir())) == 1
+
+
+def test_a_late_run_with_nothing_on_record_still_fails_as_late(
+    issuable: dict[str, dt.datetime], tmp_path: Path
+) -> None:
+    """The exemption covers a day that is on record, never a missing one."""
+    from gpa.forecast import attempts
+
+    ledger_root = tmp_path / "issues"
+    issuable["now"] = dt.datetime(2026, 6, 30, 12, 17, tzinfo=dt.UTC)
+
+    result = _issue(ledger_root, "att-late", delivery="2026-07-01")
+
+    assert result.exit_code == 1
+    event = attempts.read(ledger_root, "att-late")
+    assert event["status"] == "late"
+    assert event["error_type"] == "LateIssueError"
+
+
+def test_an_abstained_issue_does_not_stop_the_backstop_from_retrying(
+    populated: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ridge_da`` abstained on the first real run. An abstention is not a
+    canonical issue, so a later pre-gate slot must still try the day again."""
+    clock = {"now": dt.datetime(2026, 6, 1, 3, tzinfo=dt.UTC)}
+    monkeypatch.setattr("gpa.forecast.ledger.now_utc", lambda: clock["now"])
+    ledger_root = tmp_path / "issues"
+
+    first = _issue(ledger_root, "att-first", delivery="2026-06-02")
+    clock["now"] = dt.datetime(2026, 6, 1, 8, tzinfo=dt.UTC)
+    second = _issue(ledger_root, "att-second", delivery="2026-06-02")
+
+    assert first.exit_code == second.exit_code == 1
+    assert "abstained" in second.stdout.lower()
+    assert "already issued" not in second.stdout
+    assert len(list((ledger_root / "issues").iterdir())) == 2
+
+
+def test_the_naive_comparators_issue_at_the_gate_and_reach_the_battery_summary(
+    issuable: dict[str, dt.datetime], tmp_path: Path
+) -> None:
+    """The site's claim is that the forecast is worth about 5% over the best
+    naive. A prospective record holding only ``ridge`` cannot test that, so the
+    comparators are issued before the gate on the same inputs and scored with it."""
+    ledger_root = tmp_path / "issues"
+    models = ("ridge", "naive_previous_day", "naive_previous_week", "naive_similar_day")
+    for model in models:
+        result = _issue(ledger_root, f"att-{model}", model=model, delivery="2026-07-01")
+        assert result.exit_code == 0, result.stdout
+        assert "issued, 24 forecasts, 0 abstentions" in result.stdout
+
+    assert runner.invoke(app, ["reconcile", "--output", str(ledger_root)]).exit_code == 0
+    evaluations = tmp_path / "evaluations"
+    evaluated = runner.invoke(
+        app, ["battery", "--ledger-root", str(ledger_root), "--output", str(evaluations)]
+    )
+    assert evaluated.exit_code == 0, evaluated.stdout
+
+    summary = pl.read_parquet(evaluations / "DE-LU_summary.parquet")
+    assert set(models) <= set(summary["strategy"].unique().to_list())
+
+
 def test_a_same_morning_ingest_lets_issue_forecast_every_hour(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

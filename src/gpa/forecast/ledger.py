@@ -384,6 +384,24 @@ def canonical(frame: pl.DataFrame, *, root: Path = DEFAULT_ROOT) -> pl.DataFrame
     return combined.join(chosen.select("issue_id"), on="issue_id", how="semi").sort(_KEYS)
 
 
+def canonical_issue(
+    zone: str, model: str, delivery_date: dt.date, *, root: Path = DEFAULT_ROOT
+) -> pl.DataFrame:
+    """The canonical issue already on record for one model and delivery day.
+
+    Empty when there is none. A scheduled backstop asks this before issuing:
+    once an earliest complete, verified pre-gate issue exists, no later issue
+    can displace it in :func:`canonical`, so issuing again would add a snapshot
+    nobody scores -- and, after the gate, a red run over a day that is not
+    missing. An abstained or partial issue is never canonical, so it does not
+    stop a retry.
+    """
+    frame = read(root=root, zone=zone).filter(
+        (pl.col("model") == model) & (pl.col("delivery_date") == delivery_date)
+    )
+    return canonical(frame, root=root) if not frame.is_empty() else frame
+
+
 def _validate(frame: pl.DataFrame) -> pl.DataFrame:
     if missing := set(_LEGACY) - set(frame.columns):
         raise ValueError(f"issue frame is missing columns: {sorted(missing)}")

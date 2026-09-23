@@ -164,9 +164,20 @@ provider timing, each run issues two frozen identities — `ridge` on the
 information set above, `ridge_da` on that set plus these features — and the
 ledger records both, so they can be scored against each other. `ridge_da`
 abstains, and says so, when the provider has not published the delivery day
-before the gate. This describes the design, not a record: as of 22 September
-2026 no scheduled run has issued before a gate, because all eleven attempts
-arrived after it (see the [forecast page](./forecast)).
+before the gate.
+
+The first run to clear a gate, at 07:49 UTC on 23 September 2026, did exactly
+that: `ridge` issued all 24 hours of the 24th and `ridge_da` abstained on all 24,
+because Energy-Charts had not yet published the delivery day. The timing may be
+structural rather than bad luck. Commission Regulation (EU) 543/2013 requires
+day-ahead wind and solar forecasts by **18:00 Brussels time on D-1**, six hours
+after the day-ahead gate (Article 14(1)(d)); only the load forecast is due before
+it (Article 6(1)(b)). If the public series routinely appears after noon, the
+assigned noon vintage above is optimistic rather than neutral, and the ablation
+measures information a bidder would not have held from this source at the gate.
+That is measured rather than argued: `gpa probe-fundamentals` runs hourly and
+logs how much of the next delivery day the provider serves and how far each
+check sits from the gate.
 
 The limitation that remains is stated rather than hidden. Only the delivery
 day's snapshot carries an observed vintage; `ridge_da`'s training history keeps
@@ -233,9 +244,10 @@ the zero-value baseline, while `perfect_foresight` runs the same physical
 optimizer using realised prices only as an upper bound. Neither result is a
 trading recommendation.
 
-The [Battery page](./battery) is a pre-computed historical backtest. A future
-prospective ledger will be evaluated separately after its delivery prices are
-known.
+The [Battery page](./battery) is a pre-computed historical backtest. The
+prospective ledger is evaluated separately after its delivery prices are known,
+against the three naive comparators issued at the same gate on the same inputs,
+so its incremental value is measured the same way as the retrospective one.
 
 All three fixed naive models, Ridge and LightGBM share the same complete days.
 The strongest naive is ranked retrospectively over the sample, not selected
@@ -259,7 +271,7 @@ reason each one was chosen and what it costs the result.
 | Forecast gate | 12:00 market time on D-1 | The day-ahead auction's order book closes at midday for next-day delivery, so this is the last instant a bidder's information set is fixed | A later gate would report hindsight as skill |
 | Target resolution | Local clock-hour, duration-weighted | Day-ahead coupling moved to 15-minute market time units for delivery from 1 October 2025; the hourly figure is an analytical aggregate from then on | The benchmark does not price a traded quarter-hour product |
 | Information set | Lagged prices, calendar features, residual load lagged ≥ 2 delivery days | Stored revisions cannot certify publication-time vintages, so realised delivery-day fundamentals are excluded | Reported skill is lower than a fundamentals-driven model would show; the ablation quantifies the gap |
-| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage; a prospective issue records the instant it actually read the delivery day's snapshot | The historical archive exposes no publication timestamp, while a live run can observe its own for the day it is forecasting | Retrospectively those features inform only the labelled ablation, never the published baseline; prospectively they define a separate `ridge_da` arm whose training history still carries the assigned vintage, so the assumption reaches the fit and not the issued information set |
+| Fundamentals vintage | Backfilled day-ahead forecasts carry an assigned D-1 noon vintage; a prospective issue records the instant it actually read the delivery day's snapshot | The historical archive exposes no publication timestamp, while a live run can observe its own for the day it is forecasting | Retrospectively those features inform only the labelled ablation, never the published baseline; prospectively they define a separate `ridge_da` arm whose training history still carries the assigned vintage, so the assumption reaches the fit and not the issued information set. EU rules only require wind and solar forecasts by 18:00 on D-1, after the gate: if the public series appears after noon, the ablation's gain is an upper bound and `ridge_da` cannot issue, which the hourly probe is measuring |
 | Walk-forward protocol | Expanding window, refit with dates strictly before each forecast day | Mirrors how a model would actually be maintained in production | A fixed split would hide regime-dependent decay |
 | Hyperparameter selection | Frozen on a validation window preceding the test period | Selection inside the evaluation window reports a tuned fit as out-of-sample | Published scores would be optimistically biased |
 | Evaluation stance | Retrospective development benchmark on already-inspected history | Honest label for a sample that has been examined during development | Not an untouched holdout; a prospective ledger is still required |
@@ -295,6 +307,12 @@ npm ci
 npm run build
 ```
 
+The prospective ledger lives under `data/forecast_issues/` and grows by a bot
+commit on every scheduled run; `gpa forecast-attempt report --start-date ...
+--end-date ...` gives the verified daily denominator the ledger counter on the
+forecast page summarises. The publication-time probe's log lives on the
+repository's separate `probe-log` branch.
+
 The [source repository](https://github.com/Pedrods20/global-power-atlas) contains
 the validated monthly Parquet store, forecast code, battery optimizer and test
 suite. The historical output is deliberately versioned so the figures shown on
@@ -321,6 +339,11 @@ Market rules and structure:
   15-minute market time units on the trading day of 30 September 2025, for
   delivery on 1 October 2025 —
   [nemo-committee.eu/sdac](https://www.nemo-committee.eu/sdac)
+- Commission Regulation (EU) No 543/2013 on submission and publication of data
+  in electricity markets: Article 6(1)(b), day-ahead load forecast due two hours
+  before the day-ahead gate; Article 14(1)(d), day-ahead wind and solar forecasts
+  due by 18:00 Brussels time on D-1 —
+  [eur-lex.europa.eu](https://eur-lex.europa.eu/eli/reg/2013/543/oj/eng)
 - Bundesnetzagentur, consolidated onshore wind auction statistics —
   [bundesnetzagentur.de](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/Ausschreibungen/Wind_Onshore/BeendeteAusschreibungen/start.html)
 - EEG 2023 and WindSeeG 2030 capacity targets, as republished in Energy-Charts'
@@ -344,8 +367,9 @@ vintage, so they inform only the labelled ablation on the Forecasting page,
 not the published baseline. Whether they earn a place in the information set is
 left to the prospective ledger, which issues them as a separate `ridge_da` arm
 beside the published one and observes the delivery day's vintage rather than
-assuming it; until that ledger has run, the question is open rather than
-settled.
+assuming it. Its first run found nothing to read before the gate, and EU
+publication rules allow that to be the norm, so the question is open and now
+starts with when the provider publishes, not with the model.
 The study is zonal, not nodal;
 congestion, basis and transmission constraints are outside scope. Brazilian
 data is a national system comparison, not a wholesale price market.

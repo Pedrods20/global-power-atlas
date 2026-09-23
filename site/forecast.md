@@ -122,7 +122,10 @@ project has not made; the scoreboard, chart and every other number on this
 page use the published, fundamentals-free information set. A positive
 change above is measured on the identical frozen test window as the
 published run, using the exact same protocol with one flag added — not a
-reselected model or a different evaluation period.
+reselected model or a different evaluation period. It may also be an upper
+bound: EU rules do not require the wind and solar forecasts to be public
+before the gate, and when they actually appear is being measured (see the
+prospective section below).
 
 ## Where the models fail
 
@@ -299,9 +302,27 @@ Tracking is optional and local. Each MLflow run records the comparison metrics, 
 
 The prospective path is operationalised by `gpa issue` and `gpa reconcile`: a scheduled job seeds an isolated store, refreshes a short input window, reconciles older ledger rows and issues before the market gate. Each issue keeps its own immutable evidence — the input panel, the source frames it read, the feature list, the model configuration and the instant each input was observed — so a later reader can check what the forecast knew rather than take it on trust.
 
-That path is also where the fundamentals question gets settled by experiment rather than by argument. The ablation above cannot certify a publication vintage, so those features stay a labelled diagnostic in the retrospective release; a prospective run observes its own retrieval instant for the delivery day, so it can use them honestly there. Each scheduled run is designed to issue both arms under separate model identities and separate policy identifiers, so that a ledger can score them against each other instead of pooling them into one unlabelled record. That is the design, not yet a record: no scheduled run has issued before a gate to date, because every one of the eleven attempts so far arrived after it. The schedule was moved earlier on 22 September 2026 and the arm's blocking defect fixed; the ledger starts when a run first clears the gate.
+**The ledger has started, and it is one day old.** Eleven scheduled runs between 14 and 22 September 2026 all arrived hours after the gate — GitHub's scheduler is best-effort — and `gpa issue` refused every one rather than backdate a forecast. The first run to clear a gate did so at 07:49 UTC on 23 September, 2h11m early, and issued `ridge` for all 24 hours of the 24th. Every run now also issues the three naive comparators at the same gate on the same inputs, so the ledger can test the claim this page makes — value over the best naive — rather than only report error. The counter below is built from the committed attempt records, each delivery day counted once at the best outcome any attempt reached:
 
-The first separately recorded run is still needed before any of these metrics can be accepted, and it has not happened: see the note above on why eleven scheduled attempts produced no issue. Historical battery dispatch and economic evaluation are published on the Battery page; the prospective battery result follows reconciliation and remains separate from the retrospective scores above.
+```js
+const ledgerStatus = await FileAttachment("data/ledger_status.json").json();
+```
+
+```js
+ledgerStatus.arms.length
+  ? Inputs.table(ledgerStatus.arms, {
+      columns: ["model", "days", "issued", "partial", "abstained", "late", "failed", "first_delivery", "last_delivery"],
+      header: {model: "Arm", days: "Days tried", first_delivery: "First day", last_delivery: "Latest day"},
+      layout: "auto"
+    })
+  : html`<p class="note">No attempt records in this build.</p>`
+```
+
+<p class="note">Ledger as of ${ledgerStatus.as_of ? ledgerStatus.as_of.slice(0, 16).replace("T", " ") + " UTC" : "—"}, the latest attempt in this build; the site is rebuilt on each release, not on each run. One day is not a record: nothing from the ledger is compared with the retrospective scores until it covers the pilot's six weeks, with at least 95% of delivery days issued on time.</p>
+
+That path was also meant to settle the fundamentals question by experiment, and its first result is a question about the market rather than the model. `ridge_da` abstained on all 24 hours of that first run: at 09:49 CEST Energy-Charts had not yet published the delivery day's load, wind and solar forecasts, just as a manual check had found nothing at 05:45 CEST a week earlier. This may be structural. Commission Regulation (EU) 543/2013 requires day-ahead wind and solar forecasts by 18:00 Brussels time on D-1, six hours after the gate, and only the load forecast before it. If the public series routinely appears after noon, `ridge_da` can never issue, and the ablation above measures information a bidder would not have held from this source at the gate — an upper bound, not an attainable gain; a desk closes that gap by buying commercial weather-driven forecasts before the auction. Rather than argue it, an hourly probe (`gpa probe-fundamentals`) now logs how much of the next delivery day the provider serves at each check and how far that check sits from the gate. The ablation's framing will follow the measurement.
+
+Historical battery dispatch and economic evaluation are published on the Battery page; the prospective battery result follows reconciliation and remains separate from the retrospective scores above.
 
 <style>
 .note {

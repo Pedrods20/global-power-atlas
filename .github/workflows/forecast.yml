@@ -7,31 +7,34 @@ name: Forecast
 on:
   schedule:
     # DE-LU's gate is 12:00 local market time on D-1: 10:00Z under CEST, 11:00Z
-    # under CET. GitHub's scheduled workflows are best-effort, and the previous
-    # 09:30Z cron left only thirty summer minutes of margin: its runs were
-    # actually delivered at 14:22Z and 15:56Z, hours past the gate, so every one
-    # failed with LateIssueError -- `gpa issue` correctly refusing to backdate a
-    # forecast. These two slots leave roughly eight and four hours of margin
-    # against the summer gate, and both run off the top of the hour, where the
-    # scheduler is least contended. Nothing needed is unavailable this early:
-    # D-1's own prices cleared in D-2's auction.
+    # under CET. GitHub's scheduled workflows are best-effort, and in this
+    # repository "best-effort" has meant hours: the old 09:30Z cron arrived
+    # between 13:14Z and 15:57Z, and on 23 September 2026 the 02:17Z and 06:47Z
+    # slots arrived at 07:49Z and 12:17Z, both about five and a half hours late.
+    # The slots are therefore placed by their likely arrival, not their nominal
+    # time. 23:17Z is the primary: already D-1 in market time in both seasons
+    # (01:17 CEST, 00:17 CET), and landing near 05:00Z at the observed delay.
+    # 02:17Z is the backstop, landing near 08:00Z. 06:47Z usually lands after
+    # the gate and exists for days the scheduler runs close to time. Nothing
+    # needed is unavailable this early: D-1's own prices cleared in D-2's
+    # auction.
     #
-    # Running twice a day is safe by design. The ledger keys an issue on
-    # issued_at as well as zone, model, delivery date and hour, so the backstop
-    # appends a second issue rather than colliding with the first, and
-    # `ledger.canonical` selects the earliest complete, verified pre-gate issue
-    # per model and delivery day. Every issue stays recorded either way.
+    # Running three times a day is safe by design. `gpa issue` first looks for
+    # the day's canonical issue -- the earliest complete, verified pre-gate one
+    # per model and delivery day -- and a later slot that finds it records its
+    # attempt as `already_issued` and exits 0 without reissuing. A late slot
+    # that finds nothing still fails, so a red run means a missing day, not a
+    # redundant one. An abstained or partial issue is not canonical, so a later
+    # pre-gate slot retries it.
     #
-    # The two slots also serve the day-ahead fundamentals question, which each
-    # run answers twice: `ridge` issues from the published information set and
-    # `ridge_da` from that set plus the operators' day-ahead forecasts. They are
-    # separate frozen identities rather than one arm that varies with whatever
-    # the provider happened to have published, so `ledger.canonical` keeps both
-    # and the ledger can score them against each other. Checked at 05:45 CEST on
-    # 16 September 2026, Energy-Charts had not yet published the next delivery
-    # day, so the early slot will often see `ridge_da` abstain and the later slot
-    # is the one likelier to catch it -- an abstention that is recorded rather
-    # than papered over with a different information set.
+    # `ridge` issues from the published information set and `ridge_da` from
+    # that set plus the operators' day-ahead forecasts: separate frozen
+    # identities, scored against each other. Whether `ridge_da` can ever issue
+    # is an open question. It found nothing to read at 05:45 CEST on 16
+    # September and at 09:49 CEST on 23 September, and Regulation (EU)
+    # 543/2013 only requires day-ahead wind and solar forecasts by 18:00 on
+    # D-1, after the gate. probe.yml measures when the series actually appears.
+    - cron: "17 23 * * *"
     - cron: "17 2 * * *"
     - cron: "47 6 * * *"
   workflow_dispatch:
@@ -60,6 +63,10 @@ jobs:
       # experiment that settles whether the fundamentals earn a place. It may
       # abstain without failing the run: see the issue step below.
       FORECAST_MODEL_DA: ridge_da
+      # The comparators the forecast's value is claimed over. Issued at the same
+      # gate on the same inputs, so the prospective record can score the claim
+      # the retrospective release makes instead of reconstructing them later.
+      FORECAST_COMPARATORS: "naive_previous_day naive_previous_week naive_similar_day"
       # Revision overlap behind that checkpoint, not the length of the refresh.
       FORECAST_LOOKBACK: "7"
       FORECAST_DELIVERY_DATE: ""
@@ -89,7 +96,11 @@ jobs:
           else
             ORIGIN=schedule
           fi
-          for pair in "$ATTEMPT_ID:$FORECAST_MODEL" "$ATTEMPT_ID_DA:$FORECAST_MODEL_DA"; do
+          pairs="$ATTEMPT_ID:$FORECAST_MODEL $ATTEMPT_ID_DA:$FORECAST_MODEL_DA"
+          for model in $FORECAST_COMPARATORS; do
+            pairs="$pairs $ATTEMPT_ID-$model:$model"
+          done
+          for pair in $pairs; do
             id="${pair%%:*}"
             model="${pair##*:}"
             if [ -n "$FORECAST_DELIVERY_DATE" ]; then
@@ -138,16 +149,31 @@ jobs:
         continue-on-error: true
         run: gpa issue --zone DE-LU --model "$FORECAST_MODEL_DA" --attempt-id "$ATTEMPT_ID_DA"
 
+      - name: Issue the naive comparators on the same inputs
+        # After the fundamentals arm, so a comparator failure never costs that
+        # arm its attempt. Like the published arm, these must issue: without
+        # them the prospective record cannot test the value claimed for it.
+        run: |
+          for model in $FORECAST_COMPARATORS; do
+            gpa issue --zone DE-LU --model "$model" --attempt-id "$ATTEMPT_ID-$model"
+          done
+
       - name: Record a failed attempt if an earlier step never completed it
         # gpa issue always finalizes its own attempt, so --if-open is a no-op
         # there; this only closes attempts left open by an earlier failure
-        # (ingest, validate, reconcile or battery).
+        # (ingest, validate, reconcile, battery or an earlier issue).
         if: failure()
         run: |
-          for id in "$ATTEMPT_ID" "$ATTEMPT_ID_DA"; do
-            if [ -n "$id" ]; then
-              gpa forecast-attempt finish --attempt-id "$id" --status failed --if-open
-            fi
+          # Nothing was registered if the registration step itself failed.
+          if [ -z "$ATTEMPT_ID" ]; then
+            exit 0
+          fi
+          ids="$ATTEMPT_ID $ATTEMPT_ID_DA"
+          for model in $FORECAST_COMPARATORS; do
+            ids="$ids $ATTEMPT_ID-$model"
+          done
+          for id in $ids; do
+            gpa forecast-attempt finish --attempt-id "$id" --status failed --if-open
           done
 
       - name: Commit the prospective ledger
@@ -162,6 +188,8 @@ jobs:
             echo "No new issue or attempt records; nothing to commit."
             exit 0
           fi
-          git commit -m "forecast: issue DE-LU $(date -u +%Y-%m-%d)"
+          # The run's own clock, not the delivery day: one delivery day is now
+          # attempted by up to three runs, some of them on the previous UTC date.
+          git commit -m "forecast: DE-LU run at $(date -u +%Y-%m-%dT%H:%MZ)"
           git pull --rebase --autostash origin main
           git push

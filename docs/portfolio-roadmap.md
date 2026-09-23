@@ -134,6 +134,154 @@ the project technically healthy and commercially mispositioned, and found that
 the repositioning work of the last five increments was never published at all.
 Plan immediately below, evidence after it.
 
+**P11 — make the ledger tell the truth — done** (23 September 2026): a status
+review found that the prospective ledger issued for the first time the morning
+after P10 shipped, so the published site was wrong in the opposite direction,
+and that the first real run exposed three design gaps. A late backstop now
+closes against a day already on record instead of failing; the naive
+comparators are issued at the gate; an hourly probe measures when the
+provider publishes the day-ahead fundamentals; and the site states the record
+with a counter built from the committed attempts. **Next:** read snapshot growth
+off the next issuing runs, and let the probe run one to two weeks before
+reframing the fundamentals ablation. Plan and evidence immediately below.
+
+### P11 — the first prospective issue, and what it exposed — recorded before code
+
+**Review findings (23 September 2026), read from the GitHub API, the committed
+ledger and the provider rather than from this document.**
+
+1. **The ledger has issued.** The Forecast run created at 07:49Z on 23 September
+   (the `17 2 * * *` slot, delivered 5h32m late) issued `ridge` for delivery
+   2026-09-24: 24 of 24 hours, `pre_gate`, 2h11m before the 10:00Z gate, and the
+   later run reconciled it against the cleared auction. One day is not evidence:
+   MAE 28.0 EUR/MWh with a +21.6 bias, 99.6% of perfect foresight on the 1 MW / 4
+   MWh battery. But `site/index.md`, `site/forecast.md`, `site/methodology.md`
+   and the README all say no forecast has ever been issued, which has been false
+   since that run.
+2. **The backstop turns red every day it is needed least.** The `47 6 * * *` slot
+   was delivered at 12:17Z, 5h30m late, after the gate. `gpa issue` refused with
+   `LateIssueError`, which is correct, but it did so on a day whose forecast
+   already existed, so the run is red for no missing record. Both slots were
+   delayed by the same ~5.5 hours; the early slot's margin is two hours in
+   summer.
+3. **`ridge_da` may be structurally unable to issue, and the published ablation
+   may lean on the same fact.** It abstained on all 24 hours at 09:49 CEST, as it
+   found nothing at 05:45 CEST on 16 September. Commission Regulation (EU)
+   543/2013, Article 14(1)(d), requires day-ahead wind and solar forecasts by
+   **18:00 Brussels time on D-1** — six hours *after* the day-ahead gate (the
+   load forecast, Article 6(1)(b), is due two hours before it). If Energy-Charts'
+   series appears after noon, the arm can never issue, and the ablation's gain
+   (Ridge 22.07 → 19.17) was measured with information a bidder did not hold
+   from this source at the gate. This has to be measured, not argued.
+4. **The prospective evaluation has no naive comparator.** `DE-LU_summary` holds
+   `no_trade`, `perfect_foresight` and `ridge` only, so the site's central claim —
+   the forecast is worth about 5% over the best naive — cannot be tested forward.
+5. **Snapshot storage.** The first issue wrote 576 content-addressed blobs (18.9
+   MB); month partitions should deduplicate from the second day on. To be
+   checked against the next issues, not assumed.
+
+**Decisions** (the user approved the recommended option in each case): a late
+run that finds the day already issued records that and succeeds; measure the
+provider's publication time before changing the fundamentals arm or its
+framing; issue the naive comparators at the gate beside `ridge` rather than
+reconstructing them at scoring time, so they are frozen on the same
+information.
+
+**Steps.**
+
+1. `gpa issue` looks up an existing canonical issue for the same zone, model and
+   delivery day before doing anything else; if one exists, the attempt is
+   recorded as `already_issued` against that issue and the command exits 0. A
+   late run with no canonical issue still fails as `late`, and an abstained or
+   partial issue is not canonical, so the backstop still retries it.
+2. `gpa probe-fundamentals` reads the provider's day-ahead series for the next
+   delivery day and appends one row per series — check time, hours covered,
+   hours expected, minutes relative to the gate — to a CSV. An hourly workflow
+   writes it to a separate `probe-log` branch, so `main` does not collect a
+   commit an hour. One to two weeks bracket the publication time.
+3. The Forecast workflow issues `naive_previous_day`, `naive_previous_week` and
+   `naive_similar_day` beside `ridge`, each with its own tracked attempt;
+   `gpa battery` already scores every canonical model it finds.
+4. Published text: state the first issue, the abstaining arm and the reason, and
+   the 18:00 rule as the open question over the ablation, with a small dated
+   issued/abstained counter built from the committed attempts.
+5. Check snapshot growth after the next issues; redesign storage only if the
+   month partitions do not deduplicate.
+
+**Acceptance.** Tests for `already_issued` (exit 0, linked to the canonical issue,
+no second snapshot), for a late run with nothing to protect (still exit 1,
+`late`), for an abstained first issue being retried, for the naive arms reaching
+the battery summary, and for the probe's coverage arithmetic. `ruff`, `mypy`,
+`pytest`, `gpa export --check`, `npm run build` and `npm run test:browser` clean;
+the frozen release and every retrospective number unchanged; the live pages
+checked by grepping for the new text.
+
+### P11 handoff evidence — the backstop is honest, the comparators are issued, the publication time is being measured
+
+**A late backstop no longer turns a recorded day red.** `ledger.canonical_issue`
+returns the canonical issue for one zone, model and delivery day; `gpa issue`
+asks it first and, when it finds one, closes the attempt as `already_issued`
+against that issue's id and exits 0 without reading the store or writing a
+snapshot. `attempts.STATUSES` gained the status, and `report` still verifies a
+day only through an attempt whose status is `issued`, so the new status confirms
+a day and can never certify one. The regression test replays 23 September — an
+issue at 08:00Z, a backstop at 12:17Z — and was run against the code without the
+change first: it fails there with the old `LateIssueError`. Two more pin the
+boundary: a late run with nothing on record still exits 1 as `late`, and an
+abstained first issue does not stop a later pre-gate slot from trying again (two
+issue directories, both abstentions).
+
+**The schedule is placed by arrival, not by its nominal time.** A 23:17Z slot
+was added ahead of 02:17Z and 06:47Z. It is already D-1 in market time in both
+seasons (01:17 CEST, 00:17 CET), and at the observed five-and-a-half-hour delay
+it lands near 05:00Z instead of 08:00Z. The bot's commit message now carries the
+run's own clock rather than a date that read like the delivery day.
+
+**The naive comparators are issued at the gate.** The Forecast workflow issues
+`naive_previous_day`, `naive_previous_week` and `naive_similar_day` after the two
+Ridge arms, each with its own registered attempt, and fails the run if one does
+not issue. No model code changed: `gpa issue --model naive_*` already worked and
+`gpa battery` already scores every canonical model. A CLI test issues all four
+arms, reconciles and confirms each reaches `DE-LU_summary.parquet`.
+
+**The publication-time probe exists and has run against the provider.**
+`gpa.probe.check` counts, per series, the clock hours of tomorrow's local
+delivery day the provider serves — against 23, 24 or 25 expected — and the
+minutes from the gate, negative after it; `gpa probe-fundamentals` appends that
+to a CSV. Nine tests cover coverage per series, quarter-hour against hourly
+data, the 25-hour autumn day with its still-summer gate, the sign after the
+gate, a naive clock, the log's single header and the command. Run live at
+19:17Z on 23 September it reported load, wind and solar 24/24 for the 24th, 558
+minutes after the gate — consistent with an afternoon publication, but one
+point proves nothing. `probe.yml` runs it hourly and commits to an orphan
+`probe-log` branch; its git sequence was exercised against a local bare remote
+through both paths — branch absent, then present, including shallow `file://`
+clones — and left `main` untouched.
+
+**Published text states the record.** The home page, forecast page,
+methodology and README now say the ledger issued on 23 September, that
+`ridge_da` abstained and why, and that Regulation (EU) 543/2013 only requires
+wind and solar forecasts by 18:00 on D-1, which makes the ablation a possible
+upper bound until the probe says otherwise. The regulation is in both reference
+lists. The counter is a build-time loader, `site/data/ledger_status.json.js`,
+reading the committed attempts: an exported table would be stale after the next
+bot commit and fail `gpa export --check` on the following push. It counts each
+delivery day once at its best outcome and dates itself by the latest attempt,
+not the build clock.
+
+**Verification.** 435 tests pass; `ruff check`, `ruff format --check` and
+`mypy` clean; `gpa export --check` clean, so the frozen release and every
+retrospective number are unchanged; `npm run build` validates 11 links and runs
+the loader; `npm run test:browser` passes on all four pages at 1440 and 390
+pixels; and a rendered read of every new passage found the interpolated values
+and no `${`, `undefined` or `NaN`.
+
+**Still open.** Snapshot growth has to be read off the next issuing runs: the
+first wrote 576 blobs, and month partitions should reduce later days to the
+current month. The probe needs one to two weeks before the ablation's framing
+changes either way. The GitHub About text and topics still need applying by
+hand.
+
 ### P8 — reposition as a market research note, publish it, and start the ledger — recorded before code
 
 **Review findings (22 September 2026), verified rather than recalled.** The

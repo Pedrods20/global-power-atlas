@@ -11,6 +11,9 @@ const yearly = [...await FileAttachment("data/capacity_price_yearly.parquet").pa
 const shape = [...await FileAttachment("data/price_shape.parquet").parquet()];
 const marginYearly = [...await FileAttachment("data/battery_margin_yearly.parquet").parquet()];
 const capacity = [...await FileAttachment("data/capacity.parquet").parquet()];
+const ledgerStatus = await FileAttachment("data/ledger_status.json").json();
+const ridgeArm = ledgerStatus.arms.find((d) => d.model === "ridge");
+const ledgerDate = ledgerStatus.as_of ? ledgerStatus.as_of.slice(0, 10) : "this build";
 const yearlyCap = capacity.filter((d) => d.time_step === "yearly" && !d.is_planned);
 const capAt = (technology, period) => yearlyCap.find((d) => d.technology === technology && String(d.period) === period);
 const pumped = yearlyCap
@@ -317,13 +320,13 @@ stresses and downside on the [storage page](./battery).
   the measurement of it.
 - **This is already-inspected history.** It is development evidence from a
   frozen, reproducible release — not an untouched holdout and not a prospective
-  record, and the prospective ledger that would change that **has not yet issued
-  a single forecast**. Eleven scheduled runs between 14 and 22 September 2026 all
-  failed, every one of them at the same step: GitHub's scheduler is best-effort
-  and delivered them hours after the midday gate, so `gpa issue` refused to
-  backdate a forecast — the tool working, not failing. The schedule has been moved
-  to two early slots and a defect in the fundamentals arm fixed, but until a run
-  actually issues before a gate, nothing prospective is claimed here.
+  record. The prospective ledger that will change that **issued its first
+  forecast on 23 September 2026**, after eleven scheduled runs had arrived hours
+  past the midday gate and been refused rather than backdated. As of
+  ${ledgerDate}, the published arm has issued ${ridgeArm ? ridgeArm.issued : 0}
+  of ${ridgeArm ? ridgeArm.days : 0} delivery days attempted, and every run now
+  also issues the three naive comparators it is scored against. That is a start,
+  not a record: nothing prospective is claimed here until it covers six weeks.
 
 ## Premises
 

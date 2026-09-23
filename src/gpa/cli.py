@@ -14,6 +14,7 @@ The main portfolio commands are:
 ``gpa reconcile``  attach observed prices to issued forecasts
 ``gpa battery``    evaluate reconciled forecasts through the battery dispatch
 ``gpa battery-study`` evaluate a local retrospective prediction snapshot
+``gpa probe-fundamentals`` log how much of tomorrow's day-ahead forecasts is published
 
 Exit codes matter because a scheduled workflow reads them: 0 when every target
 succeeded or was cleanly skipped, 1 when any target failed.
@@ -229,6 +230,45 @@ def capacity(
     typer.secho(
         f"Wrote {combined.height} rows ({technologies} technologies) to {path}.",
         fg=typer.colors.GREEN,
+    )
+
+
+@app.command("probe-fundamentals")
+def probe_fundamentals(
+    zone: Annotated[str, typer.Option("--zone", "-z", help="Zone to probe.")] = "DE-LU",
+    output: Annotated[Path, typer.Option(help="CSV log the check is appended to.")] = Path(
+        "data/probes/fundamentals_publication.csv"
+    ),
+    verbose: VerboseOption = False,
+) -> None:
+    """Record how much of tomorrow's day-ahead forecasts the provider serves now.
+
+    Appends one row per series with the check time and its distance from the
+    day-ahead gate. Run repeatedly across a day, the log brackets when the
+    delivery day's forecasts are first published -- which decides whether the
+    prospective ``ridge_da`` arm can ever issue before the gate.
+    """
+    _configure_logging(verbose)
+    from gpa import probe
+    from gpa.sources import get_source
+
+    market = get_zone(zone)
+    if not market.has("fundamentals"):
+        typer.secho(f"{market.code} does not collect fundamentals.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    source = get_source(market.sources["fundamentals"])
+    frame = probe.check(market, now=pipeline.now_utc(), fetch=source.fetch)
+    probe.append(frame, output)
+    row = frame.row(0, named=True)
+    covered = ", ".join(
+        f"{r['series']} {r['hours_covered']}/{r['hours_expected']}"
+        for r in frame.iter_rows(named=True)
+    )
+    margin = row["minutes_before_gate"]
+    relative = f"{margin} min before" if margin >= 0 else f"{-margin} min after"
+    typer.echo(
+        f"{market.code} {row['delivery_date']} at {row['checked_at_utc']} "
+        f"({relative} the gate): {covered} -> {output}"
     )
 
 
@@ -692,6 +732,23 @@ def issue(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     try:
+        # The backstop slot exists for days the first slot missed. On a day it
+        # did not miss, the backstop usually arrives after the gate -- GitHub
+        # delivered both slots about five and a half hours late on 23 September
+        # 2026 -- and refusing to backdate is then correct but beside the point:
+        # the day is on record. It is closed against that issue instead, so a
+        # red run keeps meaning a delivery day with no forecast.
+        if not allow_late:
+            prior = ledger.canonical_issue(market.code, model, target_date, root=root)
+            if not prior.is_empty():
+                prior_id = prior["issue_id"][0]
+                attempts.finish(root, identifier, status="already_issued", issue_id=prior_id)
+                typer.secho(
+                    f"{market.code} {target_date}: already issued as {prior_id[:12]} at "
+                    f"{prior['issued_at'][0]:%Y-%m-%d %H:%M}Z; attempt recorded, nothing reissued.",
+                    fg=typer.colors.GREEN,
+                )
+                return
         sources: dict[str, pl.DataFrame] = {}
         observations: dict[str, dt.datetime] = {}
         for dataset in ("price", "load", "generation", "fundamentals"):

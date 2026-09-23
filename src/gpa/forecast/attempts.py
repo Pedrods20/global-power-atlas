@@ -14,7 +14,9 @@ from gpa.forecast import ledger
 from gpa.forecast.provenance import default_model, utc
 from gpa.zones import get_zone
 
-STATUSES = {"issued", "partial", "abstained", "late", "failed"}
+STATUSES = {"issued", "partial", "abstained", "late", "failed", "already_issued"}
+"""``already_issued`` closes a backstop run that found the day's canonical issue
+on record; it references that issue and never verifies a day by itself."""
 
 
 def _path(root: Path, identifier: str) -> Path:

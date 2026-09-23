@@ -1,0 +1,66 @@
+name: Fundamentals probe
+
+# When does Energy-Charts publish the next delivery day's day-ahead load, wind
+# and solar forecasts? The prospective `ridge_da` arm can only issue if it is
+# before the 12:00 gate, and Regulation (EU) 543/2013 only requires wind and
+# solar by 18:00 on D-1. The archive records no publication time, so this job
+# measures it: every run appends one row per series -- check time, hours of the
+# delivery day served, minutes from the gate -- to a CSV log.
+#
+# The log lives on its own `probe-log` branch. An hourly job committing to
+# `main` would bury the project's history under bot commits and race the
+# Forecast job's ledger pushes. Scheduled runs arrive hours late here, so the
+# cron asks for every hour and the log records when each check actually ran;
+# the bracket comes from the recorded times, not the nominal ones.
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fundamentals-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LOG_DIR: ${{ github.workspace }}/../probe-log
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e .
+
+      - name: Check out the probe log branch
+        run: |
+          if git ls-remote --exit-code --heads origin probe-log >/dev/null; then
+            git fetch --depth 1 origin probe-log
+            git worktree add -B probe-log "$LOG_DIR" FETCH_HEAD
+          else
+            git worktree add --detach "$LOG_DIR"
+            cd "$LOG_DIR"
+            git checkout --orphan probe-log
+            git rm -rf --quiet .
+          fi
+
+      - name: Probe the provider
+        run: gpa probe-fundamentals --zone DE-LU --output "$LOG_DIR/fundamentals_publication.csv"
+
+      - name: Commit the check
+        run: |
+          cd "$LOG_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fundamentals_publication.csv
+          git commit -m "probe: DE-LU fundamentals at $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin probe-log
