@@ -53,7 +53,13 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-filterwarnings = ["error::DeprecationWarning"]
+# Deprecations are errors, except one raised inside MLflow's own tracking store:
+# SQLAlchemy 2.1 deprecated the `noload` strategy its mappers still use. Drop the
+# exemption once MLflow stops using it. Later entries take precedence.
+filterwarnings = [
+    "error::DeprecationWarning",
+    "ignore:The ``noload`` loader strategy is deprecated:DeprecationWarning",
+]
 
 [tool.mypy]
 python_version = "3.11"
