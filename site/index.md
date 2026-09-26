@@ -363,9 +363,13 @@ they appear.
 public data, leakage-safe walk-forward forecasting, the constrained dispatch and
 stress-testing engine, the prospective ledger, and this site.
 
+<!-- ABOUT-ME: the same two or three sentences as the README's Author section. -->
+
 Code, data and the full audit trail:
-**[github.com/Pedrods20/global-power-atlas](https://github.com/Pedrods20/global-power-atlas)**
+**[github.com/Pedrods20/german-power-research](https://github.com/Pedrods20/german-power-research)**
 · profile: [github.com/Pedrods20](https://github.com/Pedrods20)
+
+<!-- LINKEDIN: append " · [LinkedIn](https://www.linkedin.com/in/<handle>/)" to the line above. -->
 
 ---
 

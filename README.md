@@ -6,10 +6,10 @@ claim from primary system-operator data, then tests it the only way that settles
 it — by dispatching a battery against realised prices and measuring what the
 shape is actually worth.
 
-[![CI](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/ci.yml)
-[![Deploy](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pedrods20/global-power-atlas/actions/workflows/deploy.yml)
+[![CI](https://github.com/Pedrods20/german-power-research/actions/workflows/ci.yml/badge.svg)](https://github.com/Pedrods20/german-power-research/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Pedrods20/german-power-research/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pedrods20/german-power-research/actions/workflows/deploy.yml)
 
-**[Open the live site](https://pedrods20.github.io/global-power-atlas/)** ·
+**[Open the live site](https://pedrods20.github.io/german-power-research/)** ·
 [Market view](site/index.md) · [Forecast evidence](site/forecast.md) ·
 [Storage value](site/battery.md) · [Methodology](site/methodology.md)
 
@@ -334,9 +334,17 @@ Technical and cost references used as stated comparisons, not as calibration:
 
 ## Author
 
+**Pedro Cabral**
+
+<!-- ABOUT-ME: two or three sentences in the register of this page — current role,
+market focus, the work you want next. Mirror it in site/index.md. -->
+
 Designed and built end to end, solo: ingestion of the system operators' public
 data, leakage-safe walk-forward forecasting, the constrained battery-dispatch and
-stress-testing engine, the prospective ledger, and this site. [github.com/Pedrods20](https://github.com/Pedrods20).
+stress-testing engine, the prospective ledger, and this site.
+
+<!-- LINKEDIN: prepend "[LinkedIn](https://www.linkedin.com/in/<handle>/) · " to the line below. -->
+[GitHub](https://github.com/Pedrods20)
 
 ## License
 

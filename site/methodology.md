@@ -293,7 +293,7 @@ commit on every scheduled run; `gpa forecast-attempt report --start-date ...
 forecast page summarises. The publication-time probe's log lives on the
 repository's separate `probe-log` branch.
 
-The [source repository](https://github.com/Pedrods20/global-power-atlas) contains
+The [source repository](https://github.com/Pedrods20/german-power-research) contains
 the validated monthly Parquet store, forecast code, battery optimizer and test
 suite. The historical output is deliberately versioned so the figures shown on
 the site are reproducible.

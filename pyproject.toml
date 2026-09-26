@@ -1,5 +1,5 @@
 [project]
-name = "global-power-atlas"
+name = "german-power-research"
 version = "0.1.0"
 description = "German power market research: DE-LU day-ahead price shape, forecasting and battery arbitrage value."
 readme = "README.md"
