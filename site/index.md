@@ -2,7 +2,7 @@
 title: Market view
 ---
 
-# Solar killed Germany's peak premium. The spread a battery earns doubled.
+# German power: price shape and battery value
 
 ```js
 const yearly = [...await FileAttachment("data/capacity_price_yearly.parquet").parquet()]
@@ -42,51 +42,17 @@ const pct = (v) => `${v.toFixed(0)}%`;
 const rate = (v) => v.toFixed(2);
 ```
 
-Germany's day-ahead price no longer pays a premium for the hours the market used
-to call peak. It pays for the hours solar cannot reach. That is a larger
-opportunity for flexibility, not a smaller one, and the two facts get confused
-because they show up in different statistics.
+This study examines changes in Germany–Luxembourg day-ahead prices and their implications for battery dispatch. It also tests how much a price forecast adds over simple scheduling strategies.
 
-**DE-LU, ${first.year} → ${last.year}:** on-peak premium **EUR ${num(first.spread)}
-→ ${num(last.spread)}/MWh** · within-day range **EUR ${num(first.intraday_spread)}
-→ ${num(last.intraday_spread)}/MWh** (${pct(first.intraday_spread_pct_of_price)}
-→ ${pct(last.intraday_spread_pct_of_price)} of baseload) · solar capture rate
-**${rate(first.solar_capture_rate)} → ${rate(last.solar_capture_rate)}** ·
-negative hours **${num(first.negative_pct)}% → ${num(last.negative_pct)}%**
+**[Forecast results](./forecast) · [Battery economics](./battery) · [Methodology](./methodology)**
 
-The case below is built from primary system-operator data, then tested the only
-way that settles it: by dispatching a battery against realised prices and
-measuring what the shape is actually worth.
+## 1. The on-peak premium has turned negative
 
----
+The on-peak/off-peak spread moved from **EUR ${num(first.spread)}/MWh in ${first.year}** to **EUR ${num(last.spread)}/MWh in ${last.year} YTD**. Solar capture fell from **${rate(first.solar_capture_rate)}** to **${rate(last.solar_capture_rate)}**, alongside an increase in installed solar capacity from ${num(first.solar_capacity_gw)} to ${num(last.solar_capacity_gw)} GW.
 
-## 1. The peak premium is gone
+A block average can mask low midday prices and higher evening prices. Storage valuation needs to account for when those prices occur and how long they last.
 
-On-peak hours in DE-LU were worth **EUR ${num(first.spread)}/MWh** more than
-off-peak in ${first.year}. In ${last.year} they are worth **EUR
-${num(last.spread)}/MWh** — the on-peak block now clears *below* the hours
-around it. Solar's capture rate, what a solar plant earns against the average
-price, fell from **${rate(first.solar_capture_rate)}** to
-**${rate(last.solar_capture_rate)}** while installed capacity went from
-${num(first.solar_capacity_gw)} to ${num(last.solar_capacity_gw)} GW. Hours
-below zero went from ${num(first.negative_pct)}% of the year to
-**${num(last.negative_pct)}%**.
-
-Part of that is the block definition, and saying so makes the point sharper
-rather than weaker. DE-LU's on-peak block is 08:00–20:00 local, a window drawn
-when demand shaped the day. It now straddles the cheapest hours and the most
-expensive ones at once, so its average says less every year. "The peak premium
-is gone" is partly "the block no longer describes the peak" — which is exactly
-why the within-day range in the next section, which makes no assumption about
-*when* the extremes fall, is the measure that still works.
-
-Wind did not do this to itself: its capture rate is
-${rate(first.wind_capture_rate)} then and ${rate(last.wind_capture_rate)} now.
-Wind blows across the day and across the seasons. Solar arrives in the same six
-hours every day, in every plant at once, and that concentration is the whole
-mechanism.
-
-## 2. The trade a battery makes got bigger
+## 2. Daily spreads remain relevant for storage
 
 ```js
 const spreadSeries = yearly.flatMap((d) => [
@@ -110,19 +76,7 @@ Plot.plot({
 })
 ```
 
-The block spread and the within-day range answer different questions. A fixed
-block contract pays the first. A battery is paid the second, because it charges
-at the day's low and discharges at its high wherever in the day those fall.
-
-Scaled by each year's own price level, the within-day range went from
-**${pct(first.intraday_spread_pct_of_price)}** of baseload in ${first.year} to
-**${pct(last.intraday_spread_pct_of_price)}** in ${last.year}. The gas crisis is
-the control that makes this readable: ${crisis.year} was by far the most
-expensive year in the sample, and its range was
-**${pct(crisis.intraday_spread_pct_of_price)}** of baseload — no wider, in
-relative terms, than ${first.year}. **${crisis.year} was a price-level shock.
-What has happened since is a change in shape**, and shape is what storage is
-paid for.
+The average daily high–low range increased from **${pct(first.intraday_spread_pct_of_price)} of baseload in ${first.year}** to **${pct(last.intraday_spread_pct_of_price)} in ${last.year} YTD**. This is a measure of price dispersion, not a directly achievable battery margin: dispatch also depends on sequence, duration, efficiency and asset constraints.
 
 ```js
 const shapeYears = [first.year, latestFull.year, last.year];
@@ -144,17 +98,7 @@ Plot.plot({
 })
 ```
 
-In ${first.year} the German day was a plateau: daytime a little above average,
-night below it. It is now a trough between two peaks. The midday hours solar
-floods have fallen under the night, and the evening ramp — when solar has gone
-and demand has not — is the most expensive part of the day by a wider margin
-than before. A battery charges in a trough that did not used to exist and
-discharges into a peak that got sharper.
-
-Dispatching a 1 MW / 4 MWh battery against realised DE-LU prices with perfect
-foresight and one cycle a day puts a number on it. EUR/MW/d is that battery's
-margin per megawatt per day; GW and GWh are Germany's installed battery fleet
-that year:
+The hourly profile shows lower midday prices and a more pronounced evening premium. To assess the value of that shape, the table below models a **1 MW / 4 MWh battery** with perfect foresight and at most one daily charge–discharge episode. These margins are an upper bound under the model assumptions, before operating, degradation and capital costs.
 
 ```js
 Inputs.table(
@@ -168,43 +112,11 @@ Inputs.table(
 )
 ```
 
-**${crisis.year} is still the best year in the table, and that is not a
-contradiction.** A battery is paid in euros, so ${crisis.year}'s EUR
-${eur(foresight(crisis.year).eur_per_mw_day)}/MW/day beats ${last.year}'s EUR
-${eur(fleetLast.eur_per_mw_day)}. The claim is not that today is richer than the
-gas crisis. It is that today's spread is reached from a *completely different
-place*: ${last.year} delivers **${pct((last.intraday_spread / crisis.intraday_spread) * 100)}
-of ${crisis.year}'s absolute daily range on a baseload price
-${pct(Math.abs(last.baseload_price / crisis.baseload_price - 1) * 100)} lower**.
+Perfect-foresight margin was **EUR ${eur(foresight(crisis.year).eur_per_mw_day)}/MW/day in ${crisis.year}**, compared with **EUR ${eur(fleetLast.eur_per_mw_day)}/MW/day in ${last.year} YTD**. The latter period retains substantial modelled arbitrage value despite a lower average price level. This historical comparison does not establish future bankability.
 
-That distinction is the whole commercial argument. ${crisis.year}'s spread came
-from an expensive, volatile marginal unit, and it left with the gas price.
-${last.year}'s comes from the shape of the day, which is set by an installed
-base that is still being built. A spread that depends on a fuel shock is one a
-lender discounts; a spread that depends on 118 GW of solar is one they can
-underwrite.
+## 3. Storage competition needs a closer look
 
-## 3. Competition has not arrived — and the fleet's duration says why
-
-Germany's battery fleet grew from ${num(fleetFirst.battery_power_gw)} GW to
-**${num(fleetLast.battery_power_gw)} GW** across this sample and the arbitrage
-value per MW did not compress. It rose.
-
-**First, the incumbent nobody counts.** Germany has roughly
-${num(pumpedLast.value)} GW of pumped hydro arbitraging this exact spread, and it
-is not new: ${num(pumpedFirst.value)} GW in ${pumpedFirst.period}, the earliest
-year this provider's series covers, and essentially flat every year since. Storage competition did not begin with batteries. What that
-flatness means is that the incumbent fleet is not what changed: the spread
-widened while the longest-duration, most capable arbitrage fleet in the market
-stood still.
-
-**Second, the batteries that did arrive are the wrong shape for this trade.** At
-${num(fleetLast.battery_power_gw)} GW and ${num(fleetLast.battery_energy_gwh)}
-GWh, the fleet's average duration is about
-**${fleetHours(last.year).toFixed(2)} hours**. More telling than the level is
-that it barely moved while the fleet grew more than fivefold. GW and GWh are
-installed battery power and energy; Hours is the ratio, the fleet's average
-duration:
+Germany’s recorded battery fleet reached **${num(fleetLast.battery_power_gw)} GW / ${num(fleetLast.battery_energy_gwh)} GWh**, equivalent to **${fleetHours(last.year).toFixed(2)} hours** of average duration. Pumped hydro adds approximately **${num(pumpedLast.value)} GW** of installed capacity.
 
 ```js
 Inputs.table(
@@ -226,33 +138,9 @@ Inputs.table(
 )
 ```
 
-A fleet whose duration holds near 1.5 hours through a fivefold build-out is not
-changing composition — it is adding more of the same thing. Roughly 1.5 hours is
-what a behind-the-meter home system is sized for: shifting a household's own
-evening consumption, not bidding a four-hour midday trough. Gigawatts installed
-is not the same as capacity competing for this spread.
+The battery series does not separate residential from grid-scale assets. Average duration alone cannot identify that split or the capacity actively competing for day-ahead spreads. These aggregate data also cannot isolate the effect of storage growth from weather, fuel prices and other market changes.
 
-**What this argument rests on, and what would break it.** The provider publishes
-the fleet as one aggregate and does not split residential from grid-scale, so
-the composition here is inferred from the duration ratio rather than observed
-directly. The inference is testable and the register that would settle it, the
-Marktstammdatenregister, is outside this project's ingestion. Read the last two
-rows as the early signal against the argument: duration has ticked from
-${fleetHours("2024").toFixed(2)} to ${fleetHours(last.year).toFixed(2)} hours,
-which is what grid-scale entry looks like when it starts.
-
-Annual data cannot separate a fleet effect from the gas-price unwind or the
-weather either. What the data does establish is narrow and worth stating plainly:
-compression has not yet reached the price, at a fleet size where a
-shallow-duration explanation fits better than no effect at all.
-
----
-
-## Does forecasting this shape pay? Partly — and that is the finding.
-
-The shape is only worth something to an operator who knows in advance which
-hours are which. That is a separate, testable claim, and it is where most of
-this project's engineering went.
+## 4. Forecast accuracy adds modest dispatch value
 
 ```js
 const meta = await FileAttachment("data/forecast.json").json();
@@ -268,110 +156,37 @@ const base4 = sens.find((d) => d.strategy === "ridge" && d.energy_mwh === 4 && d
 const sampleYears = base4.days / 365.25;
 ```
 
-A per-hour ridge regression, using only what a bidder holds at the 12:00 gate on
-the day before delivery, cuts day-ahead price error by
-**${num(run.best_skill_vs_best_baseline_pct)}%** against the best naive
-alternative — EUR ${num(ridgeScore.mae)}/MWh against EUR
-${num(bestBaseline.mae)}/MWh, over ${run.scored_hours.toLocaleString("en")}
-scored hours.
+Ridge reduced hourly mean absolute error by **${num(run.best_skill_vs_best_baseline_pct)}%** versus the strongest naive price benchmark: **EUR ${num(ridgeScore.mae)}/MWh**, compared with **EUR ${num(bestBaseline.mae)}/MWh**.
 
-For scale, that battery's whole gross margin under Ridge is about **EUR
-${eur(base4.profit_eur_mw / sampleYears)}/MW per year** over the sample, before
-any operating, degradation or capital cost. Against that total, the forecast's
-contribution is the part worth arguing about.
+For the 1 MW / 4 MWh battery, Ridge-based dispatch added approximately **EUR ${eur(base4.incremental_vs_best_naive_eur_mw / sampleYears)}/MW/year** over the strongest fixed naive dispatch strategy. That increment represents **${pct((base4.incremental_vs_best_naive_eur_mw / base4.profit_eur) * 100)}** of Ridge’s modelled gross margin. The price and dispatch benchmarks are selected separately.
 
-Converted into dispatch, that skill is worth **EUR
-${eur(base4.incremental_vs_best_naive_eur_mw / sampleYears)}/MW per year**
-(EUR ${eur(base4.mean_daily_incremental_eur_mw)}/MW per day) more than repeating
-the last similar day — roughly
-**${pct((base4.incremental_vs_best_naive_eur_mw / base4.profit_eur) * 100)}** of
-the battery's gross margin. The naive strategy earns the rest, because most of
-the value sits in the shape, which repeats, rather than in the day-to-day
-deviation, which is what a forecast adds. Ridge loses to that naive on
-**${base4.underperform_days} of ${base4.days} days**.
+Ridge underperformed that dispatch comparator on **${base4.underperform_days} of ${base4.days} days**. Most of the historical margin was already captured by a simple strategy; the forecast’s incremental contribution needs to be assessed against costs and downside.
 
-That ratio is the honest commercial summary, and it points away from where the
-effort went: **the shape is the asset; the forecast is a margin on top of it.**
+[Compare the forecasts](./forecast) · [Review dispatch results and sensitivities](./battery)
 
-Which raises a fair question: why build the forecast at all? Because the
-number above is only trustworthy if the protocol producing it is. The 12:00
-gate, the vintage discipline and the walk-forward boundaries are what stop a
-model from quietly scoring itself on information no bidder held, and they are
-what turn "our model beats the market" into a claim someone can check. That
-discipline is the transferable part, and it is the reason this project publishes
-where the model loses as prominently as where it wins.
+## Risks to the outlook
 
-Protocol and failure modes on the [forecast page](./forecast); dispatch, costs,
-stresses and downside on the [storage page](./battery).
+- **Fuel prices and weather:** changes in residual demand and marginal generation costs can alter both midday and evening prices.
+- **Competing flexibility:** storage, demand response and cross-border flows can reduce the spreads available to an individual asset.
+- **Market design:** product resolution and support arrangements affect price formation and the relevance of an hourly benchmark.
 
-## What would make this wrong
+## Scope and evidence
 
-- **The gas premium unwinds further.** Part of the widened range is still an
-  expensive, volatile gas stack setting the evening price. A cheaper marginal
-  unit compresses the top of the day without touching the midday trough.
-- **The fleet's duration lengthens.** Section 3 rests on German storage being
-  short and domestic. Grid-scale 2–4h additions attack exactly the trough this
-  trade depends on, and the first sign is already in the table there: average
-  duration ticked from ${fleetHours("2024").toFixed(2)} to
-  ${fleetHours(last.year).toFixed(2)} hours in two years. This is the risk to
-  watch, and it is measurable every quarter.
-- **Market design changes.** The move to 15-minute day-ahead products in October
-  2025, and any change to negative-price support rules, alter both the trade and
-  the measurement of it.
-- **This is already-inspected history.** It is development evidence from a
-  frozen, reproducible release — not an untouched holdout and not a prospective
-  record. The prospective ledger that will change that **issued its first
-  forecast on 23 September 2026**, after eleven scheduled runs had arrived hours
-  past the midday gate and been refused rather than backdated. As of
-  ${ledgerDate}, the published arm has issued ${ridgeArm ? ridgeArm.issued : 0}
-  of ${ridgeArm ? ridgeArm.days : 0} delivery days attempted, and every run now
-  also issues the three naive comparators it is scored against. That is a start,
-  not a record: nothing prospective is claimed here until it covers six weeks.
+This is a retrospective development study on history already inspected during model development. Historical inputs contain provider revisions; their exact availability at past auction gates cannot be verified.
 
-## Premises
+The forecast uses lagged prices, calendar features and residual load lagged by at least two delivery days. The target is an hourly price average. The battery headline assumes 90% round-trip efficiency, one charge–discharge episode per day and zero initial and terminal state of charge. Margins exclude operating, degradation and capital costs; separate sensitivities test illustrative variable costs. Intraday and balancing revenues are outside scope.
 
-The forecast may use only information held at **12:00 market time on D-1**, when
-the day-ahead order book closes: lagged prices, calendar features and residual
-load lagged at least two delivery days. The target is the duration-weighted
-local clock-hour price, an analytical benchmark rather than a per-quarter-hour
-trade. The asset is a deliberately simple 1 MW battery at 1, 2 or 4 MWh, 90%
-round-trip, starting and ending each day empty; the headline allows one
-charge-then-discharge episode a day, with a two-episode case run and reported
-separately. The base case carries zero operating and degradation cost, and
-non-zero cases are rerun rather than folded in. Day-ahead arbitrage alone is a
-**lower bound** on a German battery's revenue: intraday and balancing markets
-are outside this study.
+**${last.year} is a partial year.** Comparisons with complete years are sensitive to seasonality and should not be read as full-year forecasts.
 
-${last.year} is a partial year, and the direction of that bias is known rather
-than waved at. Within-day range is seasonal, peaking in late summer, so a
-January-to-September year runs above its own full-year average: measured on the
-complete years in this store, by **+4.0% (2022), +3.5% (2023) and +5.2%
-(2025)**. Discount ${last.year}'s range figures by roughly that much; it does
-not change the direction of anything above. Reproduce with
-`gpa.metrics.price.intraday_spread(period="month")`. Full definitions on the
-[methodology page](./methodology).
+**Prospective monitoring:** as of ${ledgerDate}, the published arm has issued forecasts for ${ridgeArm ? ridgeArm.issued : 0} of ${ridgeArm ? ridgeArm.days : 0} attempted delivery days. This pilot is reported separately from the historical results. [Protocol and current status](./forecast).
 
-**Sources.** Prices, load, generation and installed capacity come from
-Energy-Charts (Fraunhofer ISE, CC BY 4.0), which republishes ENTSO-E and SMARD
-figures published by the system operators. Two figures on the storage page
-are external citations — BloombergNEF and the Bundesnetzagentur — dated where
-they appear.
+**Sources:** Energy-Charts / Fraunhofer ISE, including figures redistributed from ENTSO-E and SMARD. [Definitions, assumptions and attribution](./methodology).
 
-## Author
+## About me
 
-**Pedro Cabral.** Built solo, end to end: ingestion of the system operators'
-public data, leakage-safe walk-forward forecasting, the constrained dispatch and
-stress-testing engine, the prospective ledger, and this site.
+**Pedro Cabral** — power-market research focused on fundamentals, price formation and the commercial implications of the energy transition. My regional experience covers Brazil, Chile and Argentina; this independent project applies that analytical approach to European power and storage.
 
-<!-- ABOUT-ME: the same two or three sentences as the README's Author section. -->
-
-Code, data and the full audit trail:
-**[github.com/Pedrods20/german-power-research](https://github.com/Pedrods20/german-power-research)**
-· profile: [github.com/Pedrods20](https://github.com/Pedrods20)
-
-<!-- LINKEDIN: append " · [LinkedIn](https://www.linkedin.com/in/<handle>/)" to the line above. -->
-
----
+[Research repository](https://github.com/Pedrods20/german-power-research) · [GitHub profile](https://github.com/Pedrods20)
 
 ## Market context
 
