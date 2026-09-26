@@ -1,4 +1,4 @@
-"""Structural time coverage, distinct from freshness and emission-factor coverage."""
+"""Structural audit of the store: every series over its own span, gaps left as gaps."""
 
 from __future__ import annotations
 
@@ -9,19 +9,13 @@ from gpa.zones import ZONES
 
 
 def inspect(frame: pl.DataFrame, dataset: str, zone: str) -> pl.DataFrame:
-    """Report every fuel separately over its own first-to-last observed span.
-
-    Missing time remains missing. Percent coverage cannot prove accuracy of a
-    provider's measurement or presence of an unreported technology.
-    """
+    """Coverage, gaps and invalid intervals per fuel or series, over its own observed span."""
     value = {
         "price": "price",
         "load": "load_mw",
         "generation": "gen_mw",
         "fundamentals": "forecast_mw",
     }[dataset]
-    # "fuel" and "fundamentals"' "series" both name a per-row discriminator to
-    # report separately; normalize to one column name for the loop below.
     if "series" in frame.columns:
         data = frame.rename({"series": "fuel"})
     elif "fuel" in frame.columns:

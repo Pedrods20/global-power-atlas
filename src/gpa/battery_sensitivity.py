@@ -1,17 +1,9 @@
-"""Fixed diagnostic stresses for the static DE-LU portfolio, not a fitted policy.
+"""Fixed stresses on the frozen DE-LU sample: registered before running, never fitted on P&L.
 
-Prices and model parameters are frozen. Signal attenuation never reads actuals.
-Calendar downtime represents a battery unavailable for an entire known day,
-with zero initial/terminal SOC; it does not simulate a mid-cycle forced outage.
-The 85% efficiency reference is NREL ATB 2024, not a German asset calibration:
-https://atb.nrel.gov/electricity/2024/utility-scale_battery_storage
-
-The two-episode stresses relax the asset definition rather than the forecast:
-the same frozen predictions, the same days and the same settlement, dispatched
-by a battery permitted two charge-then-discharge episodes instead of one. They
-answer how much of the published margin is the one-cycle benchmark's own
-conservatism. They still model day-ahead only, so they remain a lower bound on
-what a real asset earns across day-ahead, intraday and balancing markets.
+Signal attenuation never reads actuals. Calendar downtime takes a whole known day
+out with zero SOC. The 85% efficiency is NREL ATB 2024's reference, not a German
+calibration. Two episodes relax the asset, not the forecast, and remain day-ahead
+only, so every row is still a lower bound on a real asset's revenue.
 """
 
 from __future__ import annotations
@@ -44,7 +36,6 @@ class Scenario:
     episodes: int = 1
 
 
-# Registered in the roadmap before running these scenarios. No selection on P&L.
 SCENARIOS = (
     Scenario("base"),
     Scenario("cost_2_3", variable=2.0, degradation=3.0),
@@ -71,12 +62,14 @@ _ACTIVITY = (
 )
 
 
-def weaken_signal(predictions: pl.DataFrame, retained_signal: float) -> pl.DataFrame:
-    """Shrink fitted-model forecasts toward D-1; preserve actuals and naive rows.
+def _unavailable(every_days: int) -> pl.Expr:
+    return (
+        (pl.col("local_date").cast(pl.Date) - pl.lit(OUTAGE_ANCHOR)).dt.total_days() % every_days
+    ) == 0
 
-    Physical timestamps are the join key where available, including DST hours.
-    A missing D-1 forecast remains missing; common-sample eligibility handles it.
-    """
+
+def weaken_signal(predictions: pl.DataFrame, retained_signal: float) -> pl.DataFrame:
+    """Shrink the fitted models' forecasts toward the previous day's price; naives untouched."""
     if not math.isfinite(retained_signal) or not 0 <= retained_signal <= 1:
         raise ValueError("retained_signal must be finite and between zero and one")
     keys = ["ts_utc"] if "ts_utc" in predictions.columns else ["local_date", "local_hour"]
@@ -85,28 +78,24 @@ def weaken_signal(predictions: pl.DataFrame, retained_signal: float) -> pl.DataF
     )
     if baseline.is_empty():
         raise ValueError("previous-day forecasts are required for signal attenuation")
+    shrunk = pl.col("_reference") + retained_signal * (pl.col("forecast") - pl.col("_reference"))
     return (
         predictions.join(baseline, on=keys, how="left", validate="m:1")
         .with_columns(
             pl.when(pl.col("model").is_in(["ridge", "lightgbm"]))
-            .then(
-                pl.col("_reference") + retained_signal * (pl.col("forecast") - pl.col("_reference"))
-            )
+            .then(shrunk)
             .otherwise(pl.col("forecast"))
             .alias("forecast")
         )
-        .drop("_reference")
         .select(predictions.columns)
     )
 
 
 def calendar_outages(dispatch: pl.DataFrame, every_days: int = 20) -> pl.DataFrame:
-    """Zero physical activity and settlement, not observations or sample days."""
+    """Zero activity and settlement on outage days; the days stay in the sample."""
     if every_days < 1:
         raise ValueError("every_days must be positive")
-    unavailable = (
-        (pl.col("local_date").cast(pl.Date) - pl.lit(OUTAGE_ANCHOR)).dt.total_days() % every_days
-    ) == 0
+    unavailable = _unavailable(every_days)
     return dispatch.with_columns(
         pl.when(unavailable).then(0.0).otherwise(pl.col(c)).alias(c) for c in _ACTIVITY
     )
@@ -119,22 +108,12 @@ def scenario_tables(
     model_names: Sequence[str] = DEFAULT_MODELS,
     durations_mwh: Sequence[float] = (1.0, 2.0, 4.0),
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Cost rows and full stress scorecards on identical eligible sample days.
-
-    Base must be the zero-cost/default-physics study of these same predictions.
-    The export owns that call; explicit checks reject accidental sample drift.
-    All figures are unannualized, including the removal-of-best-days diagnostic.
-    """
-    costs: list[pl.DataFrame] = []
-    stresses: list[pl.DataFrame] = []
+    """Cost rows and full stress scorecards, on exactly the base study's days."""
+    costs, stresses = [], []
     base_days = set(base.daily["local_date"].to_list())
     for scenario in SCENARIOS:
         study = base
         if scenario.name not in {"base", "calendar_downtime"}:
-            # The published benchmark allows one charge-then-discharge episode a
-            # day. A German battery facing a midday solar trough between two
-            # demand peaks runs two, so the two-episode rows say how much of the
-            # headline is the asset definition rather than the forecast.
             inputs = (
                 weaken_signal(predictions, scenario.retained_signal)
                 if scenario.retained_signal != 1
@@ -151,62 +130,56 @@ def scenario_tables(
                     "max_episodes_per_day": float(scenario.episodes),
                 },
             )
-        dispatched = study.dispatch
         daily, risk, comparisons, summary = (
             study.daily,
             study.risk,
             study.comparisons,
             study.summary,
         )
+        outage_days = 0
         if scenario.outage_every_days:
-            dispatched = calendar_outages(dispatched, scenario.outage_every_days)
+            dispatched = calendar_outages(study.dispatch, scenario.outage_every_days)
             daily = daily_margins(dispatched)
             risk, comparisons, summary = (
                 risk_metrics(daily),
                 paired_comparisons(daily),
                 summarize(dispatched),
             )
+            outage_days = (
+                daily.select("local_date")
+                .unique()
+                .filter(_unavailable(scenario.outage_every_days))
+                .height
+            )
         if set(daily["local_date"].to_list()) != base_days:
             raise ValueError("sensitivity changed the common eligible sample")
-        days = daily.select("local_date").unique()
-        outage_days = (
-            days.filter(
-                (
-                    (pl.col("local_date") - pl.lit(OUTAGE_ANCHOR)).dt.total_days()
-                    % scenario.outage_every_days
-                )
-                == 0
-            ).height
-            if scenario.outage_every_days
-            else 0
-        )
-        # Join the corresponding fixed comparator's diagnostics, never a daily oracle.
+        # Join the fixed comparator's diagnostics, never a per-day oracle.
         selected = comparisons.rename({"baseline": "best_naive"}).drop("incremental_eur_mw")
-        rows = risk.join(
-            summary.select(
-                *_KEYS,
-                "gross_revenue_eur",
-                "operating_cost_eur",
-                "degradation_cost_eur",
-                "equivalent_cycles",
-            ),
-            on=_KEYS,
-            validate="1:1",
-        ).join(selected, on=[*_KEYS, "best_naive"], how="left", validate="1:1")
-        rows = rows.with_columns(
-            pl.lit(scenario.name).alias("scenario"),
-            pl.lit(scenario.variable).alias("variable_cost_eur_mwh"),
-            pl.lit(scenario.degradation).alias("degradation_cost_eur_mwh"),
-            pl.lit(scenario.efficiency).alias("round_trip_efficiency"),
-            pl.lit(scenario.retained_signal).alias("retained_signal"),
-            pl.lit(scenario.episodes).alias("episodes_per_day"),
-            pl.lit(outage_days).alias("unavailable_days"),
-            pl.lit(len(base_days) - outage_days).alias("available_days"),
-            pl.lit(min(base_days).isoformat()).alias("sample_start"),
-            pl.lit(max(base_days).isoformat()).alias("sample_end"),
-            pl.lit("retrospective_diagnostic_not_calibrated_asset_economics").alias(
-                "evidence_status"
-            ),
+        money = summary.select(
+            *_KEYS,
+            "gross_revenue_eur",
+            "operating_cost_eur",
+            "degradation_cost_eur",
+            "equivalent_cycles",
+        )
+        rows = (
+            risk.join(money, on=_KEYS, validate="1:1")
+            .join(selected, on=[*_KEYS, "best_naive"], how="left", validate="1:1")
+            .with_columns(
+                pl.lit(scenario.name).alias("scenario"),
+                pl.lit(scenario.variable).alias("variable_cost_eur_mwh"),
+                pl.lit(scenario.degradation).alias("degradation_cost_eur_mwh"),
+                pl.lit(scenario.efficiency).alias("round_trip_efficiency"),
+                pl.lit(scenario.retained_signal).alias("retained_signal"),
+                pl.lit(scenario.episodes).alias("episodes_per_day"),
+                pl.lit(outage_days).alias("unavailable_days"),
+                pl.lit(len(base_days) - outage_days).alias("available_days"),
+                pl.lit(min(base_days).isoformat()).alias("sample_start"),
+                pl.lit(max(base_days).isoformat()).alias("sample_end"),
+                pl.lit("retrospective_diagnostic_not_calibrated_asset_economics").alias(
+                    "evidence_status"
+                ),
+            )
         )
         stresses.append(rows)
         if scenario.name in {"base", "cost_2_3", "cost_5_10"}:

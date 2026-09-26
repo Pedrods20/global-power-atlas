@@ -1,7 +1,7 @@
-"""Issuance evidence, immutable forecast identity and canonical reconciliation.
+"""The prospective ledger: immutable issues, a mutable settlement index, canonical selection.
 
-The monthly Parquet files are a mutable settlement index, not the source of
-forecast truth. Immutable input/issuance snapshots live under issues/<id>.
+Each issue's evidence is a content-addressed snapshot under ``issues/<id>``; the
+monthly Parquet files only index it and gain realised prices when settled.
 """
 
 from __future__ import annotations
@@ -15,9 +15,11 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from gpa.calendar import delivery_hours
 from gpa.forecast import provenance
 from gpa.forecast.models import Model
 from gpa.forecast.panel import Panel, hourly_mean
+from gpa.store import atomic_parquet
 from gpa.zones import Zone, get_zone
 
 DEFAULT_ROOT: Final = Path(__file__).resolve().parents[3] / "data" / "forecast_issues"
@@ -56,14 +58,15 @@ def now_utc() -> dt.datetime:
 
 
 class LateIssueError(ValueError):
-    """The issue completed outside the declared pre-gate policy window."""
+    """The issue completed outside the declared pre-gate window."""
 
 
 def market_gate(delivery_date: dt.date, zone: Zone) -> dt.datetime:
-    """Existing research policy: noon market time on D-1, strictly before gate."""
-    return dt.datetime.combine(
+    """Noon market time on D-1: an issue must be complete strictly before it."""
+    noon = dt.datetime.combine(
         delivery_date - dt.timedelta(days=1), dt.time(12), ZoneInfo(zone.timezone)
-    ).astimezone(dt.UTC)
+    )
+    return noon.astimezone(dt.UTC)
 
 
 def timing_reason(
@@ -76,36 +79,15 @@ def timing_reason(
     gate = market_gate(delivery, zone)
     if issued >= gate:
         return "late_prediction"
-    if recorded >= gate:
-        return "late_recording"
-    return "pre_gate"
+    return "late_recording" if recorded >= gate else "pre_gate"
 
 
-def delivery_grid(day: dt.date, zone: Zone) -> pl.DataFrame:
-    """Clock-hour benchmark grid; the repeated autumn hour has duration two."""
-    start = dt.datetime.combine(day, dt.time(), ZoneInfo(zone.timezone)).astimezone(dt.UTC)
-    stop = dt.datetime.combine(
-        day + dt.timedelta(days=1), dt.time(), ZoneInfo(zone.timezone)
-    ).astimezone(dt.UTC)
-    rows: dict[int, dict[str, object]] = {}
-    stamp = start
-    while stamp < stop:
-        hour = stamp.astimezone(ZoneInfo(zone.timezone)).hour
-        if hour not in rows:
-            rows[hour] = {
-                "local_date": day,
-                "local_hour": hour,
-                "delivery_start_utc": stamp,
-                "delivery_duration_hours": 0.0,
-            }
-        rows[hour]["delivery_duration_hours"] = (
-            cast(float, rows[hour]["delivery_duration_hours"]) + 1.0
-        )
-        stamp += dt.timedelta(hours=1)
-    return (
-        pl.DataFrame(list(rows.values()))
-        .with_columns(pl.col("local_hour").cast(pl.Int8))
-        .sort("local_hour")
+def _identity(row: dict[str, Any]) -> str:
+    """The issue id: a digest of what was forecast, from which inputs, and when."""
+    fields = ("zone", "model_version", "delivery_date", "issued_at", "input_as_of", "input_sha256")
+    values = {key: row[key] for key in fields}
+    return provenance.digest(
+        {key: v.isoformat() if isinstance(v, dt.date) else v for key, v in values.items()}
     )
 
 
@@ -121,11 +103,10 @@ def issue(
     input_as_of: dt.datetime | None = None,
     policy_id: str = "explicit-library-configuration",
 ) -> pl.DataFrame:
-    """Compute before sampling the production issue clock; never drop abstentions.
+    """Forecast one delivery day from a sanitised panel; every hour kept, abstentions too.
 
-    Explicit issued_at is for deterministic offline replay/tests. The CLI does
-    not expose it. Eligibility is timing-only here; canonical selection also
-    requires a verified, complete saved snapshot.
+    ``issued_at`` is for deterministic replay and tests. Eligibility here is timing
+    only; canonical selection also demands a verified, complete snapshot.
     """
     as_of = provenance.utc(input_as_of or issued_at or now_utc())
     safe = provenance.sanitized(panel, delivery_date)
@@ -149,10 +130,8 @@ def issue(
         raise ValueError("model returned duplicate delivery keys")
     if forecasts.filter(pl.col("forecast").is_not_null() & ~pl.col("forecast").is_finite()).height:
         raise ValueError("model forecasts must be finite")
-    grid = delivery_grid(delivery_date, panel.zone)
-    if forecasts.join(
-        grid.select("local_date", "local_hour"), on=["local_date", "local_hour"], how="anti"
-    ).height:
+    grid = delivery_hours(delivery_date, panel.zone)
+    if forecasts.join(grid, on=["local_date", "local_hour"], how="anti").height:
         raise ValueError("model returned unexpected delivery keys")
     stamp = provenance.utc(issued_at or now_utc())
     if as_of > stamp:
@@ -160,40 +139,46 @@ def issue(
     reason = timing_reason(stamp, stamp, as_of, delivery_date, panel.zone)
     if reason != "pre_gate" and not allow_late:
         raise LateIssueError(
-            f"forecast outside the D-1 pre-gate window ({reason}); use allow_late only for diagnostics"
+            f"forecast outside the D-1 pre-gate window ({reason}); allow_late is for diagnostics"
         )
     fingerprint = provenance.input_hash(safe)
-    identity = provenance.digest(
+    identity = _identity(
         {
             "zone": panel.zone.code,
             "model_version": version,
-            "delivery_date": delivery_date.isoformat(),
-            "issued_at": stamp.isoformat(),
-            "input_as_of": as_of.isoformat(),
+            "delivery_date": delivery_date,
+            "issued_at": stamp,
+            "input_as_of": as_of,
             "input_sha256": fingerprint,
         }
     )
-    result = grid.join(forecasts, on=["local_date", "local_hour"], how="left").with_columns(
-        pl.lit(panel.zone.code).alias("zone"),
-        pl.lit(model.name).alias("model"),
-        pl.lit(version).alias("model_version"),
-        pl.lit(stamp).alias("issued_at"),
-        pl.col("local_date").alias("delivery_date"),
-        pl.lit(None, dtype=pl.Float64).alias("actual"),
-        pl.lit(fingerprint).alias("input_sha256"),
-        pl.lit(2).alias("protocol_version"),
-        pl.lit(identity).alias("issue_id"),
-        pl.lit(json.dumps(configuration, sort_keys=True, allow_nan=False)).alias("configuration"),
-        pl.lit(as_of).alias("input_as_of"),
-        pl.lit(stamp).alias("recorded_at"),
-        pl.lit(reason == "pre_gate").alias("eligible"),
-        pl.lit(reason).alias("eligibility_reason"),
-        pl.when(pl.col("forecast").is_null())
-        .then(pl.lit("abstain_missing_inputs"))
-        .otherwise(pl.lit("issued" if reason == "pre_gate" else "diagnostic_issued"))
-        .alias("status"),
+    return (
+        grid.join(forecasts, on=["local_date", "local_hour"], how="left")
+        .with_columns(
+            pl.lit(panel.zone.code).alias("zone"),
+            pl.lit(model.name).alias("model"),
+            pl.lit(version).alias("model_version"),
+            pl.lit(stamp).alias("issued_at"),
+            pl.col("local_date").alias("delivery_date"),
+            pl.lit(None, dtype=pl.Float64).alias("actual"),
+            pl.lit(fingerprint).alias("input_sha256"),
+            pl.lit(2).alias("protocol_version"),
+            pl.lit(identity).alias("issue_id"),
+            pl.lit(json.dumps(configuration, sort_keys=True, allow_nan=False)).alias(
+                "configuration"
+            ),
+            pl.lit(as_of).alias("input_as_of"),
+            pl.lit(stamp).alias("recorded_at"),
+            pl.lit(reason == "pre_gate").alias("eligible"),
+            pl.lit(reason).alias("eligibility_reason"),
+            pl.when(pl.col("forecast").is_null())
+            .then(pl.lit("abstain_missing_inputs"))
+            .otherwise(pl.lit("issued" if reason == "pre_gate" else "diagnostic_issued"))
+            .alias("status"),
+        )
+        .select(ISSUE_SCHEMA.names())
+        .cast(ISSUE_SCHEMA)
     )
-    return result.select(ISSUE_SCHEMA.names()).cast(ISSUE_SCHEMA)
 
 
 def record_issue(
@@ -211,7 +196,7 @@ def record_issue(
     observed_at: dict[str, dt.datetime] | None = None,
     clock: Callable[[], dt.datetime] | None = None,
 ) -> pl.DataFrame:
-    """Persist inputs and issuance before adding to the settlement index."""
+    """Persist the evidence first, then add the issue to the settlement index."""
     safe = provenance.sanitized(panel, delivery_date)
     frame = issue(
         safe,
@@ -238,7 +223,7 @@ def record_issue(
 
 
 def append(frame: pl.DataFrame, *, root: Path = DEFAULT_ROOT) -> Path:
-    """Update only settlement fields; original issuance cannot be overwritten."""
+    """Upsert settlement fields for one zone and month; issuance fields can never change."""
     frame = _validate(frame)
     if frame.is_empty():
         raise ValueError("cannot append an empty issue frame")
@@ -246,26 +231,20 @@ def append(frame: pl.DataFrame, *, root: Path = DEFAULT_ROOT) -> Path:
     months = frame["delivery_date"].dt.strftime("%Y-%m").unique().to_list()
     if len(zones) != 1 or len(months) != 1:
         raise ValueError("append expects one zone and delivery month")
-    get_zone(zones[0])  # Resolve registry values before constructing a path.
+    get_zone(zones[0])  # Resolve the registry before building a path from it.
     path = Path(root) / f"zone={zones[0]}" / f"{months[0]}.parquet"
-    path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         old = _validate(pl.read_parquet(path))
         overlap = old.join(frame.select(_KEYS), on=_KEYS, how="semi").sort(_KEYS)
         incoming = frame.join(old.select(_KEYS), on=_KEYS, how="semi").sort(_KEYS)
         if not overlap.select(IMMUTABLE).equals(incoming.select(IMMUTABLE)):
             raise ValueError("cannot replace immutable issuance fields")
-        # An idempotent retry with null settlement must not erase observations.
+        # An idempotent retry with null settlement must not erase an observation.
+        previous = old.select(
+            *_KEYS, pl.col("actual").alias("_old_actual"), pl.col("status").alias("_old_status")
+        )
         frame = (
-            frame.join(
-                old.select(
-                    *_KEYS,
-                    pl.col("actual").alias("_old_actual"),
-                    pl.col("status").alias("_old_status"),
-                ),
-                on=_KEYS,
-                how="left",
-            )
+            frame.join(previous, on=_KEYS, how="left")
             .with_columns(
                 pl.when(pl.col("actual").is_null() & pl.col("_old_actual").is_not_null())
                 .then(pl.col("_old_status"))
@@ -276,29 +255,21 @@ def append(frame: pl.DataFrame, *, root: Path = DEFAULT_ROOT) -> Path:
             .select(ISSUE_SCHEMA.names())
         )
         frame = pl.concat([old.join(frame.select(_KEYS), on=_KEYS, how="anti"), frame])
-    temporary = path.with_suffix(".tmp.parquet")
-    frame.sort(_KEYS).write_parquet(temporary, compression="zstd", statistics=True)
-    temporary.replace(path)
+    atomic_parquet(frame.sort(_KEYS), path)
     return path
 
 
 def read(*, root: Path = DEFAULT_ROOT, zone: str | None = None) -> pl.DataFrame:
     if zone is not None:
         get_zone(zone)
-    base = Path(root)
-    paths = (
-        sorted((base / f"zone={zone}").glob("*.parquet"))
-        if zone
-        else sorted(base.glob("zone=*/*.parquet"))
-    )
-    paths = [path for path in paths if not path.name.endswith(".tmp.parquet")]
+    paths = sorted(Path(root).glob(f"zone={zone or '*'}/*.parquet"))
     if not paths:
         return pl.DataFrame(schema=ISSUE_SCHEMA)
     return pl.concat([_validate(pl.read_parquet(path)) for path in paths]).sort(_KEYS)
 
 
 def reconcile(frame: pl.DataFrame, prices: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-    """Attach outcomes without changing eligibility or immutable identity."""
+    """Attach realised prices; eligibility and identity are never touched."""
     issues = _validate(frame)
     if set(issues["zone"].unique().to_list()) - {zone.code}:
         raise ValueError("reconcile expects one matching zone")
@@ -312,9 +283,7 @@ def reconcile(frame: pl.DataFrame, prices: pl.DataFrame, zone: Zone) -> pl.DataF
             right_on=["local_date", "local_hour"],
             how="left",
         )
-        .with_columns(
-            pl.coalesce("_observed", "actual").alias("actual"),
-        )
+        .with_columns(pl.coalesce("_observed", "actual").alias("actual"))
         .with_columns(
             pl.when(pl.col("forecast").is_null())
             .then(pl.lit("abstain_missing_inputs"))
@@ -327,7 +296,7 @@ def reconcile(frame: pl.DataFrame, prices: pl.DataFrame, zone: Zone) -> pl.DataF
             .when(pl.col("actual").is_null())
             .then(pl.lit("issued_waiting_for_actual"))
             .otherwise(pl.lit("scored"))
-            .alias("status"),
+            .alias("status")
         )
         .select(ISSUE_SCHEMA.names())
         .cast(ISSUE_SCHEMA)
@@ -335,27 +304,23 @@ def reconcile(frame: pl.DataFrame, prices: pl.DataFrame, zone: Zone) -> pl.DataF
 
 
 def canonical(frame: pl.DataFrame, *, root: Path = DEFAULT_ROOT) -> pl.DataFrame:
-    """Earliest complete, verified pre-gate issue per model/day, chosen as a unit.
+    """The earliest complete, verified pre-gate issue per model and day, chosen as a unit.
 
-    Selection never uses realised outcomes or P&L. Missing/tampered evidence
-    raises instead of quietly replacing the earlier run with a better one.
+    Selection never reads outcomes. Missing or tampered evidence raises rather than
+    letting a later, luckier run replace the earlier one.
     """
     valid = _validate(frame).filter(pl.col("eligible") & (pl.col("protocol_version") == 2))
-    candidates: list[pl.DataFrame] = []
-    for group in valid.partition_by("issue_id", maintain_order=True):
-        if group["forecast"].null_count():
-            continue
-        zone = get_zone(group["zone"][0])
-        expected = delivery_grid(group["delivery_date"][0], zone)
-        keys = ["local_hour", "delivery_start_utc", "delivery_duration_hours"]
-        if not group.select(keys).sort("local_hour").equals(expected.select(keys)):
+    keys = ["local_hour", "delivery_start_utc", "delivery_duration_hours"]
+    candidates = []
+    for group in valid.partition_by("issue_id"):
+        expected = delivery_hours(group["delivery_date"][0], get_zone(group["zone"][0]))
+        if group["forecast"].null_count() or not group.select(keys).sort("local_hour").equals(
+            expected.select(keys)
+        ):
             continue
         _, _, _, original = provenance.read_snapshot(root, group["issue_id"][0])
-        if (
-            not group.select(IMMUTABLE)
-            .sort("local_hour")
-            .equals(original.select(IMMUTABLE).sort("local_hour"))
-        ):
+        immutable = group.select(IMMUTABLE).sort("local_hour")
+        if not immutable.equals(original.select(IMMUTABLE).sort("local_hour")):
             raise ValueError("immutable issue index differs from snapshot")
         candidates.append(group)
     if not candidates:
@@ -373,14 +338,10 @@ def canonical(frame: pl.DataFrame, *, root: Path = DEFAULT_ROOT) -> pl.DataFrame
 def canonical_issue(
     zone: str, model: str, delivery_date: dt.date, *, root: Path = DEFAULT_ROOT
 ) -> pl.DataFrame:
-    """The canonical issue already on record for one model and delivery day.
+    """The canonical issue already on record for one model and day, or an empty frame.
 
-    Empty when there is none. A scheduled backstop asks this before issuing:
-    once an earliest complete, verified pre-gate issue exists, no later issue
-    can displace it in :func:`canonical`, so issuing again would add a snapshot
-    nobody scores -- and, after the gate, a red run over a day that is not
-    missing. An abstained or partial issue is never canonical, so it does not
-    stop a retry.
+    Once one exists no later issue can displace it, so a backstop run asks this first.
+    An abstained or partial issue is never canonical and does not stop a retry.
     """
     frame = read(root=root, zone=zone).filter(
         (pl.col("model") == model) & (pl.col("delivery_date") == delivery_date)
@@ -389,6 +350,7 @@ def canonical_issue(
 
 
 def _validate(frame: pl.DataFrame) -> pl.DataFrame:
+    """Schema, uniqueness and, per issue, timing, version and identity against its evidence."""
     if missing := set(ISSUE_SCHEMA.names()) - set(frame.columns):
         raise ValueError(f"issue frame is missing columns: {sorted(missing)}")
     frame = frame.select(ISSUE_SCHEMA.names()).cast(ISSUE_SCHEMA)
@@ -396,13 +358,9 @@ def _validate(frame: pl.DataFrame) -> pl.DataFrame:
         raise ValueError("duplicate issue delivery keys")
     if frame.filter(pl.col("forecast").is_not_null() & ~pl.col("forecast").is_finite()).height:
         raise ValueError("issue forecasts must be finite")
+    per_hour = {"local_hour", "delivery_start_utc", "delivery_duration_hours", "forecast"}
+    metadata = [name for name in IMMUTABLE if name not in per_hour]
     for group in frame.filter(pl.col("protocol_version") == 2).partition_by("issue_id"):
-        metadata = [
-            name
-            for name in IMMUTABLE
-            if name
-            not in ("local_hour", "delivery_start_utc", "delivery_duration_hours", "forecast")
-        ]
         if any(group[name].n_unique() != 1 or group[name].null_count() for name in metadata):
             raise ValueError("inconsistent issue metadata")
         row = group.row(0, named=True)
@@ -418,16 +376,6 @@ def _validate(frame: pl.DataFrame) -> pl.DataFrame:
         configuration = json.loads(row["configuration"])
         if row["model_version"] != f"{row['model']}:{provenance.digest(configuration)}":
             raise ValueError("model version does not match configuration")
-        identity = provenance.digest(
-            {
-                "zone": row["zone"],
-                "model_version": row["model_version"],
-                "delivery_date": row["delivery_date"].isoformat(),
-                "issued_at": row["issued_at"].isoformat(),
-                "input_as_of": row["input_as_of"].isoformat(),
-                "input_sha256": row["input_sha256"],
-            }
-        )
-        if row["issue_id"] != identity:
+        if row["issue_id"] != _identity(row):
             raise ValueError("issue identity does not match evidence")
     return frame

@@ -1,4 +1,9 @@
-"""Immutable local evidence for forecast issuance; no invented publication vintage."""
+"""Immutable evidence for each prospective issue: its inputs, its code and its model.
+
+Large artefacts are content-addressed blobs shared across issues and split by month,
+so an unchanged month costs nothing the next day. Timestamps are local reads, not
+external attestations, and no publication vintage is ever invented.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,8 @@ import datetime as dt
 import hashlib
 import io
 import json
-import os
 import platform
 import re
-import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from importlib.metadata import PackageNotFoundError, version
@@ -21,20 +24,13 @@ import polars as pl
 from gpa.forecast.boosting import LightGBM
 from gpa.forecast.models import Model, Naive, Ridge
 from gpa.forecast.panel import RESIDUAL_LOAD_FUELS, Panel, hourly_residual_load
+from gpa.store import atomic_write
 from gpa.zones import get_zone
 
 MIN_TRAIN_ROWS = 270
 
 FUNDAMENTALS_SUFFIX = "_da"
-"""Marks the model identity whose frozen information set includes fundamentals.
-
-The prospective arm runs two information sets side by side, and the ledger keys
-an issue on ``(zone, model, delivery_date)``. Without a distinct identity the
-two arms collide on one key and :func:`gpa.forecast.ledger.canonical` keeps
-whichever was issued first, silently pooling two different experiments. Encoding
-the information set in the model name, and again in the policy identifier below,
-is what lets them be compared instead.
-"""
+"""Marks the arm with fundamentals: two information sets must never share a ledger key."""
 
 
 def uses_fundamentals(name: str) -> bool:
@@ -43,11 +39,7 @@ def uses_fundamentals(name: str) -> bool:
 
 
 def policy_id(name: str) -> str:
-    """The frozen issuance policy for a model name, information set included.
-
-    Recorded on every issue so a later reader can tell the two prospective arms
-    apart from the ledger index alone, without opening each manifest.
-    """
+    """The frozen issuance policy, recorded on every issue so the arms read apart."""
     information_set = "da-fundamentals" if uses_fundamentals(name) else "published-set"
     return f"de-lu-development-v1-{name}-train{MIN_TRAIN_ROWS}-{information_set}"
 
@@ -73,15 +65,7 @@ def digest(value: Any) -> str:
 
 
 def default_model(name: str) -> Model:
-    """Frozen development configuration; never select on prospective outcomes.
-
-    ``ridge`` and ``ridge_da`` are the same estimator at the same alpha and
-    differ only in the information set the caller is required to feed them, so
-    the comparison between the two arms is about the inputs and nothing else.
-    They are separate identities rather than one flag because the ledger records
-    a model name, and a name that meant different inputs on different days would
-    make the prospective record unscoreable.
-    """
+    """Frozen configurations; ``ridge`` and ``ridge_da`` differ only in their inputs."""
     if name == "ridge":
         return Ridge(alpha=0.1)
     if name == "ridge_da":
@@ -178,23 +162,11 @@ _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _write_blob(root: Path, data: bytes) -> str:
-    """Store ``data`` once under its own hash; a second write of the same
-    bytes is a no-op. This is what lets a year of daily issues share one copy
-    of each month that has not changed, instead of each carrying its own.
-    """
+    """Write ``data`` once under its hash; writing identical bytes again is a no-op."""
     digest = hashlib.sha256(data).hexdigest()
-    blobs = Path(root) / "blobs"
-    target = blobs / digest
+    target = Path(root) / "blobs" / digest
     if not target.exists():
-        blobs.mkdir(parents=True, exist_ok=True)
-        descriptor, name = tempfile.mkstemp(prefix=".gpa-", suffix=".tmp", dir=blobs)
-        os.close(descriptor)
-        temporary = Path(name)
-        try:
-            temporary.write_bytes(data)
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write(target, data)
     return digest
 
 
@@ -208,11 +180,7 @@ def _read_blob(root: Path, digest: str) -> bytes:
 
 
 def _write_partitioned(root: Path, frame: pl.DataFrame, column: str) -> dict[str, str]:
-    """Split ``frame`` by the UTC month of ``column`` and blob each part.
-
-    Months are immutable once the calendar month ends, so re-issuing the next
-    day reuses every month but the current (and any recently revised) one.
-    """
+    """Blob each UTC month of ``frame`` separately, so past months are shared."""
     if frame.is_empty():
         return {}
     labeled = frame.with_columns(pl.col(column).dt.strftime("%Y-%m").alias("_month"))
@@ -242,26 +210,10 @@ def save_snapshot(
     source_frames: dict[str, pl.DataFrame] | None = None,
     observed_at: dict[str, dt.datetime] | None = None,
 ) -> pl.DataFrame:
-    """Write inputs first, then sample recording time and finalize evidence.
+    """Write the inputs, then sample the recording clock and finalise the evidence.
 
-    Large artifacts (source frames, the input panel, this package's code) are
-    content-addressed under ``root/blobs`` and shared across every issue: a
-    month of history that has not changed since yesterday's issue costs
-    nothing today, instead of each issue carrying its own full copy. Only
-    ``issued.parquet`` and a small manifest live under this issue's own
-    directory.
-
-    Generation is archived as only the fuels :data:`RESIDUAL_LOAD_FUELS` names
-    (:func:`gpa.forecast.panel.hourly_residual_load` reads no others), which is
-    most of what a raw generation snapshot otherwise costs. If load is also
-    supplied, the residual-load features computed from the full and the
-    reduced generation are compared and must match exactly, so a future fuel
-    added to that function without updating this constant fails loudly here
-    rather than silently archiving an incomplete snapshot.
-
-    Caller-supplied observation times describe local reads, not provider release
-    times. Evidence is local; it is not a cryptographic external timestamp.
-    Incomplete directories without a completion manifest are never eligible.
+    Generation is archived for the residual-load fuels only, after checking that the
+    reduced archive reproduces the panel's residual load exactly.
     """
     from gpa.forecast.ledger import timing_reason
 
@@ -343,7 +295,7 @@ def save_snapshot(
             list(RESIDUAL_LOAD_FUELS) if "generation" in stored_sources else None
         ),
         "observed_at": {name: utc(stamp).isoformat() for name, stamp in observations.items()},
-        "provider_publication_times": "unknown; availability-aware ingestion remains P0/E",
+        "provider_publication_times": "unknown; the provider exposes none",
         "timestamp_basis": "local_clock_not_external_attestation",
         "issued_checksum": issued_checksum,
         "artifacts": artifacts,

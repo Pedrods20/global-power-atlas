@@ -23,17 +23,10 @@ GERMANY = get_zone("DE-LU")
 def test_negative_duration_and_block_mean_weight_mixed_resolutions():
     frame = price_frame([-100.0, 100.0], start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC))
     frame = frame.with_columns(pl.Series("resolution_min", [60, 15], dtype=pl.Int16))
-    negative = price_metrics.negative_price_summary(frame, GERMANY)
-    assert negative["negative_pct"][0] == pytest.approx(80)
+    # One negative hour against a quarter-hour at a positive price: 80% of time, not 50%.
+    assert price_metrics.negative_share(frame, GERMANY)["negative_pct"][0] == pytest.approx(80)
     blocks = price_metrics.block_prices(frame, GERMANY)
     assert blocks["all_hours"][0] == pytest.approx(-60)
-
-
-def test_negative_run_breaks_at_missing_interval():
-    frame = price_frame([-1.0, -2.0, -3.0], start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC))
-    frame = frame.filter(pl.col("price") != -2)
-    result = price_metrics.negative_price_summary(frame, GERMANY)
-    assert result["max_run_hours"][0] == 1
 
 
 APPROX = pytest.approx
@@ -97,30 +90,6 @@ def test_negative_prices_survive_into_the_block_average() -> None:
     frame = price_frame([-50.0] * 24, start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC))
     blocks = price_metrics.block_prices(frame, GERMANY, period="day")
     assert blocks["all_hours"][0] == APPROX(-50.0)
-
-
-def test_negative_summary_counts_hours_and_longest_run() -> None:
-    # Twelve normal hours, then a five-hour unbroken negative run, then seven more.
-    values = [40.0] * 12 + [-10.0, -20.0, -30.0, -15.0, -5.0] + [40.0] * 7
-    frame = price_frame(values, start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC))
-    summary = price_metrics.negative_price_summary(frame, GERMANY)
-
-    row = summary.row(0, named=True)
-    assert row["n_negative"] == 5
-    assert row["negative_hours"] == APPROX(5.0)
-    assert row["min_price"] == APPROX(-30.0)
-    assert row["mean_negative"] == APPROX(-16.0)
-    assert row["max_run_hours"] == APPROX(5.0)
-
-
-def test_negative_run_length_respects_sub_hourly_resolution() -> None:
-    """Four consecutive 15-minute negative intervals are one hour, not four."""
-    values = [20.0] * 4 + [-5.0] * 4 + [20.0] * 4
-    frame = price_frame(values, start=dt.datetime(2026, 6, 15, tzinfo=dt.UTC), resolution=15)
-    summary = price_metrics.negative_price_summary(frame, GERMANY)
-    assert summary["n_negative"][0] == 4
-    assert summary["negative_hours"][0] == APPROX(1.0)
-    assert summary["max_run_hours"][0] == APPROX(1.0)
 
 
 # --- Blocks ----------------------------------------------------------------

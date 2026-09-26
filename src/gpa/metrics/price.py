@@ -1,183 +1,92 @@
-"""Price analytics: blocks, duration curves, negative prices and volatility.
+"""Price analytics for a market that clears below zero: blocks, daily range, shape, capture.
 
-Two conventions in this module differ from what a generic time-series library
-would do, and both differences are deliberate.
-
-**No log returns.** Power prices reach zero and go negative, so ``log(p_t/p_t-1)``
-is undefined exactly when the market is doing the interesting thing. Every
-return here is an arithmetic difference in money per MWh. That also keeps the
-units interpretable: a volatility of 30 means 30 currency units per MWh, not an
-abstract percentage of an undefined base.
-
-**Annualisation uses 365 days, not 252.** The 252 convention counts the trading
-days of a financial exchange. Spot electricity settles every day of the year,
-including weekends and holidays, so scaling by the square root of 252
-understates annualised volatility by about twenty percent.
+Every return is an arithmetic difference in EUR/MWh; a log return is undefined
+exactly when the market is doing the interesting thing.
 """
 
 from __future__ import annotations
 
 import polars as pl
 
-from gpa.calendar import BLOCK_OFF_PEAK, BLOCK_ON_PEAK, attach_block, attach_local_time
+from gpa.calendar import (
+    BLOCK_OFF_PEAK,
+    BLOCK_ON_PEAK,
+    INTERVAL_HOURS,
+    attach_block,
+    attach_local_time,
+    period_label,
+)
 from gpa.zones import Zone
 
-__all__ = [
-    "block_prices",
-    "capture_rate",
-    "hourly_shape",
-    "intraday_spread",
-    "negative_price_summary",
-]
+__all__ = ["block_prices", "capture_rate", "hourly_shape", "intraday_spread", "negative_share"]
+
+_COMPLETE_DAY_HOURS = 23.0
+"""A day is complete at 23 observed hours (spring clock change); partial days are dropped."""
 
 
-_INTERVAL_HOURS = pl.col("resolution_min").cast(pl.Float64) / 60.0
+def _mean_price(mask: pl.Expr | None = None) -> pl.Expr:
+    price, hours = pl.col("price") * INTERVAL_HOURS, INTERVAL_HOURS
+    if mask is not None:
+        price, hours = price.filter(mask), hours.filter(mask)
+    return price.sum() / hours.sum()
 
 
 def block_prices(frame: pl.DataFrame, zone: Zone, *, period: str = "month") -> pl.DataFrame:
-    """Average price by market block, and the peak-to-off-peak spread.
+    """Duration-weighted on-peak, off-peak and baseload price, and the block spread.
 
-    The spread is the genuine article: the mean of on-peak intervals minus the
-    mean of off-peak intervals, where membership follows the market's own block
-    definition. It is not the daily maximum minus the daily minimum, which is
-    intraday range and a much larger and more volatile number.
-
-    A negative spread is not an error. It is the signature of solar
-    cannibalisation, where midday output pushes the on-peak block below the
-    hours around it, and it is now routine in Germany, Spain, California and
-    South Australia.
-
-    Args:
-        frame: Rows matching the ``price`` schema.
-        zone: Supplies the block definition and market timezone.
-        period: ``"day"``, ``"month"`` or ``"year"``.
-
-    Returns:
-        Columns ``period``, ``on_peak``, ``off_peak``, ``spread``, ``all_hours``
-        and the interval counts behind each block.
-
-    Raises:
-        ValueError: If ``period`` is not a supported grouping.
+    The spread is the market's block difference, not the daily high minus low; a
+    negative spread is the signature of solar cannibalisation.
     """
-    formats = {"day": "%Y-%m-%d", "month": "%Y-%m", "year": "%Y"}
-    if period not in formats:
-        raise ValueError(f"period must be one of {sorted(formats)}, got {period!r}")
-
-    empty = pl.DataFrame(
-        schema={
-            "period": pl.String,
-            "on_peak": pl.Float64,
-            "off_peak": pl.Float64,
-            "spread": pl.Float64,
-            "all_hours": pl.Float64,
-            "n_on_peak": pl.UInt32,
-            "n_off_peak": pl.UInt32,
-        }
-    )
+    label = period_label(period)
+    columns = {
+        "period": pl.String,
+        "on_peak": pl.Float64,
+        "off_peak": pl.Float64,
+        "spread": pl.Float64,
+        "all_hours": pl.Float64,
+        "n_on_peak": pl.UInt32,
+        "n_off_peak": pl.UInt32,
+    }
     if frame.is_empty():
-        return empty
-
-    prepared = attach_block(frame, zone).with_columns(
-        pl.col("local_date").dt.strftime(formats[period]).alias("period")
-    )
-
-    on = pl.col("price").filter(pl.col("block") == BLOCK_ON_PEAK)
-    off = pl.col("price").filter(pl.col("block") == BLOCK_OFF_PEAK)
-
+        return pl.DataFrame(schema=columns)
+    on, off = pl.col("block") == BLOCK_ON_PEAK, pl.col("block") == BLOCK_OFF_PEAK
     return (
-        prepared.group_by("period")
+        attach_block(frame, zone)
+        .with_columns(label)
+        .group_by("period")
         .agg(
-            (
-                (pl.col("price") * _INTERVAL_HOURS).filter(pl.col("block") == BLOCK_ON_PEAK).sum()
-                / _INTERVAL_HOURS.filter(pl.col("block") == BLOCK_ON_PEAK).sum()
-            ).alias("on_peak"),
-            (
-                (pl.col("price") * _INTERVAL_HOURS).filter(pl.col("block") == BLOCK_OFF_PEAK).sum()
-                / _INTERVAL_HOURS.filter(pl.col("block") == BLOCK_OFF_PEAK).sum()
-            ).alias("off_peak"),
-            ((pl.col("price") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias("all_hours"),
-            on.len().alias("n_on_peak"),
-            off.len().alias("n_off_peak"),
+            _mean_price(on).alias("on_peak"),
+            _mean_price(off).alias("off_peak"),
+            _mean_price().alias("all_hours"),
+            pl.col("price").filter(on).len().alias("n_on_peak"),
+            pl.col("price").filter(off).len().alias("n_off_peak"),
         )
         .with_columns(pl.col("on_peak", "off_peak").fill_nan(None))
         .with_columns((pl.col("on_peak") - pl.col("off_peak")).alias("spread"))
-        .select("period", "on_peak", "off_peak", "spread", "all_hours", "n_on_peak", "n_off_peak")
+        .select(*columns)
         .sort("period")
     )
 
 
-_PERIOD_FORMATS = {"day": "%Y-%m-%d", "month": "%Y-%m", "year": "%Y"}
-
-_COMPLETE_DAY_HOURS = 23.0
-"""A day is complete at 23 observed hours: the spring clock change has only 23.
-
-Partial days are dropped rather than scaled. A day the provider covered until
-noon has a genuinely smaller high-to-low range, and averaging it in would report
-a falling spread that is really a reporting gap.
-"""
-
-
 def intraday_spread(frame: pl.DataFrame, zone: Zone, *, period: str = "year") -> pl.DataFrame:
-    """Mean within-day high-minus-low price range, by period.
+    """Mean within-day high minus low, over complete local days.
 
-    This is the other spread, and the distinction matters commercially. The
-    on-peak-minus-off-peak figure from :func:`block_prices` is what a fixed
-    block contract pays; it is defined by the clock, so solar pushing midday
-    below the surrounding hours drives it toward zero and past it. The
-    within-day range is what a storage asset is paid, because a battery charges
-    at the day's low and discharges at its high wherever in the day those fall.
-
-    The two series can move in opposite directions, and in Germany they have:
-    the block spread collapsed while the daily range widened, because solar
-    moved the shape rather than flattening it. Reading only the block spread
-    would say storage arbitrage is dying exactly when it is not.
-
-    This is an upper bound on one cycle's gross value before efficiency losses,
-    power and energy limits and the need to know in advance which hours those
-    are. :mod:`gpa.battery` measures what survives those constraints.
-
-    Args:
-        frame: Rows matching the ``price`` schema.
-        zone: Supplies the market timezone.
-        period: ``"day"``, ``"month"`` or ``"year"``.
-
-    Returns:
-        Columns ``period``, ``mean_spread``, ``median_spread`` and ``n_days``,
-        over complete local days only.
-
-    Raises:
-        ValueError: If ``period`` is not a supported grouping.
+    This is the spread a battery is paid, wherever in the day the extremes fall; it
+    can widen while the clock-defined block spread collapses. It is an upper bound on
+    one cycle's gross value; :mod:`gpa.battery` measures what survives the constraints.
     """
-    if period not in _PERIOD_FORMATS:
-        raise ValueError(f"period must be one of {sorted(_PERIOD_FORMATS)}, got {period!r}")
-
-    empty = pl.DataFrame(
-        schema={
-            "period": pl.String,
-            "mean_spread": pl.Float64,
-            "median_spread": pl.Float64,
-            "n_days": pl.UInt32,
-        }
-    )
-    if frame.is_empty():
-        return empty
-
+    label = period_label(period)
     daily = (
         attach_local_time(frame, zone)
         .group_by("local_date")
         .agg(
             (pl.col("price").max() - pl.col("price").min()).alias("spread"),
-            _INTERVAL_HOURS.sum().alias("observed_hours"),
+            INTERVAL_HOURS.sum().alias("observed_hours"),
         )
         .filter(pl.col("observed_hours") >= _COMPLETE_DAY_HOURS)
     )
-    if daily.is_empty():
-        return empty
-
     return (
-        daily.with_columns(
-            pl.col("local_date").dt.strftime(_PERIOD_FORMATS[period]).alias("period")
-        )
+        daily.with_columns(label)
         .group_by("period")
         .agg(
             pl.col("spread").mean().alias("mean_spread"),
@@ -189,151 +98,29 @@ def intraday_spread(frame: pl.DataFrame, zone: Zone, *, period: str = "year") ->
 
 
 def hourly_shape(frame: pl.DataFrame, zone: Zone, *, period: str = "year") -> pl.DataFrame:
-    """Duration-weighted mean price for each local clock hour, by period.
-
-    The average price of a year says nothing about when a battery earns. The
-    shape does: comparing one year's profile against another shows where the
-    money moved. In a solar-heavy system the midday hours sink while the evening
-    ramp holds, so the profile turns from a single daytime plateau into a trough
-    between two peaks — and that trough is the charging window.
-
-    Weighted by interval duration, so hourly and quarter-hourly history combine
-    without the finer periods counting more. Incomplete hours are averaged over
-    what the provider published rather than being scaled up to a full hour.
-
-    Args:
-        frame: Rows matching the ``price`` schema.
-        zone: Supplies the market timezone.
-        period: ``"day"``, ``"month"`` or ``"year"``.
-
-    Returns:
-        Columns ``period``, ``local_hour``, ``price``, ``observed_hours`` and
-        ``n_intervals``, sorted by period then hour.
-
-    Raises:
-        ValueError: If ``period`` is not a supported grouping.
-    """
-    if period not in _PERIOD_FORMATS:
-        raise ValueError(f"period must be one of {sorted(_PERIOD_FORMATS)}, got {period!r}")
-
-    empty = pl.DataFrame(
-        schema={
-            "period": pl.String,
-            "local_hour": pl.Int8,
-            "price": pl.Float64,
-            "observed_hours": pl.Float64,
-            "n_intervals": pl.UInt32,
-        }
-    )
-    if frame.is_empty():
-        return empty
-
+    """Duration-weighted mean price per local clock hour: where in the day the money sits."""
     return (
         attach_local_time(frame, zone)
-        .with_columns(pl.col("local_date").dt.strftime(_PERIOD_FORMATS[period]).alias("period"))
+        .with_columns(period_label(period))
         .group_by("period", "local_hour")
         .agg(
-            ((pl.col("price") * _INTERVAL_HOURS).sum() / _INTERVAL_HOURS.sum()).alias("price"),
-            _INTERVAL_HOURS.sum().alias("observed_hours"),
+            _mean_price().alias("price"),
+            INTERVAL_HOURS.sum().alias("observed_hours"),
             pl.len().cast(pl.UInt32).alias("n_intervals"),
         )
         .sort("period", "local_hour")
     )
 
 
-def negative_price_summary(frame: pl.DataFrame, zone: Zone) -> pl.DataFrame:
-    """How often, how deep and for how long price went below zero, by local month.
-
-    Negative prices happen when inflexible output plus must-run generation
-    exceeds demand and it is cheaper to pay to offload energy than to shut down
-    and restart. Their frequency tracks renewable penetration against system
-    flexibility, so this is a transition indicator, not a data quality problem.
-
-    ``max_run_hours`` is the longest unbroken stretch below zero in the month.
-    Frequency alone understates the problem: many isolated negative intervals
-    are a nuisance, while one long run is a curtailment event.
-
-    Returns:
-        Columns ``local_month``, ``n_intervals``, ``n_negative``,
-        ``negative_pct``, ``negative_hours``, ``min_price``, ``mean_negative``
-        and ``max_run_hours``.
-    """
-    empty = pl.DataFrame(
-        schema={
-            "local_month": pl.String,
-            "n_intervals": pl.UInt32,
-            "n_negative": pl.UInt32,
-            "negative_pct": pl.Float64,
-            "negative_hours": pl.Float64,
-            "observed_hours": pl.Float64,
-            "min_price": pl.Float64,
-            "mean_negative": pl.Float64,
-            "max_run_hours": pl.Float64,
-        }
-    )
-    if frame.is_empty():
-        return empty
-
-    prepared = (
-        attach_local_time(frame, zone)
-        .sort("ts_utc")
-        .with_columns(
-            pl.col("local_date").dt.strftime("%Y-%m").alias("local_month"),
-            (pl.col("price") < 0).alias("_neg"),
-        )
-        # A run is a maximal block of consecutive negative intervals. Numbering
-        # the transitions gives each run a distinct id to group on.
-        .with_columns(
-            (
-                (pl.col("_neg") != pl.col("_neg").shift(1))
-                | (pl.col("ts_utc").diff().dt.total_minutes() != pl.col("resolution_min").shift(1))
-            )
-            .fill_null(True)
-            .cum_sum()
-            .alias("_run")
-        )
-    )
-
-    runs = (
-        prepared.filter(pl.col("_neg"))
-        .group_by(["local_month", "_run"])
-        .agg((_INTERVAL_HOURS).sum().alias("run_hours"))
-        .group_by("local_month")
-        .agg(pl.col("run_hours").max().alias("max_run_hours"))
-    )
-
-    summary = prepared.group_by("local_month").agg(
-        pl.len().alias("n_intervals"),
-        pl.col("_neg").sum().cast(pl.UInt32).alias("n_negative"),
-        (_INTERVAL_HOURS.filter(pl.col("_neg"))).sum().alias("negative_hours"),
-        _INTERVAL_HOURS.sum().alias("observed_hours"),
-        pl.col("price").min().alias("min_price"),
-        (
-            (pl.col("price") * _INTERVAL_HOURS).filter(pl.col("_neg")).sum()
-            / _INTERVAL_HOURS.filter(pl.col("_neg")).sum()
-        )
-        .fill_nan(None)
-        .alias("mean_negative"),
-    )
-
+def negative_share(frame: pl.DataFrame, zone: Zone, *, period: str = "year") -> pl.DataFrame:
+    """Percent of observed hours that cleared below zero."""
+    negative = INTERVAL_HOURS.filter(pl.col("price") < 0).sum()
     return (
-        summary.join(runs, on="local_month", how="left")
-        .with_columns(
-            (pl.col("negative_hours") / pl.col("observed_hours") * 100.0).alias("negative_pct"),
-            pl.col("max_run_hours").fill_null(0.0),
-        )
-        .select(
-            "local_month",
-            "n_intervals",
-            "n_negative",
-            "negative_pct",
-            "negative_hours",
-            "observed_hours",
-            "min_price",
-            "mean_negative",
-            "max_run_hours",
-        )
-        .sort("local_month")
+        attach_local_time(frame, zone)
+        .with_columns(period_label(period))
+        .group_by("period")
+        .agg((negative / INTERVAL_HOURS.sum() * 100.0).alias("negative_pct"))
+        .sort("period")
     )
 
 
@@ -345,86 +132,40 @@ def capture_rate(
     fuel: str,
     period: str = "month",
 ) -> pl.DataFrame:
-    """Generation-weighted capture price and capture rate for one technology.
+    """Generation-weighted capture price, and its ratio to the time-weighted baseload.
 
-    The capture price is what a technology actually earns: its output weighted
-    by the price prevailing when that output happened. The capture rate is that
-    divided by the simple time-weighted average price. A rate below one means
-    the technology produces when the market is cheap, which is the mechanism by
-    which solar erodes its own revenue as penetration grows.
-
-    This is weighted by megawatt-hours generated, not by a fixed window of
-    "solar hours". A fixed-hours approximation ignores cloud, season and the
-    installed base, and drifts further from the truth the more it matters.
-
-    Args:
-        prices: Rows matching the ``price`` schema.
-        generation: Rows matching the ``generation`` schema.
-        zone: Supplies the market timezone.
-        fuel: Canonical fuel to evaluate.
-        period: ``"day"``, ``"month"``, ``"year"`` or ``"all"``.
-
-    Returns:
-        Columns ``period``, ``capture_price``, ``baseload_price``,
-        ``capture_rate`` and ``energy_mwh``. Empty if the two frames share no
-        timestamps, which happens when a zone's price and generation come from
-        providers on different resolutions with no overlap.
-
-    Raises:
-        ValueError: If ``period`` is unsupported.
+    Weighted by energy actually generated, over the exact intersections of price and
+    generation intervals: no sub-interval shape is invented and no gap is filled.
     """
-    formats: dict[str, str | None] = {
-        "day": "%Y-%m-%d",
-        "month": "%Y-%m",
-        "year": "%Y",
-        "all": None,
+    label = period_label(period)
+    columns = {
+        "period": pl.String,
+        "capture_price": pl.Float64,
+        "baseload_price": pl.Float64,
+        "capture_rate": pl.Float64,
+        "energy_mwh": pl.Float64,
     }
-    if period not in formats:
-        raise ValueError(f"period must be one of {sorted(formats)}, got {period!r}")
+    output = generation.filter(pl.col("fuel") == fuel)
+    if prices.is_empty() or output.is_empty():
+        return pl.DataFrame(schema=columns)
 
-    empty = pl.DataFrame(
-        schema={
-            "period": pl.String,
-            "capture_price": pl.Float64,
-            "baseload_price": pl.Float64,
-            "capture_rate": pl.Float64,
-            "energy_mwh": pl.Float64,
-        }
-    )
-    if prices.is_empty() or generation.is_empty():
-        return empty
+    def spans(frame: pl.DataFrame, value: str, end: str) -> pl.DataFrame:
+        stop = pl.col("ts_utc") + pl.duration(minutes=pl.col("resolution_min"))
+        return frame.select("ts_utc", value, stop.alias(end)).sort("ts_utc")
 
-    fuel_gen = generation.filter(pl.col("fuel") == fuel)
-    if fuel_gen.is_empty():
-        return empty
-
-    # Integrate intersections of the actual UTC intervals. Values describe
-    # average power/price over each published interval; no subinterval shape
-    # is invented, and missing intervals never get forward-filled past the end.
-    p = prices.select(
-        "ts_utc",
-        "price",
-        (pl.col("ts_utc") + pl.duration(minutes=pl.col("resolution_min"))).alias("_price_end"),
-    ).sort("ts_utc")
-    g = fuel_gen.select(
-        "ts_utc",
-        "gen_mw",
-        (pl.col("ts_utc") + pl.duration(minutes=pl.col("resolution_min"))).alias("_gen_end"),
-    ).sort("ts_utc")
-    boundaries = (
-        pl.concat(
-            [
-                p.select("ts_utc"),
-                p.select(pl.col("_price_end").alias("ts_utc")),
-                g.select("ts_utc"),
-                g.select(pl.col("_gen_end").alias("ts_utc")),
-            ]
-        )
-        .unique()
-        .sort("ts_utc")
+    p, g = spans(prices, "price", "_price_end"), spans(output, "gen_mw", "_gen_end")
+    edges = pl.concat(
+        [
+            p.select("ts_utc"),
+            p.select(pl.col("_price_end").alias("ts_utc")),
+            g.select("ts_utc"),
+            g.select(pl.col("_gen_end").alias("ts_utc")),
+        ]
     )
     joined = (
-        boundaries.with_columns(pl.col("ts_utc").shift(-1).alias("_end"))
+        edges.unique()
+        .sort("ts_utc")
+        .with_columns(pl.col("ts_utc").shift(-1).alias("_end"))
         .join_asof(p, on="ts_utc")
         .join_asof(g, on="ts_utc")
         .filter((pl.col("_end") <= pl.col("_price_end")) & (pl.col("_end") <= pl.col("_gen_end")))
@@ -434,20 +175,14 @@ def capture_rate(
         .with_columns((pl.col("gen_mw") * pl.col("_hours")).alias("energy_mwh"))
     )
     if joined.is_empty():
-        return empty
-
-    fmt = formats[period]
+        return pl.DataFrame(schema=columns)
     return (
         attach_local_time(joined, zone)
-        .with_columns(
-            pl.lit("all").alias("period")
-            if fmt is None
-            else pl.col("local_date").dt.strftime(fmt).alias("period")
-        )
+        .with_columns(label)
         .group_by("period")
         .agg(
             (pl.col("price") * pl.col("energy_mwh")).sum().alias("_weighted"),
-            pl.col("energy_mwh").sum().alias("energy_mwh"),
+            pl.col("energy_mwh").sum(),
             ((pl.col("price") * pl.col("_hours")).sum() / pl.col("_hours").sum()).alias(
                 "baseload_price"
             ),
@@ -455,15 +190,13 @@ def capture_rate(
         .with_columns(
             pl.when(pl.col("energy_mwh") > 0)
             .then(pl.col("_weighted") / pl.col("energy_mwh"))
-            .otherwise(None)
             .alias("capture_price")
         )
         .with_columns(
             pl.when(pl.col("baseload_price") != 0)
             .then(pl.col("capture_price") / pl.col("baseload_price"))
-            .otherwise(None)
             .alias("capture_rate")
         )
-        .select("period", "capture_price", "baseload_price", "capture_rate", "energy_mwh")
+        .select(*columns)
         .sort("period")
     )

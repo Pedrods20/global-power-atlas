@@ -23,7 +23,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tracking = ["mlflow>=3.1,<4"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -53,13 +52,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-# Deprecations are errors, except one raised inside MLflow's own tracking store:
-# SQLAlchemy 2.1 deprecated the `noload` strategy its mappers still use. Drop the
-# exemption once MLflow stops using it. Later entries take precedence.
-filterwarnings = [
-    "error::DeprecationWarning",
-    "ignore:The ``noload`` loader strategy is deprecated:DeprecationWarning",
-]
+filterwarnings = ["error::DeprecationWarning"]
 
 [tool.mypy]
 python_version = "3.11"

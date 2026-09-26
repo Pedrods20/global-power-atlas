@@ -1,35 +1,26 @@
-"""Energy-Charts adapter (Fraunhofer ISE), covering European bidding zones.
+"""Energy-Charts (Fraunhofer ISE): an open, credential-free republication of TSO data.
 
-Energy-Charts republishes ENTSO-E and SMARD data through an open API that needs
-no credentials. The underlying figures are the ones the system operators
-publish; the licence is CC BY 4.0 and attribution is on the methodology page.
-
-Two quirks of this provider are handled explicitly:
-
-``end`` is inclusive
-    Asking for 1 August to 2 August returns both days in full. Rows are
-    filtered to the caller's half-open window after parsing.
-
-Resolution changes without notice
-    German data moved from hourly to quarter-hourly. The interval is measured
-    from the returned timestamps rather than assumed.
+Its ``end`` is inclusive, so rows are trimmed to the caller's half-open window, and
+its resolution changes without notice, so each day's cadence is measured, not assumed.
 """
 
 from __future__ import annotations
 
 import calendar
 import datetime as dt
+import logging
 from typing import Any, Final
 
 import polars as pl
 
-from gpa.capacity import CAPACITY_COLUMNS
-from gpa.schema import UTC_DATETIME
-from gpa.schema import empty_frame as _empty
+from gpa.reference import CAPACITY_SCHEMA
+from gpa.schema import UTC_DATETIME, empty_frame
 from gpa.sources.base import UpstreamError, fetch_json, http_client
 from gpa.zones import Zone
 
 __all__ = ["DERIVED_SERIES", "FUEL_MAP", "LOAD_SERIES", "EnergyChartsSource"]
+
+log = logging.getLogger(__name__)
 
 _BASE = "https://api.energy-charts.info"
 
@@ -60,348 +51,170 @@ FUEL_MAP: Final[dict[str, str]] = {
     "Other": "other",
     "Cross border electricity trading": "imports",
 }
-"""Upstream series name to canonical fuel.
+"""Names sharing a fuel are summed; storage consumption is negative, so the sum is net output."""
 
-Several upstream names collapse onto one canonical fuel, so rows are summed
-after mapping. Pumped storage generation and its separately reported
-consumption both map to ``hydro_pumped_storage``; because consumption is
-published as a negative number, summing them yields net storage output, which
-is the honest figure.
-"""
+LOAD_SERIES: Final = frozenset({"Load", "Load (incl. self-consumption)"})
 
-LOAD_SERIES: Final[frozenset[str]] = frozenset({"Load", "Load (incl. self-consumption)"})
-"""Series carrying system load rather than generation."""
-
-DERIVED_SERIES: Final[frozenset[str]] = frozenset(
-    {
-        "Residual load",
-        "Renewable share of load",
-        "Renewable share of generation",
-    }
+DERIVED_SERIES: Final = frozenset(
+    {"Residual load", "Renewable share of load", "Renewable share of generation"}
 )
-"""Series that are already-computed indicators, not measurements.
+"""Computed indicators, dropped: anything needed is recomputed from the measurements."""
 
-They are dropped rather than stored: anything this project needs from them is
-recomputed from the measured series, so the definition is documented here.
-"""
-
-
-_INSTALLED_POWER_GWH_TECHNOLOGIES: Final[frozenset[str]] = frozenset({"Battery storage (capacity)"})
-"""The one /installed_power technology reported in GWh; every other one is GW."""
-
-
-_FORECAST_PRODUCTION_TYPES: Final[dict[str, str]] = {
+_FORECAST_TYPES: Final = {
     "load": "load",
     "wind_onshore": "wind",
     "wind_offshore": "wind",
     "solar": "solar",
 }
-"""Energy-Charts ``production_type`` values to fetch, and the canonical
-fundamental series each maps to. Onshore and offshore wind are summed into
-one ``wind`` series, matching how ``generation`` already combines them."""
 
 
 class EnergyChartsSource:
-    """Fetch price, load and generation for a European bidding zone."""
-
     name: str = "energy_charts"
     datasets: tuple[str, ...] = ("price", "load", "generation", "fundamentals")
-    # No documented cap, but the public_power endpoint returns about twenty
-    # series at quarter-hourly resolution and starts timing out well before a
-    # quarter's worth of data. Sixty days is comfortably inside that.
+    # No documented cap, but /public_power times out well before a quarter of 15-minute data.
     max_window_days: int | None = 60
 
-    def fetch(
-        self,
-        zone: Zone,
-        dataset: str,
-        start: dt.datetime,
-        end: dt.datetime,
-    ) -> pl.DataFrame:
+    def fetch(self, zone: Zone, dataset: str, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
         if dataset not in self.datasets:
             raise ValueError(f"{self.name} cannot produce dataset {dataset!r}")
-
         if dataset == "price":
             return self._fetch_price(zone, start, end)
         if dataset == "fundamentals":
             return self._fetch_fundamentals(zone, start, end)
         return self._fetch_power(zone, dataset, start, end)
 
-    # --- price ------------------------------------------------------------
+    def _finish(
+        self, frame: pl.DataFrame, zone: Zone, seconds: list[int], *columns: str
+    ) -> pl.DataFrame:
+        """Attach each interval's measured duration and the provenance columns."""
+        return (
+            frame.join(_resolution_table(seconds, zone), on="ts_utc")
+            .with_columns(pl.lit(zone.code).alias("zone"), pl.lit(self.name).alias("source"))
+            .select("zone", "ts_utc", "resolution_min", *columns, "source")
+            .sort("ts_utc", *(c for c in columns if c in ("fuel", "series")))
+        )
 
     def _fetch_price(self, zone: Zone, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
-        payload = self._get(
-            "/price",
-            {"bzn": zone.code, "start": _as_date(start), "end": _as_date(end)},
-        )
-
+        params = {"bzn": zone.code, "start": _as_date(start), "end": _as_date(end)}
+        payload = self._get("/price", params)
         seconds = payload.get("unix_seconds") or []
-        prices = payload.get("price") or []
         if not seconds:
-            return _empty("price")
-
-        unit = str(payload.get("unit", ""))
-        currency = _currency_from_unit(unit, zone)
-
-        frame = pl.DataFrame(
-            {"_epoch": seconds[: len(prices)], "price": prices[: len(seconds)]},
-            schema={"_epoch": pl.Int64, "price": pl.Float64},
-        )
-        frame = (
-            _stamp(frame).join(_resolution_table(seconds, zone), on="ts_utc").drop_nulls("price")
-        )
-        frame = _window(frame, start, end)
-        if frame.is_empty():
-            return _empty("price")
-
-        return frame.with_columns(
-            pl.lit(zone.code).alias("zone"),
-            pl.lit(currency).alias("currency"),
-            pl.lit(self.name).alias("source"),
-        ).select("zone", "ts_utc", "resolution_min", "price", "currency", "source")
-
-    # --- load and generation ---------------------------------------------
+            return empty_frame("price")
+        currency = _currency(str(payload.get("unit", "")), zone)
+        prices = _window(_stamp(_values(seconds, payload.get("price") or [])), start, end)
+        if prices.is_empty():
+            return empty_frame("price")
+        prices = prices.rename({"_value": "price"}).with_columns(currency=pl.lit(currency))
+        return self._finish(prices, zone, seconds, "price", "currency")
 
     def _fetch_power(
-        self,
-        zone: Zone,
-        dataset: str,
-        start: dt.datetime,
-        end: dt.datetime,
+        self, zone: Zone, dataset: str, start: dt.datetime, end: dt.datetime
     ) -> pl.DataFrame:
-        country = zone.source_keys.get("energy_charts_country")
-        if not country:
-            raise UpstreamError(f"zone {zone.code} has no 'energy_charts_country' in source_keys")
-
-        payload = self._get(
-            "/public_power",
-            {"country": country, "start": _as_date(start), "end": _as_date(end)},
-        )
-
+        params = {"country": _country(zone), "start": _as_date(start), "end": _as_date(end)}
+        payload = self._get("/public_power", params)
         seconds = payload.get("unix_seconds") or []
         series = payload.get("production_types") or []
         if not seconds or not series:
-            return _empty(dataset)
-
-        wanted = LOAD_SERIES if dataset == "load" else None
-        # These are alternative definitions, not additive areas. Prefer the
-        # public-power load corresponding to the generation boundary.
+            return empty_frame(dataset)
         labels = {str(entry.get("name", "")) for entry in series}
+        # Alternative definitions, not additive: prefer the load on the generation boundary.
         load_label = "Load" if "Load" in labels else "Load (incl. self-consumption)"
-        # Some countries publish battery output and charging as two signed
-        # series, others one net series. Both at once would double count.
+        # Some countries publish battery output and charging apart, others net: never both.
         if "Battery Storage (Power)" in labels and labels & {"Battery", "Battery Consumption"}:
             raise UpstreamError("net and gross battery series published together")
-        frames: list[pl.DataFrame] = []
-
+        frames = []
         for entry in series:
             label = str(entry.get("name", ""))
-            if label in DERIVED_SERIES:
+            skip = label != load_label if dataset == "load" else label in LOAD_SERIES
+            if label in DERIVED_SERIES or skip:
                 continue
-            if wanted is not None and label != load_label:
-                continue
-            if wanted is None and label in LOAD_SERIES:
-                continue
-            if wanted is None and label not in FUEL_MAP:
-                raise UpstreamError(
-                    f"unrecognised generation series {label!r}; review its units and meaning"
-                )
-
-            values = entry.get("data") or []
-            n = min(len(seconds), len(values))
-            if n == 0:
-                continue
-
-            chunk = pl.DataFrame(
-                {"_epoch": seconds[:n], "_value": values[:n]},
-                schema={"_epoch": pl.Int64, "_value": pl.Float64},
-            ).drop_nulls("_value")
-
-            if wanted is None:
-                chunk = chunk.with_columns(pl.lit(FUEL_MAP[label]).alias("fuel"))
+            if dataset != "load" and label not in FUEL_MAP:
+                raise UpstreamError(f"unrecognised generation series {label!r}; review its units")
+            chunk = _values(seconds, entry.get("data") or [])
+            if dataset != "load":
+                chunk = chunk.with_columns(fuel=pl.lit(FUEL_MAP[label]))
             frames.append(chunk)
-
-        if not frames:
-            return _empty(dataset)
-
-        combined = _window(_stamp(pl.concat(frames, how="vertical")), start, end)
+        combined = _window(_stamp(pl.concat(frames)), start, end) if frames else pl.DataFrame()
         if combined.is_empty():
-            return _empty(dataset)
-
-        resolutions = _resolution_table(seconds, zone)
-
+            return empty_frame(dataset)
         if dataset == "load":
-            out = combined.group_by("ts_utc").agg(pl.col("_value").sum().alias("load_mw"))
-            return (
-                out.join(resolutions, on="ts_utc")
-                .with_columns(
-                    pl.lit(zone.code).alias("zone"),
-                    pl.lit(self.name).alias("source"),
-                )
-                .select("zone", "ts_utc", "resolution_min", "load_mw", "source")
-                .sort("ts_utc")
-            )
-
-        # Several upstream names share a canonical fuel, so sum after mapping.
-        out = combined.group_by(["ts_utc", "fuel"]).agg(pl.col("_value").sum().alias("gen_mw"))
-        return (
-            out.join(resolutions, on="ts_utc")
-            .with_columns(
-                pl.lit(zone.code).alias("zone"),
-                pl.lit(self.name).alias("source"),
-            )
-            .select("zone", "ts_utc", "resolution_min", "fuel", "gen_mw", "source")
-            .sort(["ts_utc", "fuel"])
-        )
-
-    # --- fundamentals -------------------------------------------------------
+            load = combined.group_by("ts_utc").agg(pl.col("_value").sum().alias("load_mw"))
+            return self._finish(load, zone, seconds, "load_mw")
+        output = combined.group_by("ts_utc", "fuel").agg(pl.col("_value").sum().alias("gen_mw"))
+        return self._finish(output, zone, seconds, "fuel", "gen_mw")
 
     def _fetch_fundamentals(self, zone: Zone, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
-        """Day-ahead load/wind/solar forecasts, not realised values.
-
-        This adapter reports only what the provider returns; it does not
-        record a publication vintage because the ``/public_power_forecast``
-        endpoint exposes none. Assigning an eligible-before-the-gate vintage
-        for a historical backfill is a research-policy decision, made in
-        :mod:`gpa.forecast.fundamentals`, not here.
-        """
-        country = zone.source_keys.get("energy_charts_country")
-        if not country:
-            raise UpstreamError(f"zone {zone.code} has no 'energy_charts_country' in source_keys")
-
+        """Day-ahead forecasts as the provider holds them now; it exposes no vintage."""
         frames: list[pl.DataFrame] = []
-        all_seconds: set[int] = set()
-        for production_type, series in _FORECAST_PRODUCTION_TYPES.items():
-            payload = self._get(
-                "/public_power_forecast",
-                {
-                    "country": country,
-                    "production_type": production_type,
-                    "forecast_type": "day-ahead",
-                    "start": _as_date(start),
-                    "end": _as_date(end),
-                },
-            )
+        stamps: set[int] = set()
+        for production_type, series in _FORECAST_TYPES.items():
+            params = {
+                "country": _country(zone),
+                "production_type": production_type,
+                "forecast_type": "day-ahead",
+                "start": _as_date(start),
+                "end": _as_date(end),
+            }
+            payload = self._get("/public_power_forecast", params)
             seconds = payload.get("unix_seconds") or []
             values = payload.get("forecast_values") or []
             n = min(len(seconds), len(values))
-            if n == 0:
+            if not n:
                 continue
-            all_seconds.update(seconds[:n])
-            chunk = (
-                pl.DataFrame(
-                    {"_epoch": seconds[:n], "_value": values[:n]},
-                    schema={"_epoch": pl.Int64, "_value": pl.Float64},
-                )
-                .drop_nulls("_value")
-                .with_columns(
-                    pl.lit(series).alias("series"),
-                    pl.lit(production_type).alias("_component"),
+            stamps.update(seconds[:n])
+            frames.append(
+                _values(seconds, values).with_columns(
+                    series=pl.lit(series), _component=pl.lit(production_type)
                 )
             )
-            frames.append(chunk)
-
-        if not frames:
-            return _empty("fundamentals")
-
-        combined = _window(_stamp(pl.concat(frames, how="vertical")), start, end)
+        combined = _window(_stamp(pl.concat(frames)), start, end) if frames else pl.DataFrame()
         if combined.is_empty():
-            return _empty("fundamentals")
-
-        # Total wind needs both components at each timestamp. Missing offshore
-        # is missing information, not zero production. Reject duplicates too.
-        out = (
-            combined.group_by(["ts_utc", "series"])
+            return empty_frame("fundamentals")
+        # Total wind needs both components, once each: missing offshore is not zero output.
+        components = pl.when(pl.col("series") == "wind").then(2).otherwise(1)
+        forecasts = (
+            combined.group_by("ts_utc", "series")
             .agg(
                 pl.col("_value").sum().alias("forecast_mw"),
                 pl.col("_component").n_unique().alias("_components"),
                 pl.len().alias("_rows"),
             )
             .filter(
-                (pl.col("_components") == pl.when(pl.col("series") == "wind").then(2).otherwise(1))
-                & (pl.col("_rows") == pl.col("_components"))
+                (pl.col("_components") == components) & (pl.col("_rows") == pl.col("_components"))
             )
         )
-        resolutions = _resolution_table(sorted(all_seconds), zone)
-        return (
-            out.join(resolutions, on="ts_utc")
-            .with_columns(
-                pl.lit(zone.code).alias("zone"),
-                pl.lit(self.name).alias("source"),
-            )
-            .select("zone", "ts_utc", "resolution_min", "series", "forecast_mw", "source")
-            .sort(["ts_utc", "series"])
-        )
-
-    # --- installed capacity -------------------------------------------------
+        return self._finish(forecasts, zone, sorted(stamps), "series", "forecast_mw")
 
     def fetch_installed_power(self, zone: Zone, *, time_step: str = "yearly") -> pl.DataFrame:
-        """Installed capacity by technology: a period series, not a settlement series.
+        """Installed capacity per technology: the full current series, labelled by period end.
 
-        Unlike every other method here, this takes no ``start``/``end`` window:
-        the provider always returns its complete current series in one
-        response, and a "planned" series is a government build-out target,
-        not a measurement, so there is nothing to page through. ``time``
-        labels the *end* of each period per the endpoint's own documentation,
-        not an interval start; the returned ``as_of`` records that same
-        convention as a real date. Monthly granularity is documented by the
-        provider as Germany-only.
-
-        Args:
-            zone: Supplies the Energy-Charts country code.
-            time_step: ``"yearly"`` or ``"monthly"``.
-
-        Returns:
-            Long-format rows matching :data:`gpa.capacity.CAPACITY_COLUMNS`:
-            country, time_step, period (the provider's raw label), as_of,
-            technology (the provider's raw name -- kept apart from this
-            project's canonical fuel taxonomy, because a "planned" and a
-            realised series for the same technology are different rows here,
-            not one fuel bucket the way generation combines them), value,
-            unit ("GW", or "GWh" for battery storage energy capacity),
-            is_planned, source. Empty with that shape if the provider returns
-            nothing.
+        A "planned" series is a policy target and stays a distinct row; only battery
+        energy capacity is in GWh. Monthly data is documented as Germany-only.
         """
         if time_step not in ("yearly", "monthly"):
             raise ValueError(f"time_step must be 'yearly' or 'monthly', got {time_step!r}")
-        country = zone.source_keys.get("energy_charts_country")
-        if not country:
-            raise UpstreamError(f"zone {zone.code} has no 'energy_charts_country' in source_keys")
-
+        country = _country(zone)
         payload = self._get("/installed_power", {"country": country, "time_step": time_step})
         labels = [str(value) for value in (payload.get("time") or [])]
-        series = payload.get("production_types") or []
-        if not labels or not series:
-            return pl.DataFrame(schema=CAPACITY_COLUMNS)
-
-        rows: list[dict[str, object]] = []
-        for entry in series:
+        rows = []
+        for entry in payload.get("production_types") or []:
             name = str(entry.get("name", ""))
-            values = entry.get("data") or []
-            unit = "GWh" if name in _INSTALLED_POWER_GWH_TECHNOLOGIES else "GW"
-            is_planned = "planned" in name.lower()
-            n = min(len(labels), len(values))
-            for label, value in zip(labels[:n], values[:n], strict=True):
-                if value is None:
-                    continue
-                rows.append(
-                    {
-                        "country": country.upper(),
-                        "time_step": time_step,
-                        "period": label,
-                        "as_of": _period_end(label, time_step),
-                        "technology": name,
-                        "value": float(value),
-                        "unit": unit,
-                        "is_planned": is_planned,
-                        "source": self.name,
-                    }
-                )
-        if not rows:
-            return pl.DataFrame(schema=CAPACITY_COLUMNS)
-        return pl.DataFrame(rows, schema=CAPACITY_COLUMNS).sort(["technology", "as_of"])
-
-    # --- helpers ----------------------------------------------------------
+            for label, value in zip(labels, entry.get("data") or [], strict=False):
+                if value is not None:
+                    rows.append(
+                        {
+                            "country": country.upper(),
+                            "time_step": time_step,
+                            "period": label,
+                            "as_of": _period_end(label, time_step),
+                            "technology": name,
+                            "value": float(value),
+                            "unit": "GWh" if name == "Battery storage (capacity)" else "GW",
+                            "is_planned": "planned" in name.lower(),
+                            "source": self.name,
+                        }
+                    )
+        return pl.DataFrame(rows, schema=CAPACITY_SCHEMA).sort("technology", "as_of")
 
     def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         with http_client() as client:
@@ -409,51 +222,51 @@ class EnergyChartsSource:
         if not isinstance(payload, dict):
             raise UpstreamError(f"unexpected payload type {type(payload).__name__} from {path}")
         if payload.get("deprecated"):
-            # Surfaced as a warning rather than a failure: the endpoint keeps
-            # serving for a grace period, and a scheduled job should not break
-            # on the day a deprecation flag flips.
-            import logging
-
-            logging.getLogger(__name__).warning("Energy-Charts marks %s as deprecated", path)
+            # A warning, not a failure: the endpoint keeps serving through a grace period.
+            log.warning("Energy-Charts marks %s as deprecated", path)
         return payload
+
+
+def _country(zone: Zone) -> str:
+    country = zone.source_keys.get("energy_charts_country")
+    if not country:
+        raise UpstreamError(f"zone {zone.code} has no 'energy_charts_country' in source_keys")
+    return country
 
 
 def _as_date(moment: dt.datetime) -> str:
     return moment.astimezone(dt.UTC).date().isoformat()
 
 
+def _values(seconds: list[int], values: list[Any]) -> pl.DataFrame:
+    n = min(len(seconds), len(values))
+    frame = pl.DataFrame(
+        {"_epoch": seconds[:n], "_value": values[:n]},
+        schema={"_epoch": pl.Int64, "_value": pl.Float64},
+    )
+    return frame.drop_nulls("_value")
+
+
 def _stamp(frame: pl.DataFrame) -> pl.DataFrame:
-    """Turn the ``_epoch`` seconds column into the canonical UTC timestamp."""
-    return frame.with_columns(
-        pl.from_epoch(pl.col("_epoch"), time_unit="s")
-        .dt.replace_time_zone("UTC")
-        .cast(UTC_DATETIME)
-        .alias("ts_utc")
-    ).drop("_epoch")
+    """The ``_epoch`` seconds column as the canonical UTC timestamp."""
+    utc = pl.from_epoch(pl.col("_epoch"), time_unit="s").dt.replace_time_zone("UTC")
+    return frame.with_columns(utc.cast(UTC_DATETIME).alias("ts_utc")).drop("_epoch")
 
 
 def _window(frame: pl.DataFrame, start: dt.datetime, end: dt.datetime) -> pl.DataFrame:
-    """Trim to the caller's half-open window; the provider's end is inclusive."""
     return frame.filter((pl.col("ts_utc") >= start) & (pl.col("ts_utc") < end))
 
 
 def _period_end(label: str, time_step: str) -> dt.date:
-    """The real calendar date a /installed_power period label ends on.
-
-    Confirmed live against the provider on 15 September 2026: yearly labels
-    are a bare ``"YYYY"``, monthly labels are ``"MM.YYYY"`` (e.g.
-    ``"02.2024"``) -- not the ISO ``"YYYY-MM"`` this project uses everywhere
-    else, so it is not safe to assume.
-    """
+    """The date an /installed_power label ends: ``"YYYY"`` yearly, ``"MM.YYYY"`` monthly."""
     if time_step == "yearly":
         return dt.date(int(label), 12, 31)
-    month_text, year_text = label.split(".")
-    year, month = int(year_text), int(month_text)
+    month, year = (int(part) for part in label.split("."))
     return dt.date(year, month, calendar.monthrange(year, month)[1])
 
 
-def _currency_from_unit(unit: str, zone: Zone) -> str:
-    """Read the ISO currency out of a unit string such as ``'EUR / MWh'``."""
+def _currency(unit: str, zone: Zone) -> str:
+    """The ISO currency of a unit such as ``'EUR / MWh'``; anything else is a parsing error."""
     head = unit.split("/")[0].strip().upper()
     if head != zone.currency or unit.split("/")[-1].strip().lower() != "mwh":
         raise UpstreamError(f"unexpected price unit {unit!r} for {zone.code}")
@@ -461,22 +274,17 @@ def _currency_from_unit(unit: str, zone: Zone) -> str:
 
 
 def _resolution_table(seconds: list[int], zone: Zone) -> pl.DataFrame:
-    """Measure cadence on the complete timestamp axis, separately per delivery day.
+    """Each timestamp's interval length, measured on the full axis, per local delivery day.
 
-    Resolution changes take effect on a market-local delivery day. Null values
-    and requested-window edges must not change that day's cadence. Missing
-    timestamps do not extend the preceding interval; sparse ambiguous days fail.
+    Products change only at day boundaries, so a gap never stretches an interval and a
+    day holding one edge timestamp takes its neighbour's cadence.
     """
     axis = _stamp(pl.DataFrame({"_epoch": seconds}, schema={"_epoch": pl.Int64})).sort("ts_utc")
     if axis["ts_utc"].n_unique() != axis.height:
         raise UpstreamError("duplicate timestamps in Energy-Charts response")
+    day = pl.col("ts_utc").dt.convert_time_zone(zone.timezone).dt.date()
     axis = axis.with_columns(
-        pl.col("ts_utc").dt.convert_time_zone(zone.timezone).dt.date().alias("_day"),
-        pl.col("ts_utc")
-        .diff()
-        .over(pl.col("ts_utc").dt.convert_time_zone(zone.timezone).dt.date())
-        .dt.total_minutes()
-        .alias("_step"),
+        day.alias("_day"), pl.col("ts_utc").diff().over(day).dt.total_minutes().alias("_step")
     )
     cadence = (
         axis.group_by("_day")
@@ -491,22 +299,17 @@ def _resolution_table(seconds: list[int], zone: Zone) -> pl.DataFrame:
     )
     if unsupported.height:
         raise UpstreamError(f"unsupported timestamp cadence on {unsupported['_day'].to_list()[:3]}")
-    # Every gap inside a day must be a whole number of that day's intervals,
-    # otherwise the day mixes products and no single duration describes it.
+    # Every gap in a day must be a whole number of its intervals, or the day mixes products.
     irregular = cadence.filter(
         pl.col("_steps").list.eval(pl.element() % pl.element().min() != 0).list.any()
     )
     if irregular.height:
         raise UpstreamError(f"irregular timestamp spacing on {irregular['_day'].to_list()[:3]}")
-    # A day holding a single timestamp (a response edge) has no measurable
-    # cadence. Products change only at delivery-day boundaries, so it takes the
-    # adjacent day's; a response with no measurable day at all is rejected.
     cadence = cadence.with_columns(pl.col("resolution_min").forward_fill().backward_fill())
     if cadence["resolution_min"].null_count():
         raise UpstreamError("cannot measure timestamp cadence from a single observation")
     resolved = axis.join(cadence.select("_day", "resolution_min"), on="_day")
-    if resolved.filter(
-        pl.col("ts_utc").dt.epoch("s") % (pl.col("resolution_min") * 60) != 0
-    ).height:
+    misaligned = pl.col("ts_utc").dt.epoch("s") % (pl.col("resolution_min") * 60) != 0
+    if resolved.filter(misaligned).height:
         raise UpstreamError("timestamps are not aligned to their interval boundaries")
     return resolved.select("ts_utc", pl.col("resolution_min").cast(pl.Int16))

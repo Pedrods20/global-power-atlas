@@ -291,18 +291,17 @@ Plot.plot({
 ## Reproduce and inspect the experiment
 
 ```bash
-pip install -e ".[dev,tracking]"
-gpa backtest --track --scope all
-mlflow ui --backend-store-uri sqlite:///.gpa/mlflow/mlflow.db
+pip install -e ".[dev]"
+gpa backtest --scope all
 gpa fundamentals-ablation
-gpa export
+gpa export --check
 ```
 
-Tracking is optional and local. Each MLflow run records the comparison metrics, selected LightGBM parameters and search, ridge validation search, predictions, input panel, source snapshot, dependency versions and Git state. The input-panel SHA-256 is ${html`<code>${run.input_sha256}</code>`}. `gpa backtest` and the site build work without MLflow installed.
+The frozen release under `data/experiments/` keeps the predictions, scores, penalty and tree searches, ridge coefficients and the input panel, content-addressed together with a hash of the forecasting code. The input-panel SHA-256 is ${html`<code>${run.input_sha256}</code>`}; `gpa export --check` proves every published table still matches it.
 
 The prospective path is operationalised by `gpa issue` and `gpa reconcile`: a scheduled job seeds an isolated store, refreshes a short input window, reconciles older ledger rows and issues before the market gate. Each issue keeps its own immutable evidence — the input panel, the source frames it read, the feature list, the model configuration and the instant each input was observed — so a later reader can check what the forecast knew rather than take it on trust.
 
-**The ledger has started, and it is one day old.** Eleven scheduled runs between 14 and 22 September 2026 all arrived hours after the gate — GitHub's scheduler is best-effort — and `gpa issue` refused every one rather than backdate a forecast. The first run to clear a gate did so at 07:49 UTC on 23 September, 2h11m early, and issued `ridge` for all 24 hours of the 24th. Every run now also issues the three naive comparators at the same gate on the same inputs, so the ledger can test the claim this page makes — value over the best naive — rather than only report error. The counter below is built from the committed attempt records, each delivery day counted once at the best outcome any attempt reached:
+**The ledger has started.** Eleven scheduled runs between 14 and 22 September 2026 all arrived hours after the gate — GitHub's scheduler is best-effort — and `gpa issue` refused every one rather than backdate a forecast. The first run to clear a gate did so at 07:49 UTC on 23 September, 2h11m early, and issued `ridge` for all 24 hours of the 24th. Every run now also issues the three naive comparators at the same gate on the same inputs, so the ledger can test the claim this page makes — value over the best naive — rather than only report error. The counter below is built from the committed attempt records, each delivery day counted once at the best outcome any attempt reached:
 
 ```js
 const ledgerStatus = await FileAttachment("data/ledger_status.json").json();

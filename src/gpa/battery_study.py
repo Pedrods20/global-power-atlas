@@ -1,8 +1,7 @@
-"""Retrospective battery economics, exploratory uncertainty and local snapshots.
+"""Retrospective battery economics on a common sample, with exploratory uncertainty.
 
-All comparisons are conditional on the observed common sample. A best naive
-chosen in this sample is a diagnostic, not a deployable selection rule. Cost
-assumptions are explicit and schedules are optimized again for each study.
+The best naive is picked in-sample, so it is a diagnostic, not a deployable rule;
+cost rates are explicit assumptions.
 """
 
 from __future__ import annotations
@@ -11,12 +10,13 @@ import datetime as dt
 import hashlib
 import json
 import platform
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
 import numpy as np
+import numpy.typing as npt
 import polars as pl
 
 from gpa.battery import DEFAULT_MODELS, BatterySpec, SpecKwargs, backtest_predictions
@@ -25,8 +25,7 @@ BASELINES: Final = DEFAULT_MODELS[:3]
 _KEYS: Final = ["strategy", "power_mw", "energy_mwh"]
 _TABLES: Final = ("predictions", "dispatch", "summary", "coverage", "daily", "risk", "comparisons")
 _SOURCES: Final = ("battery.py", "battery_study.py")
-# Capture the calculation files when this module is loaded, not after a long
-# study during which another process could edit the workspace.
+# Read at import, not after a long study during which the workspace could change.
 _SOURCE_SNAPSHOT: Final = {name: Path(__file__).with_name(name).read_bytes() for name in _SOURCES}
 _MIN_BLOCKS: Final = 8
 _RISK_SCHEMA: Final = {
@@ -82,13 +81,11 @@ def _validate_daily(daily: pl.DataFrame) -> pl.DataFrame:
     if missing := required - set(daily.columns):
         raise ValueError(f"daily economics missing columns: {sorted(missing)}")
     ordered = daily.with_columns(pl.col("local_date").cast(pl.Date)).sort([*_KEYS, "local_date"])
-    if ordered.select(pl.any_horizontal(pl.col(c).is_null() for c in required).any()).item():
+    if ordered.select(pl.any_horizontal(pl.col(sorted(required)).is_null()).any()).item():
         raise ValueError("daily economics must be fully settled and labelled")
     if ordered.filter(
-        ~pl.col("profit_eur").is_finite()
-        | ~pl.col("power_mw").is_finite()
+        ~pl.all_horizontal(pl.col("profit_eur", "power_mw", "energy_mwh").is_finite())
         | (pl.col("power_mw") <= 0)
-        | ~pl.col("energy_mwh").is_finite()
         | (pl.col("energy_mwh") <= 0)
     ).height:
         raise ValueError("daily economics must be finite with positive power and capacity")
@@ -101,23 +98,29 @@ def _validate_daily(daily: pl.DataFrame) -> pl.DataFrame:
     return ordered
 
 
+def _assets(daily: pl.DataFrame) -> Iterator[dict[str, pl.DataFrame]]:
+    """Each asset's validated daily margins, keyed by strategy."""
+    for asset in _validate_daily(daily).partition_by(["power_mw", "energy_mwh"]):
+        yield {part["strategy"][0]: part for part in asset.partition_by("strategy")}
+
+
+def _top_five_share(values: npt.NDArray[np.float64]) -> float | None:
+    """Share of the positive total carried by the five best days: ex-post concentration."""
+    positive = values[values > 0]
+    return float(np.sort(positive)[-5:].sum() / positive.sum()) if positive.size else None
+
+
 def daily_margins(dispatch: pl.DataFrame) -> pl.DataFrame:
-    """Daily settlement and activity; never fill missing settlement with zero."""
+    """Daily settlement and activity; missing settlement is an error, never a zero."""
     if dispatch["profit_eur"].null_count():
         raise ValueError("economic study requires fully settled dispatch")
-    columns = (
-        "gross_revenue_eur",
-        "operating_cost_eur",
-        "degradation_cost_eur",
-        "profit_eur",
-        "battery_throughput_mwh",
-    )
+    money = ("gross_revenue_eur", "operating_cost_eur", "degradation_cost_eur", "profit_eur")
     return (
         dispatch.group_by([*_KEYS, "local_date"])
         .agg(
             pl.len().cast(pl.UInt32).alias("intervals"),
             pl.col("duration_hours").sum().alias("delivery_hours"),
-            *[pl.col(column).sum() for column in columns],
+            pl.col(*money, "battery_throughput_mwh").sum(),
         )
         .with_columns(
             (pl.col("battery_throughput_mwh") / (2 * pl.col("energy_mwh"))).alias(
@@ -129,38 +132,25 @@ def daily_margins(dispatch: pl.DataFrame) -> pl.DataFrame:
 
 
 def risk_metrics(daily: pl.DataFrame, *, baselines: Sequence[str] = BASELINES) -> pl.DataFrame:
-    """Observed-sample downside and comparison with the in-sample best naive.
+    """Observed-sample downside, and the margin over the in-sample best naive.
 
-    Drawdown includes a zero starting balance. Concentration uses total positive
-    daily margin as its denominator, not net profit (which may be negative).
-    Monthly totals include only observed days; their day counts are published.
+    Drawdown starts from a zero balance; monthly totals cover observed days only,
+    and their day counts are published beside them.
     """
-    ordered = _validate_daily(daily)
-    rows: list[dict[str, object]] = []
-    for asset in ordered.partition_by(["power_mw", "energy_mwh"], maintain_order=True):
-        models = {
-            part["strategy"][0]: part
-            for part in asset.partition_by("strategy", maintain_order=True)
-        }
+    rows = []
+    for models in _assets(daily):
         candidates = sorted(name for name in baselines if name in models)
-        best = (
-            max(candidates, key=lambda name: float(models[name]["profit_eur"].sum()))
-            if candidates
-            else None
-        )
+        best = max(candidates, key=lambda n: float(models[n]["profit_eur"].sum()), default=None)
         for name, frame in models.items():
-            values = np.asarray(frame["profit_eur"].to_list(), dtype=float)
+            values = frame["profit_eur"].to_numpy()
             cumulative = np.r_[0.0, np.cumsum(values)]
-            positive = values[values > 0]
-            months = (
-                frame.with_columns(pl.col("local_date").dt.strftime("%Y-%m").alias("month"))
-                .group_by("month")
+            worst = (
+                frame.group_by(pl.col("local_date").dt.strftime("%Y-%m").alias("month"))
                 .agg(pl.col("profit_eur").sum(), pl.len().alias("days"))
-                .sort(["profit_eur", "month"])
+                .sort("profit_eur", "month")
+                .row(0, named=True)
             )
-            worst = months.row(0, named=True)
-            power = float(frame["power_mw"][0])
-            profit = float(values.sum())
+            power, profit = float(frame["power_mw"][0]), float(values.sum())
             rows.append(
                 {
                     "strategy": name,
@@ -177,22 +167,15 @@ def risk_metrics(daily: pl.DataFrame, *, baselines: Sequence[str] = BASELINES) -
                     "worst_observed_month": worst["month"],
                     "worst_observed_month_eur": worst["profit_eur"],
                     "worst_month_observed_days": worst["days"],
-                    "top_5_days_share_positive_margin": float(
-                        np.sort(positive)[-5:].sum() / positive.sum()
-                    )
-                    if positive.size
-                    else None,
+                    "top_5_days_share_positive_margin": _top_five_share(values),
                     "best_naive": best,
                     "best_naive_selection": "retrospective_in_sample" if best else None,
                     "incremental_vs_best_naive_eur_mw": (
-                        profit - float(models[best]["profit_eur"].sum())
-                    )
-                    / power
-                    if best
-                    else None,
+                        (profit - float(models[best]["profit_eur"].sum())) / power if best else None
+                    ),
                 }
             )
-    return pl.DataFrame(rows, schema=_RISK_SCHEMA).sort(["energy_mwh", "power_mw", "strategy"])
+    return pl.DataFrame(rows, schema=_RISK_SCHEMA).sort("energy_mwh", "power_mw", "strategy")
 
 
 def paired_comparisons(
@@ -203,52 +186,43 @@ def paired_comparisons(
     resamples: int = 2000,
     seed: int = 20260914,
 ) -> pl.DataFrame:
-    """Exploratory 95% intervals for paired incremental sample-period margin.
+    """Exploratory 95% intervals for each model's paired margin over each naive.
 
-    Resample non-overlapping calendar blocks, anchored at the first sample day.
-    Preserve paired observations within each block; missing dates are never
-    collapsed into adjacent days or imputed as zero. Normalize each resample by
-    its observed day count, then scale its daily mean to the original observed
-    sample length. Require eight blocks and eight block-lengths of observations.
-
-    These percentile intervals are conditional, exploratory and not adjusted
-    for multiple comparisons. They do not capture structural market change,
-    selection uncertainty, omitted execution costs or unobserved outcomes.
+    Non-overlapping calendar blocks from the first sample day are resampled whole,
+    missing dates are never imputed, and each resample's daily mean is scaled back to
+    the observed length. Eight blocks of eight block-lengths are required. The
+    intervals are conditional and uncorrected for multiple comparisons.
     """
     if block_days < 1 or resamples < 100 or seed < 0:
         raise ValueError("block_days >= 1, resamples >= 100 and seed >= 0 are required")
-    ordered = _validate_daily(daily)
-    rows: list[dict[str, object]] = []
-    for asset in ordered.partition_by(["power_mw", "energy_mwh"], maintain_order=True):
-        models = {
-            part["strategy"][0]: part
-            for part in asset.partition_by("strategy", maintain_order=True)
-        }
+    rows = []
+    for models in _assets(daily):
         for baseline in sorted(set(baselines) & set(models)):
             reference = models[baseline]
             dates = reference["local_date"].to_list()
-            block_ids = np.array([(day - dates[0]).days // block_days for day in dates])
-            _, codes = np.unique(block_ids, return_inverse=True)
+            _, codes = np.unique(
+                [(day - dates[0]).days // block_days for day in dates], return_inverse=True
+            )
             counts = np.bincount(codes)
-            count = len(counts)
+            blocks = len(counts)
             for name in sorted(set(models) - set(baselines)):
                 frame = models[name]
                 power = float(frame["power_mw"][0])
                 delta = (
-                    np.asarray(frame["profit_eur"].to_list(), dtype=float)
-                    - np.asarray(reference["profit_eur"].to_list(), dtype=float)
+                    frame["profit_eur"].to_numpy() - reference["profit_eur"].to_numpy()
                 ) / power
-                positive = delta[delta > 0]
                 low: float | None = None
                 high: float | None = None
-                status = "insufficient_blocks" if count < _MIN_BLOCKS else "insufficient_days"
-                if count >= _MIN_BLOCKS and len(delta) >= _MIN_BLOCKS * block_days:
+                status = "insufficient_blocks" if blocks < _MIN_BLOCKS else "insufficient_days"
+                if blocks >= _MIN_BLOCKS and len(delta) >= _MIN_BLOCKS * block_days:
                     totals = np.bincount(codes, weights=delta)
-                    rng = np.random.default_rng(seed)
-                    samples = rng.integers(0, count, size=(resamples, count))
-                    margins = totals[samples].sum(axis=1) / counts[samples].sum(axis=1) * len(delta)
+                    draws = np.random.default_rng(seed).integers(
+                        0, blocks, size=(resamples, blocks)
+                    )
+                    margins = totals[draws].sum(axis=1) / counts[draws].sum(axis=1) * len(delta)
                     low, high = map(float, np.quantile(margins, [0.025, 0.975]))
                     status = "exploratory"
+                best_five = np.sort(delta[delta > 0])[-5:].sum()
                 rows.append(
                     {
                         "strategy": name,
@@ -256,44 +230,33 @@ def paired_comparisons(
                         "power_mw": power,
                         "energy_mwh": float(frame["energy_mwh"][0]),
                         "paired_days": len(delta),
-                        "calendar_blocks": count,
+                        "calendar_blocks": blocks,
                         "block_days": block_days,
                         "incremental_eur_mw": float(delta.sum()),
                         "mean_daily_incremental_eur_mw": float(delta.mean()),
                         "underperform_days": int((delta < 0).sum()),
-                        "top_5_days_share_positive_incremental": (
-                            float(np.sort(positive)[-5:].sum() / positive.sum())
-                            if positive.size
-                            else None
-                        ),
-                        # Ex-post concentration diagnostic, not a dispatch rule.
-                        "incremental_without_best_5_days_eur_mw": float(
-                            delta.sum() - np.sort(positive)[-5:].sum()
-                        ),
+                        "top_5_days_share_positive_incremental": _top_five_share(delta),
+                        "incremental_without_best_5_days_eur_mw": float(delta.sum() - best_five),
                         "ci_low_eur_mw": low,
                         "ci_high_eur_mw": high,
                         "status": status,
                     }
                 )
     return pl.DataFrame(rows, schema=_COMPARISON_SCHEMA).sort(
-        ["energy_mwh", "power_mw", "strategy", "baseline"]
+        "energy_mwh", "power_mw", "strategy", "baseline"
     )
 
 
 def _prediction_hash(predictions: pl.DataFrame) -> str:
+    """Fingerprint of the exact supplied values and types, not a rounded presentation."""
     keys = (
         ["model", "ts_utc"]
         if "ts_utc" in predictions.columns
         else ["model", "local_date", "local_hour"]
     )
-    # Unlike a rounded presentation hash, this fingerprint covers exact supplied
-    # values and types, including the features represented by the input columns.
     frame = predictions.select(sorted(predictions.columns)).sort(keys)
-    payload = (
-        json.dumps({name: str(dtype) for name, dtype in frame.schema.items()}, sort_keys=True)
-        + frame.write_json()
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()
+    types = json.dumps({name: str(dtype) for name, dtype in frame.schema.items()}, sort_keys=True)
+    return hashlib.sha256((types + frame.write_json()).encode()).hexdigest()
 
 
 def evaluate(
@@ -313,12 +276,9 @@ def evaluate(
         predictions, model_names=model_names, durations_mwh=durations_mwh, spec_kwargs=spec_kwargs
     )
     if result.dispatch.is_empty():
-        raise ValueError(
-            "no shared complete settled days; inspect input coverage before studying value"
-        )
+        raise ValueError("no shared complete settled days; inspect input coverage first")
     daily = daily_margins(result.dispatch)
-    start = daily["local_date"].min()
-    end = daily["local_date"].max()
+    start, end = daily["local_date"].min(), daily["local_date"].max()
     assert isinstance(start, dt.date) and isinstance(end, dt.date)
     assumptions: dict[str, Any] = {
         "zone": "DE-LU",
@@ -327,8 +287,8 @@ def evaluate(
         "durations_mwh": list(durations_mwh),
         "spec_kwargs": dict(spec_kwargs or {}),
         "battery_specs": [
-            asdict(BatterySpec(energy_mwh=float(capacity), **(spec_kwargs or {})))
-            for capacity in durations_mwh
+            asdict(BatterySpec(energy_mwh=float(size), **(spec_kwargs or {})))
+            for size in durations_mwh
         ],
         "prediction_sha256": _prediction_hash(predictions),
         "input_role": "supplied_retrospective_predictions",
@@ -365,24 +325,11 @@ def evaluate(
     )
 
 
-def _identity(metadata: dict[str, Any]) -> str:
-    payload = {key: metadata[key] for key in ("assumptions", "environment", "source_sha256")}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
-
-
 def save_study(result: BatteryStudy, predictions: pl.DataFrame, root: Path) -> Path:
-    """Save a new local content-addressed study; never overwrite an existing run.
-
-    The completion manifest is written last. Predictions and the two calculation
-    modules are archived with checksums. Full forecast/source provenance remains
-    a separate release requirement, explicitly identified in the assumptions.
-    """
+    """Save a new content-addressed study with its inputs and calculation code; never overwrite."""
     if result.assumptions["prediction_sha256"] != _prediction_hash(predictions):
         raise ValueError("study input does not match the evaluated predictions")
-    sources = _SOURCE_SNAPSHOT
-    source_hash = hashlib.sha256(
-        b"".join(name.encode() + sources[name] for name in _SOURCES)
-    ).hexdigest()
+    code = b"".join(name.encode() + _SOURCE_SNAPSHOT[name] for name in _SOURCES)
     metadata: dict[str, Any] = {
         "assumptions": result.assumptions,
         "environment": {
@@ -390,21 +337,23 @@ def save_study(result: BatteryStudy, predictions: pl.DataFrame, root: Path) -> P
             "polars": pl.__version__,
             "numpy": np.__version__,
         },
-        "source_sha256": source_hash,
+        "source_sha256": hashlib.sha256(code).hexdigest(),
     }
-    identifier = _identity(metadata)
+    identifier = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()[:20]
     path = Path(root) / identifier
     path.mkdir(parents=True, exist_ok=False)
     checksums = {}
     for name in _TABLES:
         file = path / f"{name}.parquet"
-        frame = predictions if name == "predictions" else getattr(result, name)
-        frame.write_parquet(file, compression="zstd")
+        (predictions if name == "predictions" else getattr(result, name)).write_parquet(
+            file, compression="zstd"
+        )
         checksums[file.name] = hashlib.sha256(file.read_bytes()).hexdigest()
-    for name, source in sources.items():
+    for name, source in _SOURCE_SNAPSHOT.items():
         (path / name).write_bytes(source)
         checksums[name] = hashlib.sha256(source).hexdigest()
-    metadata.update({"study_id": identifier, "checksums": checksums})
+    # The manifest is written last, so an interrupted save is visibly incomplete.
+    metadata |= {"study_id": identifier, "checksums": checksums}
     (path / "manifest.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
     )

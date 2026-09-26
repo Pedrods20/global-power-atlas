@@ -1,4 +1,4 @@
-"""Immutable retrospective input and result snapshots, independent of daily ingestion."""
+"""The frozen retrospective release: content-addressed, checksummed, never rewritten."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ TABLES = ("predictions", "scores", "daily", "coefficients", "alpha_search", "inp
 
 
 def save(result: BacktestResult) -> Path:
-    """Create a new content-addressed run; never rewrite an existing experiment."""
+    """Freeze a run under its content hash and point ``current.json`` at it."""
     metadata = result.metadata()
     source_hash = hashlib.sha256()
     sources = Path(__file__).parent

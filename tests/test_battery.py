@@ -89,11 +89,6 @@ def test_full_day_schedule_is_independent_of_actual_settlement():
     assert one["profit_eur"].sum() == pytest.approx(-two["profit_eur"].sum())
 
 
-def test_short_rolling_horizon_cannot_be_mislabelled_day_ahead():
-    with pytest.raises(ValueError, match="full delivery day"):
-        dispatch(intervals(), BatterySpec(), strategy="test", horizon_steps=12)
-
-
 def test_duplicate_delivery_intervals_raise_instead_of_double_counting():
     frame = intervals()
     with pytest.raises(ValueError, match="duplicate"):
@@ -253,9 +248,7 @@ def test_dispatch_matches_exhaustive_feasible_schedules(initial, limit):
             if delta > 0 and discharged:
                 break
             discharged |= delta < 0
-            grid = (
-                -delta / spec.charge_efficiency if delta > 0 else -delta * spec.discharge_efficiency
-            )
+            grid = -delta / spec.leg_efficiency if delta > 0 else -delta * spec.leg_efficiency
             value += grid * price - abs(grid) * (
                 spec.variable_cost_eur_mwh + spec.degradation_cost_eur_mwh
             )

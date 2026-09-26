@@ -1,13 +1,4 @@
-"""Freshness: how stale each series is allowed to get before it is wrong.
-
-The scheduled ingest can fail, or the provider can quietly stop publishing, and
-a run that fetches nothing still exits zero if no adapter raised. This module
-turns that silent stall into a visible failure.
-
-Every series comes from Energy-Charts and lands within hours, so one rule covers
-them all; it carries the reason for its value, because a limit that cannot be
-explained is one nobody trusts when it fires.
-"""
+"""Freshness: a run that fetched nothing still exits zero, so staleness is checked apart."""
 
 from __future__ import annotations
 
@@ -67,20 +58,7 @@ class FreshnessReport:
 
 
 def check(now: dt.datetime | None = None) -> list[FreshnessReport]:
-    """Measure every declared series against its rule.
-
-    Covers every dataset each zone declares a source for, so a series that has
-    never been ingested reports as missing rather than being absent from the
-    output. A gap that produces no row is exactly the case a coverage report
-    built only from stored files would overlook.
-
-    Args:
-        now: Reference instant, for tests. Defaults to the current time.
-
-    Returns:
-        One report per declared series, ordered worst first so that the top of
-        a long list is the part worth reading.
-    """
+    """Every declared series against its rule, missing ones included, worst first."""
     reference = now or dt.datetime.now(dt.UTC)
     coverage = store.coverage()
 
@@ -97,8 +75,6 @@ def check(now: dt.datetime | None = None) -> list[FreshnessReport]:
             lag = None if last is None else (reference - last).total_seconds() / 3600
             reports.append(FreshnessReport(zone.code, dataset, lag, DEFAULT_RULE))
 
-    # Missing first, then the most overdue, so the top of a long list is the
-    # part worth reading.
     def severity(report: FreshnessReport) -> tuple[int, float]:
         return (0, 0.0) if report.lag_hours is None else (1, -report.lag_hours)
 

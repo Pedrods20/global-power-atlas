@@ -1,18 +1,9 @@
-"""When a provider's day-ahead forecasts for the next delivery day appear.
+"""When the next delivery day's day-ahead forecasts appear: observed, never inferred.
 
-The fundamentals archive carries no publication vintage (see
-:mod:`gpa.forecast.fundamentals`), and the rule that governs it points the wrong
-way for this project: Commission Regulation (EU) 543/2013, Article 14(1)(d),
-requires day-ahead wind and solar forecasts by 18:00 Brussels time on D-1, six
-hours *after* the 12:00 day-ahead gate. Whether a public copy nevertheless
-exists before the gate decides two things -- whether the prospective ``ridge_da``
-arm can ever issue, and whether the labelled ablation's assigned noon vintage is
-a fair research policy or an optimistic one.
-
-That is a question of fact, so this module answers it by observation. Each probe
-records, per series, how much of the next delivery day the provider serves at
-the instant of the check and how far that instant sits from the gate. A series
-of probes brackets the publication time; nothing here infers one.
+Regulation (EU) 543/2013, Art. 14(1)(d), only requires wind and solar by 18:00 on
+D-1, after the noon gate. Whether a copy is public earlier decides if ``ridge_da``
+can ever issue and if the ablation's noon vintage is fair; each probe logs coverage
+and its distance from the gate, and a series of probes brackets the answer.
 """
 
 from __future__ import annotations
@@ -41,21 +32,13 @@ SCHEMA: Final = pl.Schema(
         "minutes_before_gate": pl.Int64,
     }
 )
-"""Plain columns, so the log reads as a CSV and diffs line by line.
-
-``minutes_before_gate`` is negative once the gate has passed.
-"""
+"""Plain columns, so the log diffs line by line; ``minutes_before_gate`` goes negative after it."""
 
 Fetch = Callable[[Zone, str, dt.datetime, dt.datetime], pl.DataFrame]
 
 
 def check(zone: Zone, *, now: dt.datetime, fetch: Fetch) -> pl.DataFrame:
-    """One row per series for tomorrow's delivery day, as served at ``now``.
-
-    Coverage counts clock hours with at least one value, against the hours the
-    local day actually has (23 or 25 on a clock change), so a quarter-hour and
-    an hourly series are measured on the same scale.
-    """
+    """Per series, the clock hours of tomorrow served at ``now``, against the day's real hours."""
     from gpa.forecast.ledger import market_gate
 
     if now.tzinfo is None:

@@ -114,31 +114,6 @@ def price_series(start: dt.datetime, days: int) -> pl.DataFrame:
 # --- Commands that only read the registry -----------------------------------
 
 
-def test_version_prints_the_package_version() -> None:
-    from gpa import __version__
-
-    result = runner.invoke(app, ["version"])
-
-    assert result.exit_code == 0
-    assert __version__ in result.stdout
-
-
-def test_zones_lists_the_registry() -> None:
-    result = runner.invoke(app, ["zones"])
-
-    assert result.exit_code == 0
-    assert "DE-LU" in result.stdout
-    assert "Germany-Luxembourg" in result.stdout
-
-
-def test_zones_verbose_adds_the_editorial_notes() -> None:
-    plain = runner.invoke(app, ["zones"])
-    verbose = runner.invoke(app, ["zones", "--verbose"])
-
-    assert verbose.exit_code == 0
-    assert len(verbose.stdout) > len(plain.stdout)
-
-
 # --- stats ------------------------------------------------------------------
 
 
@@ -887,7 +862,7 @@ def test_backfill_reports_the_window_it_will_fetch(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(pipeline, "get_source", lambda name: Offline())
 
-    result = runner.invoke(app, ["backfill", "--zone", "DE-LU", "--days", "3", "--dry-run"])
+    result = runner.invoke(app, ["backfill", "--zone", "DE-LU", "--years", "0.01", "--dry-run"])
 
     assert result.exit_code == 0
     assert "Backfilling" in result.stdout

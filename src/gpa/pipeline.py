@@ -1,13 +1,4 @@
-"""Ingestion orchestration.
-
-Turns "collect these zones over this window" into validated rows on disk, and
-reports what happened per zone and dataset so that a scheduled run leaves an
-auditable trail rather than a silent success.
-
-The guiding rule is that one target failing must never stop the others: a
-provider having a bad day degrades to a failed outcome for that dataset alone,
-and the run reports it.
-"""
+"""Ingestion: fetch, validate and store each zone and dataset; one failure never stops the rest."""
 
 from __future__ import annotations
 
@@ -20,7 +11,7 @@ from functools import partial
 
 from gpa import store
 from gpa.schema import SchemaError, SchemaErrors, validate
-from gpa.sources import SourceError, get_source
+from gpa.sources import Source, SourceError, get_source
 from gpa.zones import ZONES, Zone, get_zone
 
 __all__ = [
@@ -36,40 +27,17 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-# Providers publish on a lag and revise afterwards, so every run re-fetches this
-# many days behind the earlier of now and the stored checkpoint. The store
-# upserts, so overlapping runs converge instead of duplicating.
 DEFAULT_LOOKBACK_DAYS = 7
+"""Refetched behind the checkpoint: providers publish late and revise, and upserts converge."""
 
 PUBLISHED_AHEAD_DAYS: dict[str, int] = {"price": 2, "fundamentals": 2}
-"""Days past now worth requesting for datasets published before delivery.
+"""Days past now worth requesting: tomorrow's prices and forecasts exist before tomorrow does."""
 
-A day-ahead auction publishes the whole next delivery day at once, so capping a
-request at the current instant drops prices that are already public. Two days
-covers the next local delivery day whatever hour a run starts. Providers return
-only what is published: Energy-Charts answered a request four days ahead with
-the same rows as two days ahead (checked 15 September 2026). Load and
-generation are measurements, so they never extend past now.
-
-``fundamentals`` belongs here for the same reason as ``price`` and not for the
-opposite one: it holds the operators' *forecasts* of load, wind and solar for a
-delivery day, which exist before that day does. Capping them at now was
-invisible while these features were only ever replayed over history for the
-labelled ablation, and fatal the moment a prospective issue needed tomorrow:
-the run would find no snapshot covering its own delivery day and fall back to
-the published information set every single time.
-"""
-
-# Requesting several years in one call times out on most providers and produces
-# an unhelpfully large failure. Backfills are cut into chunks and each chunk is
-# written before the next is fetched, so an interrupted backfill keeps whatever
-# it already completed.
 BACKFILL_CHUNK_DAYS = 60
+"""Each chunk is written as it lands, so an interrupted backfill keeps what it has."""
 
 
 class Outcome(StrEnum):
-    """What happened for one zone and dataset."""
-
     WRITTEN = "written"
     EMPTY = "empty"
     FAILED = "failed"
@@ -77,7 +45,7 @@ class Outcome(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class IngestResult:
-    """Result of ingesting one dataset for one zone."""
+    """What happened for one zone and dataset."""
 
     zone: str
     dataset: str
@@ -100,32 +68,16 @@ class IngestResult:
 
 
 def resolve_targets(
-    zones: Sequence[str] | None = None,
-    datasets: Sequence[str] | None = None,
+    zones: Sequence[str] | None = None, datasets: Sequence[str] | None = None
 ) -> list[tuple[Zone, str, str]]:
-    """Expand a zone and dataset selection into concrete work items.
-
-    Args:
-        zones: Zone codes, or ``None`` for every registered zone.
-        datasets: Dataset names, or ``None`` for every dataset a zone declares.
-
-    Returns:
-        ``(zone, dataset, source_name)`` triples, skipping combinations a zone
-        does not declare a source for.
-
-    Raises:
-        KeyError: If a requested zone code is not registered.
-    """
+    """``(zone, dataset, source)`` for every selected pair a zone declares a source for."""
     selected = [get_zone(code) for code in zones] if zones else list(ZONES)
-    wanted = set(datasets) if datasets else None
-
-    targets: list[tuple[Zone, str, str]] = []
-    for zone in selected:
-        for dataset, source_name in zone.sources.items():
-            if wanted is not None and dataset not in wanted:
-                continue
-            targets.append((zone, dataset, source_name))
-    return targets
+    return [
+        (zone, dataset, source)
+        for zone in selected
+        for dataset, source in zone.sources.items()
+        if not datasets or dataset in datasets
+    ]
 
 
 def now_utc() -> dt.datetime:
@@ -141,17 +93,10 @@ def resolve_window(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     now: dt.datetime | None = None,
 ) -> tuple[dt.datetime, dt.datetime]:
-    """The window one target should fetch.
+    """The window one target fetches: from the stored checkpoint, minus the overlap.
 
-    ``end`` defaults to now plus :data:`PUBLISHED_AHEAD_DAYS` for the dataset.
-    ``start`` defaults to ``lookback_days`` before the earliest of the ceiling
-    and the last stored instant, so a run after missed schedules resumes from
-    what the store actually holds instead of stopping at a fixed trailing
-    window. An empty store starts ``lookback_days`` before the ceiling.
-
-    The checkpoint is the latest stored instant, derived from the Parquet files
-    rather than a separate watermark that could disagree with them. It cannot
-    see holes older than the lookback behind it; ``gpa backfill`` repairs those.
+    A run after missed schedules therefore resumes from what the store holds. Holes
+    older than the overlap are invisible here; ``gpa backfill`` repairs them.
     """
     reference = now or now_utc()
     ceiling = end if end is not None else reference
@@ -159,8 +104,7 @@ def resolve_window(
         end = reference + dt.timedelta(days=PUBLISHED_AHEAD_DAYS.get(dataset, 0))
     if start is None:
         last = store.last_ingested(dataset, zone.code)
-        anchor = ceiling if last is None else min(ceiling, last)
-        start = anchor - dt.timedelta(days=lookback_days)
+        start = (ceiling if last is None else min(ceiling, last)) - dt.timedelta(days=lookback_days)
     return start, end
 
 
@@ -174,28 +118,7 @@ def ingest(
     chunk_days: int = BACKFILL_CHUNK_DAYS,
     dry_run: bool = False,
 ) -> list[IngestResult]:
-    """Fetch, validate and store a window for the selected targets.
-
-    Args:
-        zones: Zone codes, or ``None`` for all.
-        datasets: Dataset names, or ``None`` for all a zone declares.
-        start: Inclusive UTC-aware lower bound for every target. Defaults to a
-            per-target checkpoint; see :func:`resolve_window`.
-        end: Exclusive UTC-aware upper bound for every target. Defaults to now,
-            extended for datasets published ahead of delivery.
-        lookback_days: Revision overlap behind the checkpoint.
-        chunk_days: Maximum days fetched per request.
-        dry_run: Fetch and validate but write nothing. Used to prove an adapter
-            works without touching the repository.
-
-    Returns:
-        One result per target, in the order they were attempted.
-
-    Raises:
-        ValueError: If the window is empty, a bound is naive or the lookback is
-            negative.
-        KeyError: If a requested zone is not registered.
-    """
+    """Fetch, validate and store each target's window; ``dry_run`` writes nothing."""
     for name, bound in (("start", start), ("end", end)):
         if bound is not None and bound.tzinfo is None:
             raise ValueError(f"{name} must be timezone-aware")
@@ -206,7 +129,6 @@ def ingest(
 
     reference = now_utc()
     results: list[IngestResult] = []
-
     for zone, dataset, source_name in resolve_targets(zones, datasets):
         try:
             source = get_source(source_name)
@@ -215,18 +137,15 @@ def ingest(
                 IngestResult(zone.code, dataset, source_name, Outcome.FAILED, detail=str(exc))
             )
             continue
-
         window_start, window_end = resolve_window(
             zone, dataset, start=start, end=end, lookback_days=lookback_days, now=reference
         )
         record = partial(
             IngestResult, zone.code, dataset, source_name, start=window_start, end=window_end
         )
-
         if window_start >= window_end:
             results.append(record(Outcome.FAILED, detail="resolved window is empty"))
             continue
-
         try:
             rows = _ingest_one(source, zone, dataset, window_start, window_end, chunk_days, dry_run)
         except (SchemaError, SchemaErrors) as exc:
@@ -239,14 +158,12 @@ def ingest(
             log.exception("%s %s raised an unexpected error", zone.code, dataset)
             results.append(record(Outcome.FAILED, detail=f"{type(exc).__name__}: {exc}"))
         else:
-            outcome = Outcome.WRITTEN if rows else Outcome.EMPTY
-            results.append(record(outcome, rows=rows))
-
+            results.append(record(Outcome.WRITTEN if rows else Outcome.EMPTY, rows=rows))
     return results
 
 
 def _ingest_one(
-    source: object,
+    source: Source,
     zone: Zone,
     dataset: str,
     start: dt.datetime,
@@ -254,29 +171,20 @@ def _ingest_one(
     chunk_days: int,
     dry_run: bool,
 ) -> int:
-    """Fetch one target in chunks, writing each chunk before fetching the next.
-
-    The chunk is the smaller of the caller's request and whatever the source
-    declares it can serve, because those limits are real: Energy-Charts times
-    out on a long window.
-    """
-    cap = getattr(source, "max_window_days", None)
-    effective = min(chunk_days, cap) if cap else chunk_days
-
+    """Fetch in chunks no longer than the source serves, writing each before the next."""
+    cap = source.max_window_days
+    chunk = dt.timedelta(days=max(1, min(chunk_days, cap) if cap else chunk_days))
     written = 0
-    chunk = dt.timedelta(days=max(1, effective))
     cursor = start
-
     while cursor < end:
         stop = min(cursor + chunk, end)
-        frame = source.fetch(zone, dataset, cursor, stop)  # type: ignore[attr-defined]
+        frame = source.fetch(zone, dataset, cursor, stop)
         if not frame.is_empty():
             frame = validate(frame, dataset)
             if not dry_run:
                 store.write(frame, dataset, validate_first=False)
             written += frame.height
         cursor = stop
-
     return written
 
 
@@ -285,8 +193,8 @@ def _first_line(exc: Exception) -> str:
 
 
 def summarise(results: Iterable[IngestResult]) -> dict[str, int]:
-    """Count results by outcome, for logging and for a workflow exit code."""
-    counts = dict.fromkeys((o.value for o in Outcome), 0)
+    """Counts by outcome, for the log and the workflow exit code."""
+    counts = dict.fromkeys((outcome.value for outcome in Outcome), 0)
     for result in results:
         counts[result.outcome.value] += 1
     return counts

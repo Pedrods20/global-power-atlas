@@ -67,8 +67,11 @@ def test_partitions_are_keyed_by_zone_and_month() -> None:
     store.write(price_rows([1.0], start=dt.datetime(2026, 6, 30, 23, tzinfo=dt.UTC)), "price")
     store.write(price_rows([2.0], start=dt.datetime(2026, 7, 1, 0, tzinfo=dt.UTC)), "price")
 
-    assert store.partition_path("price", "DE-LU", "2026-06").exists()
-    assert store.partition_path("price", "DE-LU", "2026-07").exists()
+    zone_dir = store.dataset_dir("price") / "zone=DE-LU"
+    assert sorted(path.name for path in zone_dir.iterdir()) == [
+        "2026-06.parquet",
+        "2026-07.parquet",
+    ]
 
 
 def test_reading_an_empty_store_returns_the_right_schema() -> None:
@@ -135,21 +138,8 @@ def test_read_filters_by_zone() -> None:
     store.write(price_rows([1.0], zone="DE-LU"), "price")
     store.write(price_rows([2.0], zone="XX-TEST"), "price")
 
-    assert store.read("price", "DE-LU").height == 1
-    assert store.read("price", ["DE-LU", "XX-TEST"]).height == 2
-
-
-def test_read_window_is_half_open() -> None:
-    start = dt.datetime(2026, 6, 15, tzinfo=dt.UTC)
-    store.write(price_rows([1.0, 2.0, 3.0], start=start), "price")
-
-    window = store.read("price", start=start, end=start + dt.timedelta(hours=2))
-    assert window["price"].to_list() == [1.0, 2.0]
-
-
-def test_read_rejects_naive_bounds() -> None:
-    with pytest.raises(ValueError, match="timezone-aware"):
-        store.read("price", start=dt.datetime(2026, 6, 15))
+    assert store.read("price", "DE-LU")["price"].to_list() == [1.0]
+    assert store.read("price").height == 2
 
 
 # --- Validation ------------------------------------------------------------

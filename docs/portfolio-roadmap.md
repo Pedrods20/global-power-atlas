@@ -31,6 +31,11 @@ Updated 26 September 2026.
   Spain and Brazil, the ONS and SMARD adapters, and the unused metrics and
   exports were removed on 23 September 2026 because nothing in the study used
   them.
+- **The code** was cut by a third on 26 September 2026 (P13): the ridge refit is
+  one batched NumPy solve, MLflow tracking and unpublished CLI diagnostics are
+  gone, and every published output was proven unchanged against a baseline run
+  of the previous code. The one fix, averaging the repeated autumn clock hour of
+  the fundamentals as the price target does, made the ablation deterministic.
 
 ## Settled decisions
 
@@ -122,3 +127,4 @@ margin to every slot.
 | P8–P10 | Repositioned as a research note; adversarial reviews and fixes | 514dbf6 … cec5833 |
 | P11 | First prospective issue; honest backstop, naive arms, publication probe | 271a2dc |
 | P12 | Removed unused zones, adapters, metrics, exports, dependencies and history | c371879 |
+| P13 | Code review: −36% source lines, NumPy ridge, deterministic fundamentals on the autumn hour | this cleanup |

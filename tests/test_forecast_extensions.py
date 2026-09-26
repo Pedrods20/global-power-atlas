@@ -11,7 +11,7 @@ from gpa import battery
 from gpa.forecast import fundamentals, ledger, panel, scoring
 from gpa.forecast.boosting import select_parameters
 from gpa.forecast.models import Ridge
-from tests.test_forecast import ZONE, price_frame, small_panel
+from tests.test_forecast import ZONE, price_frame, small_panel, without_intervals
 
 
 def test_fundamentals_use_latest_snapshot_before_the_market_gate():
@@ -126,7 +126,6 @@ def test_battery_dispatch_respects_power_soc_and_terminal_state():
         frame,
         battery.BatterySpec(energy_mwh=1.0),
         strategy="ridge",
-        horizon_steps=24,
     )
 
     assert result.height == 24
@@ -140,7 +139,6 @@ def test_battery_dispatch_respects_power_soc_and_terminal_state():
         frame,
         battery.BatterySpec(energy_mwh=1.0, degradation_cost_eur_mwh=10.0),
         strategy="ridge",
-        horizon_steps=24,
     )
     assert costed["profit_eur"].sum() < result["profit_eur"].sum()
 
@@ -194,10 +192,11 @@ def test_scoreboard_adds_calendar_year_scope():
         pl.col("price").alias("forecast"),
     )
     scores = scoring.scoreboard(
-        prepared.select("model", "local_date", "local_hour", "actual", "forecast"),
+        without_intervals(
+            prepared.select("model", "local_date", "local_hour", "actual", "forecast")
+        ),
         ZONE,
         reference="model",
         baselines=("model",),
-        levels=(),
     )
     assert scores.filter(pl.col("scope") == "year")["bucket"].to_list() == ["2025"]

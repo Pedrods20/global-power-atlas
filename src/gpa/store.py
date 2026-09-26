@@ -1,26 +1,15 @@
-"""Partitioned Parquet store.
+"""Partitioned Parquet store: ``data/curated/<dataset>/zone=<ZONE>/<YYYY-MM>.parquet``.
 
-The store is a directory of Parquet files, committed to the repository:
-
-    data/curated/<dataset>/zone=<ZONE>/<YYYY-MM>.parquet
-
-Partitioning by zone and month keeps each file small enough that a daily
-incremental run rewrites only the current month, which in turn keeps git
-history readable and the repository small. Months in the past are effectively
-append-only.
-
-Writes are upserts on the dataset's natural key. Power data is revised:
-providers restate observations after publishing them. Re-ingesting a window
-therefore has to replace what is already there rather than duplicate it, and the
-last writer for a given key wins.
+Monthly files keep a daily run to one small rewrite. Writes are upserts on each
+dataset's natural key, because providers restate observations after publishing.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import io
 import os
 import tempfile
-from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import polars as pl
@@ -29,255 +18,131 @@ from gpa.schema import SCHEMAS, empty_frame, validate
 
 __all__ = [
     "DATASETS",
+    "atomic_parquet",
+    "atomic_write",
     "coverage",
     "curated_root",
     "dataset_dir",
     "last_ingested",
-    "partition_path",
     "read",
     "write",
 ]
 
 DATASETS: tuple[str, ...] = tuple(SCHEMAS)
 
-_KEYS: dict[str, tuple[str, ...]] = {
-    "price": ("zone", "ts_utc"),
-    "load": ("zone", "ts_utc"),
-    "generation": ("zone", "ts_utc", "fuel"),
-    "fundamentals": ("zone", "ts_utc", "series"),
+_KEYS: dict[str, list[str]] = {
+    "price": ["zone", "ts_utc"],
+    "load": ["zone", "ts_utc"],
+    "generation": ["zone", "ts_utc", "fuel"],
+    "fundamentals": ["zone", "ts_utc", "series"],
 }
-"""Natural key per dataset, used to deduplicate on upsert."""
-
-_ENV_ROOT = "GPA_DATA_ROOT"
 
 
 def curated_root() -> Path:
-    """Root of the curated store.
-
-    Defaults to ``data/curated`` beside the package's repository root, and can
-    be redirected with the ``GPA_DATA_ROOT`` environment variable so that tests
-    and the site build can point at a temporary or alternate tree.
-    """
-    override = os.environ.get(_ENV_ROOT)
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parents[2] / "data" / "curated"
+    """``data/curated`` beside the package, or ``GPA_DATA_ROOT`` for tests."""
+    default = Path(__file__).resolve().parents[2] / "data" / "curated"
+    return Path(os.environ.get("GPA_DATA_ROOT") or default)
 
 
 def dataset_dir(dataset: str) -> Path:
-    """Directory holding every partition of ``dataset``."""
-    _check_dataset(dataset)
+    if dataset not in SCHEMAS:
+        raise KeyError(f"unknown dataset {dataset!r}; valid datasets are: {', '.join(SCHEMAS)}")
     return curated_root() / dataset
 
 
-def partition_path(dataset: str, zone: str, month: str) -> Path:
-    """Path of one partition file.
-
-    Args:
-        dataset: One of :data:`DATASETS`.
-        zone: Zone code.
-        month: ``YYYY-MM``.
-    """
-    _check_dataset(dataset)
-    return dataset_dir(dataset) / f"zone={zone}" / f"{month}.parquet"
-
-
-def _check_dataset(dataset: str) -> None:
-    if dataset not in SCHEMAS:
-        valid = ", ".join(sorted(SCHEMAS))
-        raise KeyError(f"unknown dataset {dataset!r}; valid datasets are: {valid}")
-
-
-def _with_month(frame: pl.DataFrame) -> pl.DataFrame:
-    return frame.with_columns(pl.col("ts_utc").dt.strftime("%Y-%m").alias("_month"))
-
-
-def write(frame: pl.DataFrame, dataset: str, *, validate_first: bool = True) -> list[Path]:
-    """Upsert ``frame`` into the store, returning the partitions touched.
-
-    The frame is validated, split by zone and UTC month, merged with whatever
-    each partition already holds, deduplicated on the dataset's natural key
-    keeping the incoming row, and written back sorted.
-
-    Partitioning uses the UTC month purely as a physical file-layout choice. It
-    is never an analytical grouping; every analysis keys on market-local time
-    via :mod:`gpa.calendar`.
-
-    Args:
-        frame: Rows in the canonical shape for ``dataset``.
-        dataset: One of :data:`DATASETS`.
-        validate_first: Run the schema contract before writing. Only turn this
-            off when the caller has already validated.
-
-    Returns:
-        Paths written, in sorted order. Empty if ``frame`` is empty.
-    """
-    _check_dataset(dataset)
-    if frame.is_empty():
-        return []
-
-    if validate_first:
-        frame = validate(frame, dataset)
-
-    key = list(_KEYS[dataset])
-    written: list[Path] = []
-
-    for (zone, month), chunk in _with_month(frame).group_by(
-        ["zone", "_month"], maintain_order=True
-    ):
-        path = partition_path(dataset, str(zone), str(month))
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        incoming = chunk.drop("_month")
-        if path.exists():
-            existing = pl.read_parquet(path)
-            # Incoming rows come last so that unique(keep="last") prefers them,
-            # which is what makes this an upsert rather than an append.
-            merged = pl.concat([existing, incoming], how="vertical_relaxed")
-        else:
-            merged = incoming
-
-        merged = merged.unique(subset=key, keep="last").sort(key)
-        atomic_parquet(merged, path)
-        written.append(path)
-
-    return sorted(written)
-
-
-def atomic_parquet(frame: pl.DataFrame, path: Path) -> None:
-    """Replace a complete partition on the same filesystem; never truncate it."""
+def atomic_write(path: Path, data: bytes) -> None:
+    """Replace ``path`` through a temporary file beside it, so it is never left truncated."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(prefix=".gpa-", suffix=".tmp", dir=path.parent)
     os.close(descriptor)
     temporary = Path(name)
     try:
-        frame.write_parquet(temporary, compression="zstd", statistics=True)
+        temporary.write_bytes(data)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def last_ingested(dataset: str, zone: str) -> dt.datetime | None:
-    """Latest stored instant for a zone, or ``None`` when nothing is stored.
+def atomic_parquet(frame: pl.DataFrame, path: Path) -> None:
+    buffer = io.BytesIO()
+    frame.write_parquet(buffer, compression="zstd", statistics=True)
+    atomic_write(path, buffer.getvalue())
 
-    This is the ingestion checkpoint. It is read from the partitions themselves,
-    so it can never claim data the store does not hold.
+
+def write(frame: pl.DataFrame, dataset: str, *, validate_first: bool = True) -> list[Path]:
+    """Upsert ``frame``; the incoming row wins on the natural key. Returns the files touched.
+
+    UTC-month partitioning is a file layout only; every analysis keys on local time.
     """
-    directory = dataset_dir(dataset) / f"zone={zone}"
-    files = sorted(directory.glob("*.parquet")) if directory.is_dir() else []
+    directory = dataset_dir(dataset)
+    if frame.is_empty():
+        return []
+    if validate_first:
+        frame = validate(frame, dataset)
+    key = _KEYS[dataset]
+    written = []
+    month = pl.col("ts_utc").dt.strftime("%Y-%m").alias("_month")
+    for (zone, stamp), chunk in frame.with_columns(month).group_by(
+        "zone", "_month", maintain_order=True
+    ):
+        path = directory / f"zone={zone}" / f"{stamp}.parquet"
+        incoming = chunk.drop("_month")
+        merged = (
+            pl.concat([pl.read_parquet(path), incoming], how="vertical_relaxed")
+            if path.exists()
+            else incoming
+        )
+        atomic_parquet(merged.unique(subset=key, keep="last").sort(key), path)
+        written.append(path)
+    return sorted(written)
+
+
+def last_ingested(dataset: str, zone: str) -> dt.datetime | None:
+    """The latest stored instant: the ingestion checkpoint, read from the files themselves."""
+    files = sorted((dataset_dir(dataset) / f"zone={zone}").glob("*.parquet"))
     if not files:
         return None
     latest = pl.scan_parquet(files).select(pl.col("ts_utc").max()).collect().item()
     return latest.astimezone(dt.UTC) if isinstance(latest, dt.datetime) else None
 
 
-def read(
-    dataset: str,
-    zones: str | Iterable[str] | None = None,
-    *,
-    start: dt.datetime | None = None,
-    end: dt.datetime | None = None,
-    columns: Sequence[str] | None = None,
-) -> pl.DataFrame:
-    """Read rows from the store.
-
-    Args:
-        dataset: One of :data:`DATASETS`.
-        zones: A zone code, an iterable of them, or ``None`` for all.
-        start: Inclusive lower bound on ``ts_utc``. Must be timezone-aware.
-        end: Exclusive upper bound on ``ts_utc``. Must be timezone-aware.
-        columns: Subset of columns to return.
-
-    Returns:
-        A frame sorted by the dataset's natural key. Empty with the correct
-        schema if nothing matches, so callers never have to special-case it.
-
-    Raises:
-        ValueError: If ``start`` or ``end`` is naive.
-    """
-    _check_dataset(dataset)
-
-    for name, bound in (("start", start), ("end", end)):
-        if bound is not None and bound.tzinfo is None:
-            raise ValueError(f"{name} must be timezone-aware")
-
-    if isinstance(zones, str):
-        wanted = [zones]
-    elif zones is None:
-        wanted = None
-    else:
-        wanted = list(zones)
-
-    paths: list[Path] = []
-    root = dataset_dir(dataset)
-    if root.is_dir():
-        for zone_dir in sorted(root.glob("zone=*")):
-            code = zone_dir.name.removeprefix("zone=")
-            if wanted is not None and code not in wanted:
-                continue
-            paths.extend(sorted(zone_dir.glob("*.parquet")))
-
+def read(dataset: str, zone: str | None = None) -> pl.DataFrame:
+    """One zone's rows, or every zone's, sorted by the natural key; empty keeps the schema."""
+    paths = sorted(dataset_dir(dataset).glob(f"zone={zone or '*'}/*.parquet"))
     if not paths:
-        return _empty(dataset, columns)
-
-    lazy = pl.scan_parquet(paths)
-    if start is not None:
-        lazy = lazy.filter(pl.col("ts_utc") >= start)
-    if end is not None:
-        lazy = lazy.filter(pl.col("ts_utc") < end)
-    if columns is not None:
-        lazy = lazy.select(list(columns))
-
-    frame = lazy.collect()
-    sort_key = [c for c in _KEYS[dataset] if c in frame.columns]
-    return frame.sort(sort_key) if sort_key else frame
-
-
-def _empty(dataset: str, columns: Sequence[str] | None) -> pl.DataFrame:
-    frame = empty_frame(dataset)
-    return frame.select(list(columns)) if columns is not None else frame
+        return empty_frame(dataset)
+    return pl.scan_parquet(paths).collect().sort(_KEYS[dataset])
 
 
 def coverage() -> pl.DataFrame:
-    """Summarise what the store currently holds.
-
-    Returns one row per dataset and zone with the row count, the first and last
-    observed instant, and the number of monthly partitions. This is what the
-    ``gpa stats`` command prints and what the site uses to show data freshness.
-    """
-    rows: list[dict[str, object]] = []
+    """Rows, first and last instant, partitions and bytes per dataset and zone."""
+    rows = []
     for dataset in DATASETS:
-        root = dataset_dir(dataset)
-        if not root.is_dir():
-            continue
-        for zone_dir in sorted(root.glob("zone=*")):
+        for zone_dir in sorted(dataset_dir(dataset).glob("zone=*")):
             files = sorted(zone_dir.glob("*.parquet"))
             if not files:
                 continue
-            code = zone_dir.name.removeprefix("zone=")
-            frame = pl.scan_parquet(files).select("ts_utc").collect()
+            stamps = pl.scan_parquet(files).select("ts_utc").collect()["ts_utc"]
             rows.append(
                 {
                     "dataset": dataset,
-                    "zone": code,
-                    "rows": frame.height,
-                    "first_ts_utc": frame["ts_utc"].min(),
-                    "last_ts_utc": frame["ts_utc"].max(),
+                    "zone": zone_dir.name.removeprefix("zone="),
+                    "rows": stamps.len(),
+                    "first_ts_utc": stamps.min(),
+                    "last_ts_utc": stamps.max(),
                     "partitions": len(files),
-                    "bytes": sum(f.stat().st_size for f in files),
+                    "bytes": sum(file.stat().st_size for file in files),
                 }
             )
-
-    if not rows:
-        return pl.DataFrame(
-            schema={
-                "dataset": pl.String,
-                "zone": pl.String,
-                "rows": pl.Int64,
-                "first_ts_utc": pl.Datetime(time_unit="us", time_zone="UTC"),
-                "last_ts_utc": pl.Datetime(time_unit="us", time_zone="UTC"),
-                "partitions": pl.Int64,
-                "bytes": pl.Int64,
-            }
-        )
-    return pl.DataFrame(rows).sort(["dataset", "zone"])
+    schema = pl.Schema(
+        {
+            "dataset": pl.String(),
+            "zone": pl.String(),
+            "rows": pl.Int64(),
+            "first_ts_utc": pl.Datetime("us", "UTC"),
+            "last_ts_utc": pl.Datetime("us", "UTC"),
+            "partitions": pl.Int64(),
+            "bytes": pl.Int64(),
+        }
+    )
+    return pl.DataFrame(rows, schema=schema).sort("dataset", "zone")

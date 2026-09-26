@@ -209,6 +209,29 @@ def test_an_observed_vintage_makes_the_forecast_age_real_rather_than_zero(tmp_pa
     assert observed["da_forecast_age_hours"][0] == 6
 
 
+def test_the_repeated_autumn_hour_averages_both_intervals_as_the_price_target_does():
+    # 02:00 on 26 October 2025 happens twice in Berlin: 00:00 and 01:00 UTC.
+    snapshot = pl.DataFrame(
+        {
+            "zone": ["DE-LU", "DE-LU"],
+            "ts_utc": [dt.datetime(2025, 10, 26, hour, tzinfo=dt.UTC) for hour in (0, 1)],
+            "published_at": [dt.datetime(2025, 10, 25, 10, tzinfo=dt.UTC)] * 2,
+            "load_forecast_mw": [40_000.0, 42_000.0],
+            "wind_forecast_mw": [10_000.0, 14_000.0],
+            "solar_forecast_mw": [0.0, 0.0],
+        }
+    )
+    panel = pl.DataFrame(
+        {"local_date": [dt.date(2025, 10, 26)], "local_hour": [2]},
+        schema={"local_date": pl.Date, "local_hour": pl.Int8},
+    )
+
+    for rows in (snapshot, snapshot.reverse()):
+        attached = fundamentals.attach(panel, rows, ZONE)
+        assert attached["da_load_forecast"].to_list() == [41_000.0]
+        assert attached["da_residual_load_forecast"].to_list() == [29_000.0]
+
+
 def test_load_panel_include_fundamentals_adds_the_feature_columns(tmp_path, monkeypatch):
     monkeypatch.setenv("GPA_DATA_ROOT", str(tmp_path))
     # A full local day of price plus one day-ahead fundamentals snapshot.
@@ -345,8 +368,5 @@ def test_the_forecast_age_is_recorded_on_the_panel_but_never_fitted(tmp_path, mo
     )
 
     assert "da_forecast_age_hours" in attached.columns
-    assert "da_forecast_age_hours" in fundamentals.FUNDAMENTAL_METADATA
+    assert "da_forecast_age_hours" in fundamentals.FUNDAMENTAL_COLUMNS
     assert "da_forecast_age_hours" not in FUNDAMENTAL_FEATURES
-    assert set(fundamentals.FUNDAMENTAL_COLUMNS) == set(FUNDAMENTAL_FEATURES) | set(
-        fundamentals.FUNDAMENTAL_METADATA
-    )

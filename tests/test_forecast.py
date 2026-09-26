@@ -12,7 +12,7 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from gpa.forecast import backtest, linalg, models, panel, scoring
+from gpa.forecast import backtest, models, panel, scoring
 from gpa.forecast.boosting import LightGBM
 from gpa.zones import get_zone
 
@@ -179,32 +179,25 @@ def test_ridge_solver_matches_independent_numpy_solution(alpha):
     x = rng.normal(size=(100, 3)) * np.array([1.0, 1000.0, 0.01])
     y = 4 + x @ np.array([2.0, -1.0, 3.0]) + rng.normal(size=100)
     design = np.column_stack([np.ones(100), x])
-    actual = linalg.ridge_from_moments(
-        (design.T @ design).tolist(), (design.T @ y).tolist(), alpha=alpha
-    )
+    actual = models.ridge_solve(design.T @ design, design.T @ y, alpha)
     means, scales = x.mean(axis=0), x.std(axis=0)
     z = (x - means) / scales
     expected = np.linalg.solve(z.T @ z + alpha * len(x) * np.eye(3), z.T @ (y - y.mean())) / scales
     np.testing.assert_allclose(actual, np.r_[y.mean() - means @ expected, expected], rtol=1e-8)
 
 
-def test_constant_feature_and_solver_errors():
-    assert linalg.ridge_from_moments([[4.0, 8.0], [8.0, 16.0]], [20.0, 40.0], alpha=0.1) == [
-        5.0,
-        0.0,
-    ]
-    with pytest.raises(linalg.NotPositiveDefinite):
-        linalg.cholesky([[0.0]])
-    with pytest.raises(ValueError):
-        linalg.cholesky([[1.0, 0.0], [1.0]])
-    with pytest.raises(ValueError):
-        linalg.cholesky_solve([[1.0]], [])
-    with pytest.raises(ValueError):
-        linalg.predict([1.0], [2.0])
-    with pytest.raises(ValueError):
-        linalg.ridge_from_moments([[1.0]], [], alpha=1.0)
-    with pytest.raises(ValueError):
-        linalg.ridge_from_moments([[1.0]], [1.0], alpha=-1.0)
+def test_a_constant_feature_gets_a_zero_weight():
+    weights = models.ridge_solve(np.array([[4.0, 8.0], [8.0, 16.0]]), np.array([20.0, 40.0]), 0.1)
+    np.testing.assert_allclose(weights, [5.0, 0.0])
+
+
+@pytest.mark.parametrize("window", [None, 20])
+def test_batched_walk_forward_equals_a_fresh_fit_every_day(window):
+    source, model = small_panel(), models.Ridge(alpha=0.1, window=window)
+    days = [dt.date(2025, 2, 1) + dt.timedelta(days=offset) for offset in range(5)]
+    batched = model.forecasts(source, test_start=days[0], test_end=days[-1], min_train_rows=10)
+    refits = pl.concat([model.predict_day(source, day, min_train_rows=10) for day in days])
+    assert_frame_equal(batched, refits, check_dtypes=False, rel_tol=1e-9)
 
 
 @pytest.mark.parametrize("model", [models.Ridge(alpha=0.1), LightGBM()])
@@ -288,10 +281,14 @@ def test_quantiles_use_only_prior_errors_and_keep_models_separate():
         assert series[4] == expected
 
 
-@pytest.mark.parametrize("kwargs", [{"window": 1}, {"levels": [0.0]}, {"levels": [1.0]}])
-def test_invalid_interval_settings_fail(kwargs):
-    with pytest.raises(ValueError):
-        scoring.attach_quantiles(pl.DataFrame(), **kwargs)
+def test_an_interval_needs_at_least_two_past_errors():
+    with pytest.raises(ValueError, match="window"):
+        scoring.attach_quantiles(pl.DataFrame(), window=1)
+
+
+def without_intervals(frame: pl.DataFrame) -> pl.DataFrame:
+    columns = [scoring.quantile_column(level) for level in scoring.QUANTILE_LEVELS]
+    return frame.with_columns(pl.lit(None, dtype=pl.Float64).alias(name) for name in columns)
 
 
 def test_scores_handle_zero_and_negative_prices_with_known_errors():
@@ -302,7 +299,7 @@ def test_scores_handle_zero_and_negative_prices_with_known_errors():
         pl.Series("forecast", [-8.0, 0.0, 6.0]),
     )
     scores = scoring.scoreboard(
-        predictions, ZONE, reference="baseline", baselines=("baseline",), levels=()
+        without_intervals(predictions), ZONE, reference="baseline", baselines=("baseline",)
     )
     overall = scores.filter(pl.col("scope") == "overall").row(0, named=True)
     assert overall["mae"] == 2.0
@@ -374,11 +371,10 @@ def test_negative_skill_is_preserved_when_model_loses_to_baseline():
         pl.lit("challenger").alias("model"), pl.lit(-7.0).alias("forecast")
     )
     scores = scoring.scoreboard(
-        pl.concat([baseline, challenger]),
+        without_intervals(pl.concat([baseline, challenger])),
         ZONE,
         reference="baseline",
         baselines=("baseline",),
-        levels=(),
     )
     losses = scores.filter(pl.col("model") == "challenger")
     assert losses["skill_vs_best_baseline_pct"].to_list() == [-200.0] * losses.height
@@ -390,7 +386,7 @@ def test_negative_skill_is_preserved_when_model_loses_to_baseline():
 def test_validation_and_cutoff_do_not_read_later_prices():
     source = small_panel()
     end = dt.date(2025, 2, 5)
-    options = dict(min_train_days=25, validation_days=5, alpha_grid=(0.01, 1.0), end=end)
+    options = dict(min_train_days=25, validation_days=5, end=end)
     result = backtest.run(ZONE, panel=source, **options)
     later = replace(
         source,
@@ -414,7 +410,7 @@ def test_validation_and_cutoff_do_not_read_later_prices():
     ablation = replace(result, features=("residual_d2", "da_load_forecast"))
     assert "day-ahead load/wind/solar forecasts" in ablation.metadata()["feature_mode"]
     assert "assumed gate vintage" in ablation.metadata()["feature_mode"]
-    assert result.summary().height == 5
+    assert result.scores.filter(pl.col("scope") == "overall").height == 5
     changed_test = replace(
         source,
         frame=source.frame.with_columns(
