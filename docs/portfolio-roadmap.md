@@ -127,4 +127,4 @@ margin to every slot.
 | P8–P10 | Repositioned as a research note; adversarial reviews and fixes | 514dbf6 … cec5833 |
 | P11 | First prospective issue; honest backstop, naive arms, publication probe | 271a2dc |
 | P12 | Removed unused zones, adapters, metrics, exports, dependencies and history | c371879 |
-| P13 | Code review: −36% source lines, NumPy ridge, deterministic fundamentals on the autumn hour | this cleanup |
+| P13 | Code review: −36% source lines, NumPy ridge, deterministic fundamentals on the autumn hour | 9d7d769 |

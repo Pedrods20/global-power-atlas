@@ -276,7 +276,7 @@ pilot's bar is six weeks with at least 95% of delivery days issued on time.
 That ledger also carries the one open modelling question, and its first answer
 moved the question from the model to the market. Day-ahead load, wind and solar
 forecasts measurably reduce error in the labelled ablation (Ridge 22.07 → 19.17,
-LightGBM 25.56 → 20.56 EUR/MWh on the identical frozen test window), but the
+LightGBM 25.56 → 20.57 EUR/MWh on the identical frozen test window), but the
 historical archive cannot certify when each value became available, so they are
 not in the published information set. A live issue records the instant it read
 them, so each run issues two frozen identities — `ridge` from the published
